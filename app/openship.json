@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openship.io/schema/openship.json",
+  "name": "zeus-slot-game",
+  "version": "1.0.0",
+  "description": "Zeus Slot Machine - Full-stack Greek Mythology Slot Game with Provably Fair RNG Engine",
+  "type": "web",
+  "build": {
+    "command": "npm run build",
+    "output": "dist"
+  },
+  "start": {
+    "command": "npm start"
+  },
+  "env": {
+    "NODE_ENV": "production",
+    "PORT": "3000"
+  },
+  "healthCheck": "/api/health"
+}
