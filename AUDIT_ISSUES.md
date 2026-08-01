@@ -25,11 +25,11 @@ This document registers all technical debt, mock implementations, edge-case risk
 - **Description**: `relations.ts` contains only 2 lines (`import {} from "./schema"`). Backend routers currently use manual SQL join queries (`where(eq(...))`) rather than Drizzle's relational query API (`with: { user: true }`).
 - **Remediation**: Define explicit `relations()` wrappers for `users`, `balances`, `game_sessions`, and `spins`.
 
-### `[OPEN]` DB-03: Missing Versioned SQL Migration Files
+### `[RESOLVED]` DB-03: Versioned SQL Migration Files
 - **Severity**: `MEDIUM`
-- **Location**: `app/db/migrations/`
-- **Description**: The migrations directory contains only `.gitkeep`. Initial SQL migration snapshots (`0000_...sql`) have not been output.
-- **Remediation**: Run `npx drizzle-kit generate` to commit static `.sql` migration files.
+- **Location**: `app/db/migrations/0000_romantic_darkhawk.sql`
+- **Description**: Static `.sql` migration snapshots and journal metadata files generated.
+- **Resolution**: Generated `0000_romantic_darkhawk.sql` via `npx drizzle-kit generate`. Verified indexes `idx_user_spins(user_id, created_at)` and `idx_user_tx(user_id, type, status)`.
 
 ---
 
