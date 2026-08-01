@@ -573,6 +573,7 @@ export default function Game() {
 
               {/* Main Spin Button */}
               <button
+                id="spin-button"
                 onClick={handleSpin}
                 disabled={store.gameState === "spinning"}
                 className={`relative w-20 h-20 rounded-full transition-all duration-200 ${

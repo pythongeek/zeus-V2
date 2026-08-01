@@ -195,7 +195,7 @@ export const gameRouter = createRouter({
 
       // End any active sessions
       await db.update(gameSessions)
-        .set({ status: "completed", endedAt: new Date() })
+        .set({ status: "completed", endedAt: sql`NOW()` })
         .where(and(
           eq(gameSessions.userId, userId),
           eq(gameSessions.status, "active")
