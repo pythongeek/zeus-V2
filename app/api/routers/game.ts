@@ -194,12 +194,16 @@ export const gameRouter = createRouter({
       const userId = ctx.user.id;
 
       // End any active sessions
-      await db.update(gameSessions)
-        .set({ status: "completed", endedAt: sql`NOW()` })
-        .where(and(
-          eq(gameSessions.userId, userId),
-          eq(gameSessions.status, "active")
-        ));
+      try {
+        await db.update(gameSessions)
+          .set({ status: "completed", endedAt: sql`NOW()` })
+          .where(and(
+            eq(gameSessions.userId, userId),
+            eq(gameSessions.status, "active")
+          ));
+      } catch {
+        // Active session cleanup non-fatal
+      }
 
       const serverSeed = crypto.randomBytes(32).toString("hex");
       const serverSeedHash = crypto.createHash("sha256").update(serverSeed).digest("hex");
