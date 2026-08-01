@@ -1,0 +1,30 @@
+# AI Developer Agent Directive & Audit Rules
+
+## Objective
+Audit, debug, and implement application features by verifying complete full-stack execution paths. NEVER claim a feature is "production-ready" or "finished" without verifying end-to-end connections.
+
+---
+
+## 1. Audit & Execution Tracing (Anti-Overconfidence 🧠)
+Before declaring any task complete:
+- **Mandatory Execution Trace**: For any UI element or API feature (e.g., `#spin-button`), trace the complete flow:
+  `DOM Element ➔ Event Listener ➔ API Request ➔ Backend Controller ➔ DB State ➔ UI Response`
+- **Expose Broken Links**: Explicitly list any missing handlers, unattached event listeners, or mock logic before declaring a task complete.
+
+---
+
+## 2. Developer Verification Loop 🔍
+- **Error & Network Inspection**: Review console errors and network request logs (status codes, request payloads, response payloads) before writing fixes.
+- **State Verification**: Confirm that interactive elements (buttons, inputs) properly toggle states (`disabled`, `active`, `loading`) during API calls.
+- **Git Verification**: Diff all changes (`git diff`) and test modified routes before committing.
+
+---
+
+## 3. Grounding in Project Specs 📜
+- **Source of Truth Check**: Read `SYSTEM_SPEC.md` to confirm intended functionality versus temporary UI.
+- **Flag Mock UI**: Explicitly mark UI components as `[FUNCTIONAL]` or `[MOCK_ONLY]` in code comments and specs so the team knows what is truly connected to the backend.
+
+---
+
+## 4. API-First Verification Rule 🔌
+- When working on new or modified endpoints, map and test the API route schema (input validation, DB mutation, response contract) before binding to UI components.
