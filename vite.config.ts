@@ -25,5 +25,15 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // C2: keep the Pixi renderer + React runtime in their own
+          // cacheable chunks so game-code updates don't bust them.
+          "vendor-pixi": ["pixi.js"],
+          "vendor-react": ["react", "react-dom", "react-router"],
+        },
+      },
+    },
   },
 });
