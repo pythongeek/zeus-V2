@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createRouter, publicQuery, authedQuery } from "../middleware";
-import { getDb } from "../queries/connection";
-import { gameSessions, spins, balances, jackpotPool } from "../../db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { getDb, getSqliteClient } from "../queries/connection";
+import { gameSessions, spins } from "../../db/schema";
+import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
 
 // Bet limits (server-enforced; mirror the frontend store)
@@ -258,173 +258,209 @@ export const gameRouter = createRouter({
         throw new Error(`Bet must be between ${MIN_BET} and ${MAX_BET}`);
       }
 
-      // Strict DB-only session lookup: no demo fallback. A spin request must
-      // reference a real, active session owned by the authenticated user.
-      const db = getDb();
-      const dbSession = await db.select().from(gameSessions)
-        .where(and(
-          eq(gameSessions.id, input.sessionId),
-          eq(gameSessions.userId, ctx.user.id),
-          eq(gameSessions.status, "active")
-        ))
-        .then(rows => rows[0]);
-
-      if (!dbSession) {
-        throw new Error("Active session not found for this user");
-      }
-
-      const session = {
-        id: dbSession.id,
-        serverSeed: dbSession.serverSeed,
-        serverSeedHash: dbSession.serverSeedHash,
-        clientSeed: dbSession.clientSeed,
-        nonce: dbSession.nonce,
-        totalSpins: dbSession.totalSpins,
-        totalWagered: dbSession.totalWagered,
-        totalWon: dbSession.totalWon,
-      };
-
-      const dbBalance = await db.select().from(balances)
-        .where(and(
-          eq(balances.userId, ctx.user.id),
-          eq(balances.currency, input.currency)
-        ))
-        .then(rows => rows[0]);
-
-      const availableBalance = dbBalance ? parseFloat(dbBalance.available) : 0;
-
-      if (availableBalance < betAmount) {
-        throw new Error("Insufficient balance");
-      }
-
-      // Calculate spin using Provably Fair SHA-256 algorithm
-      const newNonce = session.nonce + 1;
-
-      const { reelStops, symbols, hash } = calculateSpin(
-        session.serverSeed,
-        session.clientSeed,
-        newNonce
-      );
-
-      const betPerLine = betAmount / PAYLINES.length;
-      const { lines, totalPayout, scatterCount, freeSpinsAwarded } = evaluatePaylines(symbols, betPerLine);
-
-      let winAmount = totalPayout;
-      let isBigWin = winAmount >= betAmount * 50;
-      let isJackpot = false;
-      let featureTriggered: "none" | "free_spins" | "thunder_strike" = "none";
-      let jackpotTier: string | null = null;
-
-      if (scatterCount >= 3) {
-        featureTriggered = "free_spins";
-      }
-
-      if (winAmount === 0 && checkThunderStrike(hash)) {
-        featureTriggered = "thunder_strike";
-        const numTransforms = (parseInt(hash.substring(30, 32), 16) % 3) + 1;
-        for (let i = 0; i < numTransforms; i++) {
-          const r = parseInt(hash.substring(32 + i * 4, 34 + i * 4), 16) % 5;
-          const row = parseInt(hash.substring(34 + i * 4, 36 + i * 4), 16) % 3;
-          symbols[r][row] = SYMBOLS.ZEUS;
+      // A2: the whole spin — session/balance reads, outcome calculation,
+      // balance update, session update, spin record, jackpot movement and
+      // ledger rows — runs in ONE synchronous BEGIN IMMEDIATE transaction on
+      // the raw SQLite client. Concurrent spins serialize on the write lock
+      // (busy_timeout is set in connection.ts), re-read nonce and balance
+      // inside the lock, and either every write lands or none do. The
+      // previous implementation used separate awaited writes: a mid-spin
+      // failure could move money with no spin record, and parallel spins
+      // raced the balance check and could overdraw the account.
+      const client = getSqliteClient();
+      const runSpin = client.transaction(() => {
+        const session = client
+          .prepare(
+            "SELECT * FROM game_sessions WHERE id = ? AND user_id = ? AND status = 'active'",
+          )
+          .get(input.sessionId, ctx.user.id) as any;
+        if (!session) {
+          throw new Error("Active session not found for this user");
         }
-        const reeval = evaluatePaylines(symbols, betPerLine);
-        winAmount = Math.max(reeval.totalPayout, betAmount * 10);
-        lines.push(...reeval.lines);
-      }
 
-      const jackpot = checkJackpot(hash);
-      if (jackpot) {
-        isJackpot = true;
-        jackpotTier = jackpot.tier;
-        winAmount += betAmount * jackpot.amount;
-      }
+        const balRow = client
+          .prepare("SELECT * FROM balances WHERE user_id = ? AND currency = ?")
+          .get(ctx.user.id, input.currency) as any;
+        const availableBalance = balRow ? parseFloat(balRow.available) : 0;
+        if (!balRow || availableBalance < betAmount) {
+          throw new Error("Insufficient balance");
+        }
 
-      const updatedBalance = availableBalance - betAmount + winAmount;
+        // Provably fair outcome for this spin
+        const newNonce = session.nonce + 1;
+        const { reelStops, symbols, hash } = calculateSpin(
+          session.server_seed,
+          session.client_seed,
+          newNonce,
+        );
 
-      // DB writes are mandatory: a failed write aborts the spin rather than
-      // silently leaving balance/ledger inconsistent.
-      let spinRecordId: number;
-      try {
-        await db.update(balances)
-          .set({ available: String(updatedBalance) })
-          .where(and(
-            eq(balances.userId, ctx.user.id),
-            eq(balances.currency, input.currency)
-          ));
+        const betPerLine = betAmount / PAYLINES.length;
+        const { lines, totalPayout, scatterCount, freeSpinsAwarded } =
+          evaluatePaylines(symbols, betPerLine);
 
-        await db.update(gameSessions)
-          .set({
-            nonce: newNonce,
-            totalSpins: session.totalSpins + 1,
-            totalWagered: String(parseFloat(session.totalWagered) + betAmount),
-            totalWon: String(parseFloat(session.totalWon) + winAmount),
-          })
-          .where(eq(gameSessions.id, input.sessionId));
+        let winAmount = totalPayout;
+        const isBigWin = winAmount >= betAmount * 50;
+        let isJackpot = false;
+        let featureTriggered: "none" | "free_spins" | "thunder_strike" = "none";
+        let jackpotTier: string | null = null;
 
-        const [insertedSpin] = await db.insert(spins).values({
-          sessionId: input.sessionId,
-          userId: ctx.user.id,
-          nonce: newNonce,
-          betAmount: input.betAmount,
-          currency: input.currency,
-          reelPositions: reelStops,
-          symbolsShown: symbols.map(col => col.map(s => SYMBOL_NAMES[s])),
-          winAmount: String(winAmount),
-          winLines: lines,
+        if (scatterCount >= 3) {
+          featureTriggered = "free_spins";
+        }
+
+        if (winAmount === 0 && checkThunderStrike(hash)) {
+          featureTriggered = "thunder_strike";
+          const numTransforms = (parseInt(hash.substring(30, 32), 16) % 3) + 1;
+          for (let i = 0; i < numTransforms; i++) {
+            const r = parseInt(hash.substring(32 + i * 4, 34 + i * 4), 16) % 5;
+            const row = parseInt(hash.substring(34 + i * 4, 36 + i * 4), 16) % 3;
+            symbols[r][row] = SYMBOLS.ZEUS;
+          }
+          const reeval = evaluatePaylines(symbols, betPerLine);
+          winAmount = Math.max(reeval.totalPayout, betAmount * 10);
+          lines.push(...reeval.lines);
+        }
+
+        const jackpot = checkJackpot(hash);
+        if (jackpot) {
+          isJackpot = true;
+          jackpotTier = jackpot.tier;
+          winAmount += betAmount * jackpot.amount;
+        }
+
+        const updatedBalance = availableBalance - betAmount + winAmount;
+        const nowSec = Math.floor(Date.now() / 1000);
+
+        client
+          .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE id = ?")
+          .run(String(updatedBalance), nowSec, balRow.id);
+
+        client
+          .prepare(
+            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ? WHERE id = ?",
+          )
+          .run(
+            newNonce,
+            session.total_spins + 1,
+            String(parseFloat(session.total_wagered) + betAmount),
+            String(parseFloat(session.total_won) + winAmount),
+            session.id,
+          );
+
+        const spinRow = client
+          .prepare(
+            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+          )
+          .get(
+            session.id,
+            ctx.user.id,
+            newNonce,
+            input.betAmount,
+            input.currency,
+            JSON.stringify(reelStops),
+            JSON.stringify(symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]))),
+            String(winAmount),
+            JSON.stringify(lines),
+            isBigWin ? 1 : 0,
+            isJackpot ? 1 : 0,
+            featureTriggered,
+            freeSpinsAwarded,
+            hash,
+          ) as any;
+        const spinId = spinRow.id as number;
+
+        // Ledger: debit leg first, then the credit leg when there is a win.
+        // balance_after is the player's available balance after that leg.
+        const insLedger = client.prepare(
+          "INSERT INTO ledger_entries (user_id, spin_id, kind, currency, amount, balance_after) VALUES (?, ?, ?, ?, ?, ?)",
+        );
+        insLedger.run(
+          ctx.user.id,
+          spinId,
+          "spin_debit",
+          input.currency,
+          String(-betAmount),
+          String(availableBalance - betAmount),
+        );
+        if (winAmount > 0) {
+          insLedger.run(
+            ctx.user.id,
+            spinId,
+            "spin_credit",
+            input.currency,
+            String(winAmount),
+            String(updatedBalance),
+          );
+        }
+
+        // Jackpot pool movement (amounts unchanged from the pre-A2 model;
+        // A6 redesigns funding/awards). On a hit the tier resets to its
+        // seed; otherwise every tier receives the 1% contribution, exactly
+        // as the previous code did — now atomically with the spin.
+        const contribution = betAmount * 0.01;
+        if (isJackpot && jackpotTier) {
+          client
+            .prepare(
+              "UPDATE jackpot_pool SET current_amount = ?, last_won_at = ?, last_won_by = ?, hit_count = hit_count + 1 WHERE tier = ?",
+            )
+            .run(getDbSeedForTier(jackpotTier), nowSec, ctx.user.id, jackpotTier);
+        } else {
+          const pools = client
+            .prepare("SELECT tier, current_amount FROM jackpot_pool")
+            .all() as any[];
+          for (const p of pools) {
+            client
+              .prepare("UPDATE jackpot_pool SET current_amount = ? WHERE tier = ?")
+              .run(String(parseFloat(p.current_amount) + contribution), p.tier);
+          }
+        }
+
+        return {
+          spinId,
+          newNonce,
+          reelStops,
+          symbols,
+          winAmount,
+          lines,
           isBigWin,
           isJackpot,
           featureTriggered,
           freeSpinsAwarded,
           hash,
-        }).returning();
+          updatedBalance,
+          jackpotTier,
+        };
+      });
 
-        spinRecordId = insertedSpin?.id ?? crypto.randomInt(1, 100000);
-
-        // Jackpot pool contribution (1% of bet amount); when this spin won a
-        // jackpot, the pool resets to its seed and the win is recorded.
-        const contribution = betAmount * 0.01;
-        if (isJackpot && jackpotTier) {
-          const tier = jackpotTier as "mini" | "major" | "mega";
-          const seed = getDbSeedForTier(tier);
-          const updated = await db.update(jackpotPool)
-            .set({
-              currentAmount: seed,
-              lastWonAt: new Date(),
-              lastWonBy: ctx.user.id,
-              hitCount: sql`${jackpotPool.hitCount} + 1`,
-            })
-            .where(eq(jackpotPool.tier, tier))
-            .returning();
-          if (updated.length === 0) {
-            console.error("[spin] jackpot pool tier missing:", jackpotTier);
-          }
-        } else {
-          await db.update(jackpotPool)
-            .set({
-              currentAmount: sql`${jackpotPool.currentAmount} + ${contribution}`,
-            });
-        }
-      } catch (e) {
-        // Ledger writes must not fail silently — surface the error so the
-        // client does not see a "successful" spin that was never recorded.
-        console.error("[spin] DB write failed", e);
+      let out: ReturnType<typeof runSpin>;
+      try {
+        out = runSpin.immediate();
+      } catch (e: any) {
+        const userFacing = [
+          "Insufficient balance",
+          "Active session not found for this user",
+        ].includes(e?.message);
+        if (userFacing) throw e;
+        // The transaction rolled back: no money moved, no spin recorded.
+        console.error("[spin] transaction failed", e);
         throw new Error("Spin could not be recorded — please try again");
       }
 
       return {
-        spinId: spinRecordId,
-        nonce: newNonce,
-        reelPositions: reelStops,
-        symbols: symbols.map(col => col.map(s => SYMBOL_NAMES[s])),
-        winAmount: String(winAmount),
-        winLines: lines,
-        isBigWin,
-        isJackpot,
-        featureTriggered,
-        freeSpinsAwarded,
-        hash,
-        newBalance: String(updatedBalance),
-        jackpotTier,
+        spinId: out.spinId,
+        nonce: out.newNonce,
+        reelPositions: out.reelStops,
+        symbols: out.symbols.map((col: number[]) => col.map((s: number) => SYMBOL_NAMES[s])),
+        winAmount: String(out.winAmount),
+        winLines: out.lines,
+        isBigWin: out.isBigWin,
+        isJackpot: out.isJackpot,
+        featureTriggered: out.featureTriggered,
+        freeSpinsAwarded: out.freeSpinsAwarded,
+        hash: out.hash,
+        newBalance: String(out.updatedBalance),
+        jackpotTier: out.jackpotTier,
       };
     }),
 

@@ -140,6 +140,25 @@ export const auditLog = sqliteTable("audit_log", {
   idxCreated: index("idx_created").on(table.createdAt),
 }));
 
+export const ledgerEntries = sqliteTable("ledger_entries", {
+  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+  userId: integer("user_id", { mode: "number" }).notNull(),
+  spinId: integer("spin_id", { mode: "number" }),
+  // spin_debit | spin_credit | free_spin_credit | deposit_credit |
+  // withdraw_lock | withdraw_refund | admin_adjust (kept as free text so new
+  // kinds never need a schema migration)
+  kind: text("kind").notNull(),
+  currency: text("currency").notNull(),
+  amount: text("amount").notNull(), // signed: credits positive, debits negative
+  balanceAfter: text("balance_after").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
+}, (table) => ({
+  idxLedgerUser: index("idx_ledger_user").on(table.userId, table.createdAt),
+  idxLedgerSpin: index("idx_ledger_spin").on(table.spinId),
+}));
+
+export type LedgerEntry = typeof ledgerEntries.$inferSelect;
+
 export const verificationCodes = sqliteTable("verification_codes", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
   identifier: text("identifier").notNull(),

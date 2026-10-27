@@ -21,6 +21,9 @@ function createNodeDatabase() {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
+  // Writers (spin transactions) wait up to 5s for the write lock instead of
+  // failing with SQLITE_BUSY when requests overlap.
+  sqlite.pragma("busy_timeout = 5000");
   return drizzleSqlite(sqlite, { schema: fullSchema });
 }
 
@@ -45,4 +48,18 @@ export function getDb(d1?: D1Database): DrizzleD1Database<typeof fullSchema> {
     }
   }
   return instance;
+}
+
+/**
+ * The raw better-sqlite3 client behind getDb() (Node/VPS only). Used where a
+ * real synchronous multi-statement transaction is required (the spin path).
+ * Throws on non-Node deployments where no file SQLite exists.
+ */
+export function getSqliteClient(): any {
+  const db: any = getDb();
+  const client = db?.$client;
+  if (!client || typeof client.transaction !== "function") {
+    throw new Error("SQLite client unavailable in this deployment");
+  }
+  return client;
 }

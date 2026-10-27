@@ -8,6 +8,20 @@
       "when": 1785692144654,
       "tag": "0000_green_adam_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785770000000,
+      "tag": "0001_local_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790000000000,
+      "tag": "0002_ledger_entries",
+      "breakpoints": true
     }
   ]
 }
