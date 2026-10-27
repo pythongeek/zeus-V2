@@ -474,6 +474,12 @@ export default function Game() {
       const amountText = (n: number) => `${CURRENCY_SYMBOLS[cur]}${n.toFixed(4)}`;
       const bdtText = (n: number) => `৳${(n * rate).toLocaleString("bn-BD")}`;
       const ratio = store.betAmount > 0 ? winAmount / store.betAmount : 0;
+      // D3: celebration thresholds + the on/off switch come from admin
+      // config (B2). Defaults (50x big / 100x mega) match the shipped
+      // behaviour and the server's isBigWin definition exactly.
+      const celebrationsOff = store.config?.celebrations_enabled === false;
+      const bigX = typeof store.config?.big_win_threshold_x === "number" ? store.config.big_win_threshold_x : 50;
+      const megaX = typeof store.config?.mega_win_threshold_x === "number" ? store.config.mega_win_threshold_x : 100;
       if (result.isJackpot) {
         audio.play("lightning-crack");
         audio.play("win-jackpot");
@@ -481,19 +487,25 @@ export default function Game() {
         audio.play("thunder-distant", 0.8);
         setLightningFlash(true);
         setTimeout(() => setLightningFlash(false), 800);
-        setCelebration({ tier: "jackpot" as CelebrationTier, title: t("jackpotWin"), amount: winAmount, amountText, bdtText });
-        store.setBigWinAmount(winAmount);
-        store.setBigWinAnimation(true);
-      } else if (result.isBigWin) {
+        if (!celebrationsOff) {
+          setCelebration({ tier: "jackpot" as CelebrationTier, title: t("jackpotWin"), amount: winAmount, amountText, bdtText });
+          store.setBigWinAmount(winAmount);
+          store.setBigWinAnimation(true);
+        }
+      } else if (ratio >= bigX) {
         audio.play("lightning-crack");
-        audio.play(ratio >= 100 ? "win-mega" : "win-big");
+        audio.play(ratio >= megaX ? "win-mega" : "win-big");
         audio.play("coin-cascade", 0.7);
         setLightningFlash(true);
         setTimeout(() => setLightningFlash(false), 800);
-        const tier: CelebrationTier = ratio >= 100 ? "mega" : "big";
-        setCelebration({ tier, title: tier === "mega" ? t("megaWin") : t("bigWin"), amount: winAmount, amountText, bdtText });
-        store.setBigWinAmount(winAmount);
-        store.setBigWinAnimation(true);
+        if (!celebrationsOff) {
+          const tier: CelebrationTier = ratio >= megaX ? "mega" : "big";
+          setCelebration({ tier, title: tier === "mega" ? t("megaWin") : t("bigWin"), amount: winAmount, amountText, bdtText });
+          store.setBigWinAmount(winAmount);
+          store.setBigWinAnimation(true);
+        } else {
+          store.setGameState("winning");
+        }
       } else {
         if (winAmount > 0) audio.play("win-small");
         else audio.play("symbol-land");
