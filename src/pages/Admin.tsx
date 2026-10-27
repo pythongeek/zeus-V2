@@ -226,7 +226,7 @@ export default function Admin() {
       await utils.admin.getUsers.invalidate();
     },
     onError: (err) => {
-      toast.error(`{t("roleUpdateFailed")}: ${err.message}`);
+      toast.error(`${t("roleUpdateFailed")}: ${err.message}`);
     },
   });
 
@@ -236,7 +236,7 @@ export default function Admin() {
       await refetchJackpots();
     },
     onError: (err) => {
-      toast.error(`{t("jackpotUpdateFailed")}: ${err.message}`);
+      toast.error(`${t("jackpotUpdateFailed")}: ${err.message}`);
     },
   });
 
@@ -250,7 +250,7 @@ export default function Admin() {
       toast.success(t("depositApproved"));
       await invalidateTx();
     },
-    onError: (err) => toast.error(`{t("approveFailed")}: ${err.message}`),
+    onError: (err) => toast.error(`${t("approveFailed")}: ${err.message}`),
   });
 
   const approveWithdrawMutation = trpc.admin.approveWithdraw.useMutation({
@@ -258,7 +258,7 @@ export default function Admin() {
       toast.success(t("withdrawApproved"));
       await invalidateTx();
     },
-    onError: (err) => toast.error(`{t("approveFailed")}: ${err.message}`),
+    onError: (err) => toast.error(`${t("approveFailed")}: ${err.message}`),
   });
 
   const rejectWithdrawMutation = trpc.admin.rejectWithdraw.useMutation({
@@ -266,13 +266,13 @@ export default function Admin() {
       toast.success(t("withdrawRejected"));
       await invalidateTx();
     },
-    onError: (err) => toast.error(`{t("rejectFailed")}: ${err.message}`),
+    onError: (err) => toast.error(`${t("rejectFailed")}: ${err.message}`),
   });
 
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
-        <p className="text-slate-400">Checking access...</p>
+        <p className="text-slate-400">{t("checkingAccess")}</p>
       </div>
     );
   }
@@ -294,7 +294,7 @@ export default function Admin() {
               className="w-full bg-[#D4AF37] text-black hover:bg-[#F4D03F]"
               onClick={() => navigate("/login")}
             >
-              Go to Login
+              {t("goToLogin")}
             </Button>
           </CardContent>
         </Card>
@@ -451,8 +451,8 @@ export default function Admin() {
             {jackpotPools?.map((pool) => (
               <div key={pool.tier} className="space-y-2 p-3 rounded-lg border border-slate-800 bg-slate-950/50">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} Jackpot</span>
-                  <span className="text-sm font-mono text-slate-300">{pool.amount} BTC</span>
+                  <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} {t("jackpotWord")}</span>
+                  <span className="text-sm font-mono text-slate-300">{pool.amount} {(pool as any).currency ?? "USDT"}</span>
                 </div>
                 <div className="flex gap-2">
                   <Input
@@ -498,7 +498,7 @@ export default function Admin() {
               <TableHeader>
                 <TableRow className="border-slate-800 hover:bg-transparent">
                   <TableHead className="text-slate-400">ID</TableHead>
-                  <TableHead className="text-slate-400">Player</TableHead>
+                  <TableHead className="text-slate-400">{t("playerName")}</TableHead>
                   <TableHead className="text-slate-400">{t("type")}</TableHead>
                   <TableHead className="text-slate-400">{t("amountPlaceholder")}</TableHead>
                   <TableHead className="text-slate-400">{t("address")}</TableHead>
@@ -558,7 +558,7 @@ export default function Admin() {
                             disabled={rejectWithdrawMutation.isPending}
                             onClick={() => rejectWithdrawMutation.mutate({ txId: tx.id })}
                           >
-                            Reject
+                            {t("reject")}
                           </Button>
                         </>
                       )}

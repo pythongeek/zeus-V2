@@ -105,6 +105,7 @@ export const strings = {
     // Errors / toasts
     insufficientBalance: "Insufficient {cur} balance. Please deposit funds or lower your bet.",
     maintenanceTitle: "Under Maintenance",
+    jackpotWord: "Jackpot",
     sym_zeus: "Zeus (Wild)",
     sym_thunderbolt: "Thunderbolt (Scatter)",
     sym_pegasus: "Pegasus",
@@ -305,6 +306,7 @@ export const strings = {
     // Errors / toasts
     insufficientBalance: "{cur} ব্যালেন্স অপর্যাপ্ত। ডিপোজিট করুন বা বেট কমান।",
     maintenanceTitle: "রক্ষণাবেক্ষণ চলছে",
+    jackpotWord: "জ্যাকপট",
     sym_zeus: "জিউস (ওয়াইল্ড)",
     sym_thunderbolt: "বজ্রপাত (স্ক্যাটার)",
     sym_pegasus: "পেগাসাস",
