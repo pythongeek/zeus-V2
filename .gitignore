@@ -1,0 +1,20 @@
+# dependencies & build output
+node_modules/
+dist/
+
+# local runtime (downloaded Node binary, 208 MB — environment, not source)
+runtime/
+
+# secrets & local env
+.env
+.env.*
+!.env.example
+
+# database files (live data — backed up separately, never in git)
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+
+# misc
+*.log
+.DS_Store

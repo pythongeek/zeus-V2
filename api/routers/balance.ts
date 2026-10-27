@@ -1,0 +1,173 @@
+import { z } from "zod";
+import { createRouter, authedQuery } from "../middleware";
+import { getDb } from "../queries/connection";
+import { balances, transactions } from "../../db/schema";
+import { eq, and, desc } from "drizzle-orm";
+import crypto from "crypto";
+
+// BDT conversion rates (mock - in production, fetch from CoinGecko)
+const BDT_RATES: Record<string, number> = {
+  BTC: 11000000, // ~1 BTC = 11,000,000 BDT
+  ETH: 550000,   // ~1 ETH = 550,000 BDT
+  USDT: 110,     // ~1 USDT = 110 BDT
+};
+
+export const balanceRouter = createRouter({
+  get: authedQuery.query(async ({ ctx }) => {
+    const currencies = ["BTC", "ETH", "USDT", "BDT"] as const;
+
+    try {
+      const db = getDb();
+      let userBalances = await db.select()
+        .from(balances)
+        .where(eq(balances.userId, ctx.user.id));
+
+      // Seed zero balances for missing currencies so the UI has a row per
+      // currency. Real money only arrives via confirmed deposits or admin
+      // adjustment — no free demo funds.
+      for (const currency of currencies) {
+        const existing = userBalances.find(b => b.currency === currency);
+        if (!existing) {
+          await db.insert(balances).values({
+            userId: ctx.user.id,
+            currency: currency as any,
+            available: "0",
+            locked: "0",
+          });
+        }
+      }
+
+      // Re-fetch updated balances
+      userBalances = await db.select()
+        .from(balances)
+        .where(eq(balances.userId, ctx.user.id));
+
+      return currencies.map((currency) => {
+        const existing = userBalances.find(b => b.currency === currency);
+        const avail = existing ? parseFloat(existing.available) : 0;
+        const locked = existing ? parseFloat(existing.locked) : 0;
+        const cryptoRate = BDT_RATES[currency] || 1;
+        return {
+          currency,
+          available: avail,
+          locked: locked,
+          bdtEquivalent: avail * cryptoRate,
+        };
+      });
+    } catch (e) {
+      // Fail loudly: returning fabricated balances would misrepresent money.
+      console.error("[balance.get] DB unavailable", e);
+      throw new Error("Balance service temporarily unavailable");
+    }
+  }),
+
+  deposit: authedQuery
+    .input(z.object({
+      currency: z.enum(["BTC", "ETH", "USDT"]),
+      amount: z.string().regex(/^\d+\.?\d*$/),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const amount = parseFloat(input.amount);
+
+      if (amount <= 0) throw new Error("Invalid amount");
+
+      // Generate deposit address (mock - in production, derive from HD wallet)
+      const address = `0x${crypto.randomBytes(20).toString("hex")}`;
+
+      // Create pending transaction
+      const [tx] = await db.insert(transactions).values({
+        userId: ctx.user.id,
+        type: "deposit",
+        currency: input.currency,
+        amount: String(amount),
+        toAddress: address,
+        status: "pending",
+      }).returning();
+
+      return {
+        txId: tx.id,
+        depositAddress: address,
+        amount: input.amount,
+        currency: input.currency,
+        status: "pending",
+        minConfirmations: input.currency === "BTC" ? 3 : 12,
+      };
+    }),
+
+  withdraw: authedQuery
+    .input(z.object({
+      currency: z.enum(["BTC", "ETH", "USDT"]),
+      amount: z.string().regex(/^\d+\.?\d*$/),
+      toAddress: z.string().min(26).max(64),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const amount = parseFloat(input.amount);
+
+      if (amount <= 0) throw new Error("Invalid amount");
+
+      // Check balance
+      const balance = await db.select().from(balances)
+        .where(and(
+          eq(balances.userId, ctx.user.id),
+          eq(balances.currency, input.currency)
+        ))
+        .then(rows => rows[0]);
+
+      if (!balance || parseFloat(balance.available) < amount) {
+        throw new Error("Insufficient balance");
+      }
+
+      // Lock the amount
+      await db.update(balances)
+        .set({
+          available: String(parseFloat(balance.available) - amount),
+          locked: String(parseFloat(balance.locked || "0") + amount),
+        })
+        .where(eq(balances.id, balance.id));
+
+      // Create withdrawal transaction
+      const fee = input.currency === "BTC" ? 0.0001 : input.currency === "ETH" ? 0.001 : 1;
+      const [tx] = await db.insert(transactions).values({
+        userId: ctx.user.id,
+        type: "withdrawal",
+        currency: input.currency,
+        amount: String(amount),
+        fee: String(fee),
+        toAddress: input.toAddress,
+        status: "pending",
+      }).returning();
+
+      return {
+        txId: tx.id,
+        amount: input.amount,
+        currency: input.currency,
+        fee: String(fee),
+        toAddress: input.toAddress,
+        status: "pending",
+      };
+    }),
+
+  getHistory: authedQuery
+    .input(z.object({
+      limit: z.number().min(1).max(100).default(20),
+      offset: z.number().default(0),
+      type: z.enum(["deposit", "withdrawal"]).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const conditions = [eq(transactions.userId, ctx.user.id)];
+      if (input.type) {
+        conditions.push(eq(transactions.type, input.type));
+      }
+      return db.select()
+        .from(transactions)
+        .where(and(...conditions))
+        .orderBy(desc(transactions.createdAt))
+        .limit(input.limit)
+        .offset(input.offset);
+    }),
+});
+
+export { BDT_RATES };
