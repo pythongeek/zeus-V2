@@ -53,6 +53,7 @@ export const strings = {
     jackpotWin: "JACKPOT!",
     thunderStrikeBonus: "⚡ THUNDER STRIKE BONUS!",
     freeSpinsUnlocked: "⚡ FREE SPINS UNLOCKED! ({n} SPINS)",
+    freeSpinsComplete: "🎉 FREE SPINS COMPLETE! You won {amount} {cur}",
     freeSpinsLeft: "FREE SPINS: {n}",
 
     // Wallet
@@ -229,6 +230,7 @@ export const strings = {
     jackpotWin: "জ্যাকপট!",
     thunderStrikeBonus: "⚡ থান্ডার স্ট্রাইক বোনাস!",
     freeSpinsUnlocked: "⚡ ফ্রি স্পিন আনলকড! ({n} স্পিন)",
+    freeSpinsComplete: "🎉 ফ্রি স্পিন শেষ! আপনি জিতেছেন {amount} {cur}",
     freeSpinsLeft: "ফ্রি স্পিন: {n}",
 
     // Wallet

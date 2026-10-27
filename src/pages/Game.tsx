@@ -72,6 +72,9 @@ export default function Game() {
   ]);
   const [displayedWin, setDisplayedWin] = useState(0);
   const [showBigWin, setShowBigWin] = useState(false);
+  // D2: winning cells for the CSS/lite reels + free-spin session win total
+  const [winCells, setWinCells] = useState<Set<string>>(new Set());
+  const fsWinTotalRef = useRef(0);
   const [bigWinText, setBigWinText] = useState("");
   const [lightningFlash, setLightningFlash] = useState(false);
   const [celebration, setCelebration] = useState<CelebrationData | null>(null);
@@ -318,6 +321,7 @@ export default function Game() {
     audio.startLoop("music", "music-theme.wav", "music", 1);
     audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
     engineRef.current?.clearWinLines();
+    setWinCells(new Set());
     if (debug) document.title = `Z firing sess=${store.session.sessionId}`;
 
     // Start the Pixi reel engine immediately
@@ -428,11 +432,14 @@ export default function Game() {
 
     // Special Feature & Win Animation Triggers
     if (result.featureTriggered === "thunder_strike") {
-      setLightningFlash(true);
+      // D2: strobe sequence — strike, afterglow, second strike.
       audio.play("lightning-crack");
       setBigWinText(t("thunderStrikeBonus"));
       setShowBigWin(true);
-      setTimeout(() => setLightningFlash(false), 800);
+      setLightningFlash(true);
+      setTimeout(() => setLightningFlash(false), 220);
+      setTimeout(() => { setLightningFlash(true); audio.play("lightning-crack", 0.6); }, 380);
+      setTimeout(() => setLightningFlash(false), 1050);
     } else if (result.featureTriggered === "free_spins") {
       setLightningFlash(true);
       audio.play("win-small", 1.2);
@@ -452,6 +459,13 @@ export default function Game() {
             payout: line.payout ? parseFloat(line.payout) : undefined,
           }));
         engineRef.current.showWinLines(winLines);
+      }
+      if (result.winLines?.length) {
+        setWinCells(new Set(
+          (result.winLines as any[])
+            .filter((line: any) => Array.isArray(line.positions))
+            .flatMap((line: any) => line.positions.map(([r, row]: [number, number]) => `${r}:${row}`)),
+        ));
       }
 
       // Big win detection — tiered celebrations
@@ -500,7 +514,17 @@ export default function Game() {
               : result.freeSpinsAwarded,
           );
         }
-        if (result.freeSpinsRemaining === 0) store.setFreeSpinsTotal(0);
+        if (result.isFreeSpin) fsWinTotalRef.current += winAmount;
+        if (result.freeSpinsAwarded > 0 && !result.isFreeSpin) fsWinTotalRef.current = 0;
+        if (result.freeSpinsRemaining === 0) {
+          store.setFreeSpinsTotal(0);
+          // D2: free-spin outro theatre — celebrate the session total.
+          if (fsWinTotalRef.current > 0) {
+            setBigWinText(t("freeSpinsComplete", { amount: fsWinTotalRef.current.toFixed(2), cur: store.activeCurrency }));
+            setShowBigWin(true);
+            fsWinTotalRef.current = 0;
+          }
+        }
       }
     } else {
       store.setGameState("idle");
@@ -725,13 +749,13 @@ export default function Game() {
                   <div key={reelIndex} className="relative overflow-hidden bg-[#0D0D14] rounded-lg">
                     <div className={`flex flex-col ${store.gameState === "spinning" ? "animate-spin-reel" : ""}`}>
                       {reel.map((symbol, rowIndex) => (
-                        <div key={rowIndex} className="relative w-full aspect-square flex items-center justify-center p-1">
+                        <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
                           <img
                             src={`/assets/symbol-${symbol}.webp`}
                             alt={symbol}
                             className={`w-full h-full object-contain ${
                               store.gameState === "spinning" ? "blur-[2px]" : ""
-                            }`}
+                            } ${winCells.has(`${reelIndex}:${rowIndex}`) ? "scale-110 drop-shadow-[0_0_14px_rgba(255,213,79,0.95)]" : ""}`}
                             draggable={false}
                           />
                         </div>

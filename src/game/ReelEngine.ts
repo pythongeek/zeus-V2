@@ -65,6 +65,7 @@ export class ReelEngine {
   private finalSymbols: string[][] = [[], [], [], [], []];
   private spinOpts: SpinOptions | null = null;
   private winLayer: Container;
+  private winGlow: Graphics | null = null;
   private symbolTextures = new Map<string, Texture>();
   private cellSize = 0;
   private anticipationReel: number | null = null;
@@ -332,9 +333,24 @@ export class ReelEngine {
       (g as Graphics & { __reveal?: number }).__reveal = 0;
       this.winLayer.addChild(g);
     }
+    // D2: pulsing highlight boxes over the winning symbols themselves.
+    const glow = new Graphics();
+    for (const line of lines) {
+      for (const [r, row] of line.positions) {
+        const x = this.reelContainers[r].x;
+        const y = this.reelContainers[r].y + row * this.cellSize;
+        glow.lineStyle(3, 0xffd54f, 0.95);
+        glow.beginFill(0xffd54f, 0.13);
+        glow.drawRoundedRect(x + 3, y + 3, this.cellSize - 6, this.cellSize - 6, 10);
+        glow.endFill();
+      }
+    }
+    this.winGlow = glow;
+    this.winLayer.addChildAt(glow, 0);
   }
 
   clearWinLines(): void {
+    this.winGlow = null;
     this.winLayer?.removeChildren().forEach((c) => c.destroy());
   }
 
@@ -356,6 +372,12 @@ export class ReelEngine {
       const c = this.reelContainers[this.anticipationReel];
       const t = this.app.ticker.lastTime / 1000;
       c.scale.set(1 + Math.sin(t * 6) * 0.015);
+    }
+
+    // D2: breathe the win-symbol glow while win lines are shown.
+    if (this.winGlow) {
+      const t = this.app.ticker.lastTime / 1000;
+      this.winGlow.alpha = 0.6 + Math.sin(t * 5) * 0.4;
     }
 
     // fade win lines in, then pulse
