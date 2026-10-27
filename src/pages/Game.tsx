@@ -119,6 +119,16 @@ export default function Game() {
   }, [isAuthenticated, engineFailed, store.liteMode]);
 
   // Keep ref in sync with grid state
+  // D1: free-spin music bed while free spins remain.
+  useEffect(() => {
+    if (store.freeSpinsRemaining > 0) {
+      audio.startLoop("musicFs", "music-freespins.wav", "music", 0.9);
+    } else {
+      audio.stopLoop("musicFs");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.freeSpinsRemaining]);
+
   // C4: FPS guard — if this device cannot hold a smooth frame rate with
   // the Pixi renderer, drop to Lite mode (CSS reels) automatically.
   const fpsGuardDoneRef = useRef(false);
@@ -290,16 +300,20 @@ export default function Game() {
       return;
     }
 
-    // BUG-009: Client-side balance pre-validation
-    const currentBalance = store.balances.find(b => b.currency === store.activeCurrency);
-    if (!currentBalance || currentBalance.available < store.betAmount) {
-      toast.error(t("insufficientBalance", { cur: store.activeCurrency }));
-      return;
+    // BUG-009: Client-side balance pre-validation — skipped during free
+    // spins: they are never charged and play at the locked bet (A5).
+    if (store.freeSpinsRemaining <= 0) {
+      const currentBalance = store.balances.find(b => b.currency === store.activeCurrency);
+      if (!currentBalance || currentBalance.available < store.betAmount) {
+        toast.error(t("insufficientBalance", { cur: store.activeCurrency }));
+        return;
+      }
     }
 
     store.setGameState("spinning");
     store.setLastWin(0);
     audio.unlock();
+    audio.play("ui-click");
     audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
     audio.startLoop("music", "music-theme.wav", "music", 1);
     audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
@@ -450,6 +464,7 @@ export default function Game() {
         audio.play("lightning-crack");
         audio.play("win-jackpot");
         audio.play("coin-cascade");
+        audio.play("thunder-distant", 0.8);
         setLightningFlash(true);
         setTimeout(() => setLightningFlash(false), 800);
         setCelebration({ tier: "jackpot" as CelebrationTier, title: t("jackpotWin"), amount: winAmount, amountText, bdtText });
