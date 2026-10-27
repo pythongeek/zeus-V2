@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Game from "./pages/Game";
+import { Toaster } from "sonner";
 import { lazy, Suspense } from "react";
 
 // C2: admin + login + 404 are split out of the player bundle.
@@ -19,6 +20,7 @@ function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>
+      <Toaster richColors position="top-center" />
     </ErrorBoundary>
   );
 }

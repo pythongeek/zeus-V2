@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { compress } from "hono/compress";
 import app from "./boot";
 
 // --- One-time schema bootstrap for file-backed SQLite (Node/VPS deployments).
@@ -51,6 +52,23 @@ bootstrapSchema();
 
 const port = parseInt(process.env.PORT || "3100", 10);
 const distPublic = path.resolve(process.cwd(), "dist", "public");
+
+// C3: gzip/brotli for text responses (JS/CSS/HTML/JSON).
+app.use(compress());
+
+// C3: cache policy — Vite-hashed bundles and game art under /assets/ are
+// immutable for a year; HTML (and SPA route fallbacks) must revalidate so
+// deploys take effect immediately.
+app.use("*", async (c, next) => {
+  await next();
+  const p = c.req.path;
+  if (p.startsWith("/api/")) return;
+  if (p.startsWith("/assets/")) {
+    c.header("Cache-Control", "public, max-age=31536000, immutable");
+  } else if ((c.res.headers.get("content-type") || "").includes("text/html")) {
+    c.header("Cache-Control", "no-cache");
+  }
+});
 
 // Static assets + SPA fallback for client-side routes
 app.use("*", serveStatic({ root: "./dist/public" }));
