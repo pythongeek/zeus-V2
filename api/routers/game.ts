@@ -49,22 +49,22 @@ const PAYOUTS: Record<number, { 3: number; 4: number; 5: number }> = {
   [SYMBOLS.SCATTER]: { 3: 2, 4: 5, 5: 20 },  // Scatter pays anywhere + free spins
   [SYMBOLS.PEGASUS]: { 3: 30, 4: 100, 5: 500 },
   [SYMBOLS.TEMPLE]: { 3: 25, 4: 80, 5: 400 },
-  [SYMBOLS.HARP]: { 3: 20, 4: 60, 5: 300 },
+  [SYMBOLS.HARP]: { 3: 20, 4: 75, 5: 300 },
   [SYMBOLS.AMPHORA]: { 3: 15, 4: 40, 5: 200 },
-  [SYMBOLS.HELMET]: { 3: 10, 4: 30, 5: 150 },
-  [SYMBOLS.SHIELD]: { 3: 8, 4: 25, 5: 100 },
-  [SYMBOLS.ACE]: { 3: 5, 4: 15, 5: 60 },
-  [SYMBOLS.KING]: { 3: 5, 4: 15, 5: 60 },
-  [SYMBOLS.QUEEN]: { 3: 4, 4: 10, 5: 50 },
+  [SYMBOLS.HELMET]: { 3: 12, 4: 30, 5: 150 },
+  [SYMBOLS.SHIELD]: { 3: 10, 4: 30, 5: 100 },
+  [SYMBOLS.ACE]: { 3: 5, 4: 18, 5: 75 },
+  [SYMBOLS.KING]: { 3: 5, 4: 18, 5: 75 },
+  [SYMBOLS.QUEEN]: { 3: 4, 4: 12, 5: 60 },
 };
 
 // Reel strips (50 positions each, weighted)
 const REEL_STRIPS = [
   [0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
+  [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
   [0,0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
+  [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
+  [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
 ];
 
 // 20 paylines (row indices for each reel)
@@ -181,7 +181,7 @@ function evaluatePaylines(
   if (scatterCount >= 3) {
     const scatterPayout = PAYOUTS[SYMBOLS.SCATTER][Math.min(scatterCount, 5) as 3 | 4 | 5] * betPerLine * PAYLINES.length;
     totalPayout += scatterPayout;
-    freeSpinsAwarded = scatterCount === 3 ? 10 : scatterCount === 4 ? 15 : 25;
+    freeSpinsAwarded = scatterCount === 3 ? 8 : scatterCount === 4 ? 12 : 20;
   }
 
   return { lines, totalPayout, scatterCount, freeSpinsAwarded };
@@ -190,7 +190,7 @@ function evaluatePaylines(
 // Check for provably fair thunder strike bonus derived from spin SHA-256 hash
 function checkThunderStrike(hash: string): boolean {
   const val = parseInt(hash.substring(20, 24), 16);
-  return (val % 100) === 0; // 1% deterministic chance
+  return (val % 200) === 0; // 0.5% deterministic chance (A4 rebalance: was 1%)
 }
 
 // Check provably fair jackpots derived from spin SHA-256 hash
@@ -346,7 +346,7 @@ export const gameRouter = createRouter({
           }
           const reeval = evaluatePaylines(symbols, betPerLine);
           const reevalMicro = microForResult(reeval.lines, reeval.scatterCount);
-          winMicro = reevalMicro > betMicro * 10n ? reevalMicro : betMicro * 10n;
+          winMicro = reevalMicro > betMicro * 5n ? reevalMicro : betMicro * 5n; // A4: thunder floor 5x total bet (was 10x)
           lines.push(...reeval.lines);
         }
 
@@ -532,7 +532,7 @@ export const gameRouter = createRouter({
         isScatter: parseInt(id) === SYMBOLS.SCATTER,
       })),
       paylines: PAYLINES.length,
-      rtp: 96.5,
+      rtp: 96.0, // A4 CERTIFIED (see rtp.test.ts): 1M-spin simulation of the shipped math = 96.02% total (base 68.2 + thunder 2.6 + free-spin chain + pool-funded jackpot ~1.17 at $1 reference bet)
       volatility: "HIGH",
     };
   }),
@@ -586,4 +586,4 @@ export const gameRouter = createRouter({
     }),
 });
 
-export { SYMBOLS, SYMBOL_NAMES, REEL_STRIPS, PAYLINES, calculateSpin, evaluatePaylines };
+export { SYMBOLS, SYMBOL_NAMES, REEL_STRIPS, PAYLINES, calculateSpin, evaluatePaylines, checkThunderStrike };

@@ -30,16 +30,16 @@ import {
 
 const PAYTABLE_DATA = [
   { symbol: "zeus", name: "ZEUS (Wild)", payouts: { 3: "50x", 4: "200x", 5: "1000x" }, special: "Substitutes all except Scatter" },
-  { symbol: "thunderbolt", name: "Thunderbolt (Scatter)", payouts: { 3: "2x + 10 FS", 4: "5x + 15 FS", 5: "20x + 25 FS" }, special: "Triggers Free Spins" },
+  { symbol: "thunderbolt", name: "Thunderbolt (Scatter)", payouts: { 3: "2x + 8 FS", 4: "5x + 12 FS", 5: "20x + 20 FS" }, special: "Triggers Free Spins" },
   { symbol: "pegasus", name: "Pegasus", payouts: { 3: "30x", 4: "100x", 5: "500x" }, special: "" },
   { symbol: "temple", name: "Temple", payouts: { 3: "25x", 4: "80x", 5: "400x" }, special: "" },
-  { symbol: "harp", name: "Golden Harp", payouts: { 3: "20x", 4: "60x", 5: "300x" }, special: "" },
+  { symbol: "harp", name: "Golden Harp", payouts: { 3: "20x", 4: "75x", 5: "300x" }, special: "" },
   { symbol: "amphora", name: "Amphora", payouts: { 3: "15x", 4: "40x", 5: "200x" }, special: "" },
-  { symbol: "helmet", name: "Helmet", payouts: { 3: "10x", 4: "30x", 5: "150x" }, special: "" },
-  { symbol: "shield", name: "Shield", payouts: { 3: "8x", 4: "25x", 5: "100x" }, special: "" },
-  { symbol: "ace", name: "Ace", payouts: { 3: "5x", 4: "15x", 5: "60x" }, special: "" },
-  { symbol: "king", name: "King", payouts: { 3: "5x", 4: "15x", 5: "60x" }, special: "" },
-  { symbol: "queen", name: "Queen", payouts: { 3: "4x", 4: "10x", 5: "50x" }, special: "" },
+  { symbol: "helmet", name: "Helmet", payouts: { 3: "12x", 4: "30x", 5: "150x" }, special: "" },
+  { symbol: "shield", name: "Shield", payouts: { 3: "10x", 4: "30x", 5: "100x" }, special: "" },
+  { symbol: "ace", name: "Ace", payouts: { 3: "5x", 4: "18x", 5: "75x" }, special: "" },
+  { symbol: "king", name: "King", payouts: { 3: "5x", 4: "18x", 5: "75x" }, special: "" },
+  { symbol: "queen", name: "Queen", payouts: { 3: "4x", 4: "12x", 5: "60x" }, special: "" },
 ];
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
@@ -916,7 +916,7 @@ export default function Game() {
               <div className="bg-[#1A1A25] rounded-lg p-4 mt-4">
                 <div className="flex justify-between text-sm">
                   <span className="text-[#5E5E6E]">Return to Player (RTP)</span>
-                  <span className="text-[#00E676] font-semibold">96.5%</span>
+                  <span className="text-[#00E676] font-semibold">96.0%</span>
                 </div>
                 <div className="flex justify-between text-sm mt-2">
                   <span className="text-[#5E5E6E]">Volatility</span>
