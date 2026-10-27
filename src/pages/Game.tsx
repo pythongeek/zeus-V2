@@ -28,19 +28,6 @@ import {
   Sparkles,
 } from "lucide-react";
 
-const PAYTABLE_DATA = [
-  { symbol: "zeus", name: "ZEUS (Wild)", payouts: { 3: "50x", 4: "200x", 5: "1000x" }, special: "Substitutes all except Scatter" },
-  { symbol: "thunderbolt", name: "Thunderbolt (Scatter)", payouts: { 3: "2x + 8 FS", 4: "5x + 12 FS", 5: "20x + 20 FS" }, special: "Triggers Free Spins" },
-  { symbol: "pegasus", name: "Pegasus", payouts: { 3: "30x", 4: "100x", 5: "500x" }, special: "" },
-  { symbol: "temple", name: "Temple", payouts: { 3: "25x", 4: "80x", 5: "400x" }, special: "" },
-  { symbol: "harp", name: "Golden Harp", payouts: { 3: "20x", 4: "75x", 5: "300x" }, special: "" },
-  { symbol: "amphora", name: "Amphora", payouts: { 3: "15x", 4: "40x", 5: "200x" }, special: "" },
-  { symbol: "helmet", name: "Helmet", payouts: { 3: "12x", 4: "30x", 5: "150x" }, special: "" },
-  { symbol: "shield", name: "Shield", payouts: { 3: "10x", 4: "30x", 5: "100x" }, special: "" },
-  { symbol: "ace", name: "Ace", payouts: { 3: "5x", 4: "18x", 5: "75x" }, special: "" },
-  { symbol: "king", name: "King", payouts: { 3: "5x", 4: "18x", 5: "75x" }, special: "" },
-  { symbol: "queen", name: "Queen", payouts: { 3: "4x", 4: "12x", 5: "60x" }, special: "" },
-];
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
   BTC: "\u20BF",
@@ -254,6 +241,8 @@ export default function Game() {
   // B2: admin-controlled public config — bet limits, feature toggles,
   // timings, announcement/maintenance, first-visit sound defaults.
   const configQuery = trpc.game.getConfig.useQuery(undefined, { staleTime: 30000 });
+  // E1: the paytable dialog renders the LIVE math from the server.
+  const paytableQuery = trpc.game.getPaytable.useQuery(undefined, { enabled: store.showPaytable, staleTime: 60000 });
   useEffect(() => {
     const cfg = configQuery.data as Record<string, any> | undefined;
     if (!cfg) return;
@@ -1028,41 +1017,50 @@ export default function Game() {
           <DialogHeader>
             <DialogTitle className="text-[#D4AF37] flex items-center gap-2" style={{ fontFamily: "Cinzel, serif" }}>
               <Sparkles className="w-5 h-5" />
-              PAYTABLE
+              {t("paytable")}
             </DialogTitle>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-3">
-              {PAYTABLE_DATA.map((item) => (
-                <div key={item.symbol} className="flex items-center gap-3 bg-[#1A1A25] rounded-lg p-3">
+              {(paytableQuery.data?.symbols ?? []).map((item: any) => (
+                <div key={item.name} className="flex items-center gap-3 bg-[#1A1A25] rounded-lg p-3">
                   <img
-                    src={`/assets/symbol-${item.symbol}.webp`}
-                    alt={item.name}
+                    src={`/assets/symbol-${item.name}.webp`}
+                    alt={t(`sym_${item.name}` as any)}
                     className="w-12 h-12 object-contain"
                   />
                   <div className="flex-1">
-                    <div className="text-sm font-semibold text-white">{item.name}</div>
-                    {item.special && <div className="text-xs text-[#4FC3F7]">{item.special}</div>}
-                    <div className="flex gap-3 mt-1">
-                      <span className="text-xs text-[#5E5E6E]">3x: <span className="text-[#D4AF37]">{item.payouts[3]}</span></span>
-                      <span className="text-xs text-[#5E5E6E]">4x: <span className="text-[#D4AF37]">{item.payouts[4]}</span></span>
-                      <span className="text-xs text-[#5E5E6E]">5x: <span className="text-[#D4AF37]">{item.payouts[5]}</span></span>
-                    </div>
+                    <div className="text-sm font-semibold text-white">{t(`sym_${item.name}` as any)}</div>
+                    {item.isWild && <div className="text-xs text-[#4FC3F7]">{t("specialWild")}</div>}
+                    {item.isScatter && <div className="text-xs text-[#4FC3F7]">{t("specialScatter")}</div>}
+                    {item.isScatter && paytableQuery.data?.freeSpins && (
+                      <div className="text-xs text-[#00E676]">
+                        {t("scatterAwards", { a: (paytableQuery.data.freeSpins as any)["3"], b: (paytableQuery.data.freeSpins as any)["4"], c: (paytableQuery.data.freeSpins as any)["5"] })}
+                      </div>
+                    )}
+                    {item.payouts && (
+                      <div className="flex gap-3 mt-1">
+                        <span className="text-xs text-[#5E5E6E]">3x: <span className="text-[#D4AF37]">{item.payouts["3"]}x</span></span>
+                        <span className="text-xs text-[#5E5E6E]">4x: <span className="text-[#D4AF37]">{item.payouts["4"]}x</span></span>
+                        <span className="text-xs text-[#5E5E6E]">5x: <span className="text-[#D4AF37]">{item.payouts["5"]}x</span></span>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
+              <p className="text-xs text-[#5E5E6E] px-1">{t("paytableNote")}</p>
               <div className="bg-[#1A1A25] rounded-lg p-4 mt-4">
                 <div className="flex justify-between text-sm">
-                  <span className="text-[#5E5E6E]">Return to Player (RTP)</span>
-                  <span className="text-[#00E676] font-semibold">96.0%</span>
+                  <span className="text-[#5E5E6E]">{t("rtpLabel")}</span>
+                  <span className="text-[#00E676] font-semibold">{paytableQuery.data?.rtp ?? 96}%</span>
                 </div>
                 <div className="flex justify-between text-sm mt-2">
-                  <span className="text-[#5E5E6E]">Volatility</span>
-                  <Badge variant="outline" className="border-purple-500/30 text-purple-400">HIGH</Badge>
+                  <span className="text-[#5E5E6E]">{t("volatilityLabel")}</span>
+                  <Badge variant="outline" className="border-purple-500/30 text-purple-400">{t("volatilityHigh")}</Badge>
                 </div>
                 <div className="flex justify-between text-sm mt-2">
-                  <span className="text-[#5E5E6E]">Paylines</span>
-                  <span className="text-white font-semibold">20 Fixed</span>
+                  <span className="text-[#5E5E6E]">{t("paylinesLabel")}</span>
+                  <span className="text-white font-semibold">{paytableQuery.data?.paylines ?? 20} {t("fixedWord")}</span>
                 </div>
               </div>
             </div>
@@ -1076,23 +1074,22 @@ export default function Game() {
           <DialogHeader>
             <DialogTitle className="text-[#00E676] flex items-center gap-2">
               <Shield className="w-5 h-5" />
-              Provably Fair Verification
+              {t("fairnessTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-[#9E9EAC]">
-              Every spin result is determined by a SHA-256 hash of your client seed + our server seed + nonce.
-              You can verify any spin independently.
+              {t("fairnessDesc")}
             </p>
             <div className="bg-[#1A1A25] rounded-lg p-4 space-y-3">
               <div>
-                <div className="text-xs text-[#5E5E6E] mb-1">Server Seed Hash</div>
+                <div className="text-xs text-[#5E5E6E] mb-1">{t("serverSeedHash")}</div>
                 <div className="font-mono text-xs text-white break-all bg-[#0A0A0F] rounded p-2">
-                  {store.session?.serverSeedHash || "Start a session to see hash"}
+                  {store.session?.serverSeedHash || t("startSessionToSeeHash")}
                 </div>
               </div>
               <div>
-                <div className="text-xs text-[#5E5E6E] mb-1">Client Seed</div>
+                <div className="text-xs text-[#5E5E6E] mb-1">{t("clientSeed")}</div>
                 <div className="flex gap-2">
                   <Input
                     value={store.clientSeed}
@@ -1110,14 +1107,14 @@ export default function Game() {
                 </div>
               </div>
               <div>
-                <div className="text-xs text-[#5E5E6E] mb-1">Next Nonce</div>
+                <div className="text-xs text-[#5E5E6E] mb-1">{t("nextNonce")}</div>
                 <div className="font-mono text-sm text-white">
                   {store.session ? store.session.startingNonce + 1 : 0}
                 </div>
               </div>
             </div>
             <div className="bg-[#0A0A0F] rounded-lg p-4">
-              <div className="text-xs text-[#5E5E6E] mb-2">Verification Code (JavaScript)</div>
+              <div className="text-xs text-[#5E5E6E] mb-2">{t("verificationCode")}</div>
               <pre className="text-xs text-[#4FC3F7] font-mono overflow-x-auto">
 {`// Verify a spin result
 const hash = sha256(

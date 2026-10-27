@@ -710,6 +710,7 @@ export const gameRouter = createRouter({
       paylines: PAYLINES.length,
       rtp: getSetting<number>("rtp_declared"), // A4-certified 96.0 for the default math (see rtp.test.ts); admin updates only after re-certification
       volatility: "HIGH",
+      freeSpins: getMathConfig().freeSpins,
     };
   }),
 
