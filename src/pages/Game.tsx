@@ -87,7 +87,7 @@ export default function Game() {
 
   // Create/destroy the engine with auth state
   useEffect(() => {
-    if (!isAuthenticated || !reelsHostRef.current || engineRef.current || engineFailed) return;
+    if (!isAuthenticated || store.liteMode || !reelsHostRef.current || engineRef.current || engineFailed) return;
     let cancelled = false;
     try {
       const engine = new ReelEngine(reelsHostRef.current, 5);
@@ -116,9 +116,38 @@ export default function Game() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, engineFailed]);
+  }, [isAuthenticated, engineFailed, store.liteMode]);
 
   // Keep ref in sync with grid state
+  // C4: FPS guard — if this device cannot hold a smooth frame rate with
+  // the Pixi renderer, drop to Lite mode (CSS reels) automatically.
+  const fpsGuardDoneRef = useRef(false);
+  useEffect(() => {
+    if (store.liteMode || engineFailed || fpsGuardDoneRef.current || !isAuthenticated) return;
+    let frames = 0;
+    let slowWindows = 0;
+    let raf = 0;
+    let windowStart = performance.now();
+    const tick = (now: number) => {
+      frames++;
+      if (now - windowStart >= 1000) {
+        slowWindows = frames < 35 ? slowWindows + 1 : 0;
+        frames = 0;
+        windowStart = now;
+        if (slowWindows >= 2) {
+          fpsGuardDoneRef.current = true;
+          store.setLiteMode(true);
+          toast.info(t("liteModeAuto"));
+          return;
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, store.liteMode, engineFailed]);
+
   useEffect(() => {
     reelSymbolsRef.current = reelSymbols;
   }, [reelSymbols]);
@@ -675,7 +704,7 @@ export default function Game() {
 
           {/* Reels Container — Pixi-powered reel engine (with CSS fallback) */}
           <div className="bg-[#0A0A0F] rounded-xl p-2">
-            {engineFailed ? (
+            {engineFailed || store.liteMode ? (
               <div className="grid grid-cols-5 gap-1">
                 {reelSymbols.map((reel, reelIndex) => (
                   <div key={reelIndex} className="relative overflow-hidden bg-[#0D0D14] rounded-lg">
@@ -802,6 +831,16 @@ export default function Game() {
                 >
                   <Zap className="w-3 h-3 mr-1" />
                   {t("turbo")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => store.setLiteMode(!store.liteMode)}
+                  className={`border-[#2A2A35] text-xs h-6 ${
+                    store.liteMode ? "bg-[#4FC3F7]/20 border-[#4FC3F7] text-[#4FC3F7]" : "bg-[#1A1A25]"
+                  }`}
+                >
+                  {t("liteMode")}
                 </Button>
               </div>
 
