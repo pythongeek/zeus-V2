@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
+import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
@@ -8,6 +9,8 @@ import crypto from "crypto";
 // Bet limits (server-enforced; mirror the frontend store)
 const MIN_BET = 0.1;
 const MAX_BET = 1000;
+const MIN_BET_MICRO = parseMoney("0.1");
+const MAX_BET_MICRO = parseMoney("1000");
 
 const JACKPOT_SEEDS: Record<string, string> = {
   mini: "0.01",
@@ -250,13 +253,20 @@ export const gameRouter = createRouter({
       currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
     }))
     .mutation(async ({ ctx, input }) => {
-      const betAmount = parseFloat(input.betAmount);
-      if (!Number.isFinite(betAmount) || betAmount <= 0) {
+      // A3: from here the bet is exact decimal money (BigInt micro units).
+      let betMicro: bigint;
+      try {
+        betMicro = parseMoney(input.betAmount);
+      } catch {
         throw new Error("Invalid bet amount");
       }
-      if (betAmount < MIN_BET || betAmount > MAX_BET) {
+      if (betMicro <= 0n) {
+        throw new Error("Invalid bet amount");
+      }
+      if (betMicro < MIN_BET_MICRO || betMicro > MAX_BET_MICRO) {
         throw new Error(`Bet must be between ${MIN_BET} and ${MAX_BET}`);
       }
+      const betAmount = Number(betMicro) / 1e8; // engine/display float only
 
       // A2: the whole spin — session/balance reads, outcome calculation,
       // balance update, session update, spin record, jackpot movement and
@@ -281,8 +291,8 @@ export const gameRouter = createRouter({
         const balRow = client
           .prepare("SELECT * FROM balances WHERE user_id = ? AND currency = ?")
           .get(ctx.user.id, input.currency) as any;
-        const availableBalance = balRow ? parseFloat(balRow.available) : 0;
-        if (!balRow || availableBalance < betAmount) {
+        const availableMicro = balRow ? parseMoney(balRow.available) : 0n;
+        if (!balRow || availableMicro < betMicro) {
           throw new Error("Insufficient balance");
         }
 
@@ -295,11 +305,29 @@ export const gameRouter = createRouter({
         );
 
         const betPerLine = betAmount / PAYLINES.length;
-        const { lines, totalPayout, scatterCount, freeSpinsAwarded } =
+        const { lines, scatterCount, freeSpinsAwarded } =
           evaluatePaylines(symbols, betPerLine);
 
-        let winAmount = totalPayout;
-        const isBigWin = winAmount >= betAmount * 50;
+        // Exact win in micro units, recomputed from line multipliers —
+        // evaluatePaylines works in floats; money never does (A3).
+        const microForResult = (ls: typeof lines, sc: number): bigint => {
+          let total = 0n;
+          for (const l of ls) {
+            total += mulDivRound(
+              betMicro,
+              BigInt(PAYOUTS[l.symbol][l.count as 3 | 4 | 5]),
+              20n,
+            );
+          }
+          if (sc >= 3) {
+            total +=
+              betMicro *
+              BigInt(PAYOUTS[SYMBOLS.SCATTER][Math.min(sc, 5) as 3 | 4 | 5]);
+          }
+          return total;
+        };
+        let winMicro = microForResult(lines, scatterCount);
+        const isBigWin = winMicro >= betMicro * 50n;
         let isJackpot = false;
         let featureTriggered: "none" | "free_spins" | "thunder_strike" = "none";
         let jackpotTier: string | null = null;
@@ -308,7 +336,7 @@ export const gameRouter = createRouter({
           featureTriggered = "free_spins";
         }
 
-        if (winAmount === 0 && checkThunderStrike(hash)) {
+        if (winMicro === 0n && checkThunderStrike(hash)) {
           featureTriggered = "thunder_strike";
           const numTransforms = (parseInt(hash.substring(30, 32), 16) % 3) + 1;
           for (let i = 0; i < numTransforms; i++) {
@@ -317,7 +345,8 @@ export const gameRouter = createRouter({
             symbols[r][row] = SYMBOLS.ZEUS;
           }
           const reeval = evaluatePaylines(symbols, betPerLine);
-          winAmount = Math.max(reeval.totalPayout, betAmount * 10);
+          const reevalMicro = microForResult(reeval.lines, reeval.scatterCount);
+          winMicro = reevalMicro > betMicro * 10n ? reevalMicro : betMicro * 10n;
           lines.push(...reeval.lines);
         }
 
@@ -325,15 +354,15 @@ export const gameRouter = createRouter({
         if (jackpot) {
           isJackpot = true;
           jackpotTier = jackpot.tier;
-          winAmount += betAmount * jackpot.amount;
+          winMicro += betMicro * BigInt(jackpot.amount);
         }
 
-        const updatedBalance = availableBalance - betAmount + winAmount;
+        const updatedMicro = availableMicro - betMicro + winMicro;
         const nowSec = Math.floor(Date.now() / 1000);
 
         client
           .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE id = ?")
-          .run(String(updatedBalance), nowSec, balRow.id);
+          .run(fmtMoney(updatedMicro), nowSec, balRow.id);
 
         client
           .prepare(
@@ -342,8 +371,8 @@ export const gameRouter = createRouter({
           .run(
             newNonce,
             session.total_spins + 1,
-            String(parseFloat(session.total_wagered) + betAmount),
-            String(parseFloat(session.total_won) + winAmount),
+            fmtMoney(parseMoney(session.total_wagered) + betMicro),
+            fmtMoney(parseMoney(session.total_won) + winMicro),
             session.id,
           );
 
@@ -356,11 +385,11 @@ export const gameRouter = createRouter({
             session.id,
             ctx.user.id,
             newNonce,
-            input.betAmount,
+            fmtMoney(betMicro),
             input.currency,
             JSON.stringify(reelStops),
             JSON.stringify(symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]))),
-            String(winAmount),
+            fmtMoney(winMicro),
             JSON.stringify(lines),
             isBigWin ? 1 : 0,
             isJackpot ? 1 : 0,
@@ -380,17 +409,17 @@ export const gameRouter = createRouter({
           spinId,
           "spin_debit",
           input.currency,
-          String(-betAmount),
-          String(availableBalance - betAmount),
+          fmtMoney(-betMicro),
+          fmtMoney(availableMicro - betMicro),
         );
-        if (winAmount > 0) {
+        if (winMicro > 0n) {
           insLedger.run(
             ctx.user.id,
             spinId,
             "spin_credit",
             input.currency,
-            String(winAmount),
-            String(updatedBalance),
+            fmtMoney(winMicro),
+            fmtMoney(updatedMicro),
           );
         }
 
@@ -398,7 +427,7 @@ export const gameRouter = createRouter({
         // A6 redesigns funding/awards). On a hit the tier resets to its
         // seed; otherwise every tier receives the 1% contribution, exactly
         // as the previous code did — now atomically with the spin.
-        const contribution = betAmount * 0.01;
+        const contributionMicro = mulDivRound(betMicro, 1n, 100n);
         if (isJackpot && jackpotTier) {
           client
             .prepare(
@@ -412,7 +441,7 @@ export const gameRouter = createRouter({
           for (const p of pools) {
             client
               .prepare("UPDATE jackpot_pool SET current_amount = ? WHERE tier = ?")
-              .run(String(parseFloat(p.current_amount) + contribution), p.tier);
+              .run(fmtMoney(parseMoney(p.current_amount) + contributionMicro), p.tier);
           }
         }
 
@@ -421,14 +450,14 @@ export const gameRouter = createRouter({
           newNonce,
           reelStops,
           symbols,
-          winAmount,
+          winMicro,
           lines,
           isBigWin,
           isJackpot,
           featureTriggered,
           freeSpinsAwarded,
           hash,
-          updatedBalance,
+          updatedMicro,
           jackpotTier,
         };
       });
@@ -452,14 +481,14 @@ export const gameRouter = createRouter({
         nonce: out.newNonce,
         reelPositions: out.reelStops,
         symbols: out.symbols.map((col: number[]) => col.map((s: number) => SYMBOL_NAMES[s])),
-        winAmount: String(out.winAmount),
+        winAmount: fmtMoney(out.winMicro),
         winLines: out.lines,
         isBigWin: out.isBigWin,
         isJackpot: out.isJackpot,
         featureTriggered: out.featureTriggered,
         freeSpinsAwarded: out.freeSpinsAwarded,
         hash: out.hash,
-        newBalance: String(out.updatedBalance),
+        newBalance: fmtMoney(out.updatedMicro),
         jackpotTier: out.jackpotTier,
       };
     }),

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createRouter, adminQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
+import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { count, sum, desc, eq, and } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
@@ -101,7 +102,7 @@ export const adminRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       await db.update(jackpotPool)
-        .set({ currentAmount: String(input.amount) })
+        .set({ currentAmount: canonicalMoney(input.amount) })
         .where(eq(jackpotPool.tier, input.tier));
       await writeAudit(ctx, "admin.updateJackpot", { ...input });
       return { success: true, tier: input.tier, amount: input.amount };
@@ -145,7 +146,7 @@ export const adminRouter = createRouter({
       if (!tx) throw new Error("Deposit transaction not found");
       if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
 
-      const amount = parseFloat(tx.amount);
+      const amountMicro = parseMoney(tx.amount);
 
       await db.update(transactions)
         .set({ status: "confirmed", processedAt: new Date() })
@@ -158,8 +159,8 @@ export const adminRouter = createRouter({
       if (bal) {
         await db.update(balances)
           .set({
-            available: String(parseFloat(bal.available) + amount),
-            totalDeposited: String(parseFloat(bal.totalDeposited) + amount),
+            available: fmtMoney(parseMoney(bal.available) + amountMicro),
+            totalDeposited: fmtMoney(parseMoney(bal.totalDeposited || "0") + amountMicro),
             updatedAt: new Date(),
           })
           .where(eq(balances.id, bal.id));
@@ -167,8 +168,8 @@ export const adminRouter = createRouter({
         await db.insert(balances).values({
           userId: tx.userId,
           currency: tx.currency,
-          available: String(amount),
-          totalDeposited: String(amount),
+          available: canonicalMoney(tx.amount),
+          totalDeposited: canonicalMoney(tx.amount),
         });
       }
 
@@ -188,7 +189,7 @@ export const adminRouter = createRouter({
       if (!tx) throw new Error("Withdrawal transaction not found");
       if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
 
-      const amount = parseFloat(tx.amount);
+      const amountMicro = parseMoney(tx.amount);
 
       // Locked funds leave the system; withdrawal total is recorded.
       const bal = await db.select().from(balances)
@@ -196,15 +197,15 @@ export const adminRouter = createRouter({
         .then(rows => rows[0]);
       if (!bal) throw new Error("User balance row missing");
 
-      const locked = parseFloat(bal.locked || "0");
-      if (locked < amount) {
-        throw new Error(`Locked balance ${locked} is less than withdrawal ${amount} — refusing`);
+      const lockedMicro = parseMoney(bal.locked || "0");
+      if (lockedMicro < amountMicro) {
+        throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
       }
 
       await db.update(balances)
         .set({
-          locked: String(locked - amount),
-          totalWithdrawn: String(parseFloat(bal.totalWithdrawn || "0") + amount),
+          locked: fmtMoney(lockedMicro - amountMicro),
+          totalWithdrawn: fmtMoney(parseMoney(bal.totalWithdrawn || "0") + amountMicro),
           updatedAt: new Date(),
         })
         .where(eq(balances.id, bal.id));
@@ -229,7 +230,7 @@ export const adminRouter = createRouter({
       if (!tx) throw new Error("Withdrawal transaction not found");
       if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
 
-      const amount = parseFloat(tx.amount);
+      const amountMicro = parseMoney(tx.amount);
 
       // Refund: locked funds return to available.
       const bal = await db.select().from(balances)
@@ -237,15 +238,15 @@ export const adminRouter = createRouter({
         .then(rows => rows[0]);
       if (!bal) throw new Error("User balance row missing");
 
-      const locked = parseFloat(bal.locked || "0");
-      if (locked < amount) {
-        throw new Error(`Locked balance ${locked} is less than withdrawal ${amount} — refusing`);
+      const lockedMicro = parseMoney(bal.locked || "0");
+      if (lockedMicro < amountMicro) {
+        throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
       }
 
       await db.update(balances)
         .set({
-          locked: String(locked - amount),
-          available: String(parseFloat(bal.available) + amount),
+          locked: fmtMoney(lockedMicro - amountMicro),
+          available: fmtMoney(parseMoney(bal.available) + amountMicro),
           updatedAt: new Date(),
         })
         .where(eq(balances.id, bal.id));

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { balances, transactions } from "../../db/schema";
+import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
 
@@ -80,7 +81,7 @@ export const balanceRouter = createRouter({
         userId: ctx.user.id,
         type: "deposit",
         currency: input.currency,
-        amount: String(amount),
+        amount: canonicalMoney(input.amount),
         toAddress: address,
         status: "pending",
       }).returning();
@@ -103,9 +104,9 @@ export const balanceRouter = createRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      const amount = parseFloat(input.amount);
+      const amountMicro = parseMoney(input.amount);
 
-      if (amount <= 0) throw new Error("Invalid amount");
+      if (amountMicro <= 0n) throw new Error("Invalid amount");
 
       // Check balance
       const balance = await db.select().from(balances)
@@ -115,15 +116,15 @@ export const balanceRouter = createRouter({
         ))
         .then(rows => rows[0]);
 
-      if (!balance || parseFloat(balance.available) < amount) {
+      if (!balance || parseMoney(balance.available) < amountMicro) {
         throw new Error("Insufficient balance");
       }
 
       // Lock the amount
       await db.update(balances)
         .set({
-          available: String(parseFloat(balance.available) - amount),
-          locked: String(parseFloat(balance.locked || "0") + amount),
+          available: fmtMoney(parseMoney(balance.available) - amountMicro),
+          locked: fmtMoney(parseMoney(balance.locked || "0") + amountMicro),
         })
         .where(eq(balances.id, balance.id));
 
@@ -133,7 +134,7 @@ export const balanceRouter = createRouter({
         userId: ctx.user.id,
         type: "withdrawal",
         currency: input.currency,
-        amount: String(amount),
+        amount: fmtMoney(amountMicro),
         fee: String(fee),
         toAddress: input.toAddress,
         status: "pending",
