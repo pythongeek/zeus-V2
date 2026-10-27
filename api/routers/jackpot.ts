@@ -7,9 +7,9 @@ import { BDT_RATES } from "./balance";
 export const jackpotRouter = createRouter({
   getPools: publicQuery.query(async () => {
     const defaultPools = [
-      { tier: "mega" as const, amount: 0, bdtEquivalent: 0, seedAmount: 1.0, contributionRate: 0.0001, hitCount: 0 },
-      { tier: "major" as const, amount: 0, bdtEquivalent: 0, seedAmount: 0.1, contributionRate: 0.0005, hitCount: 0 },
-      { tier: "mini" as const, amount: 0, bdtEquivalent: 0, seedAmount: 0.01, contributionRate: 0.001, hitCount: 0 },
+      { tier: "mega" as const, amount: 0, bdtEquivalent: 0, seedAmount: 100, contributionRate: 0.002, hitCount: 0, currency: "USDT" },
+      { tier: "major" as const, amount: 0, bdtEquivalent: 0, seedAmount: 25, contributionRate: 0.003, hitCount: 0, currency: "USDT" },
+      { tier: "mini" as const, amount: 0, bdtEquivalent: 0, seedAmount: 5, contributionRate: 0.005, hitCount: 0, currency: "USDT" },
     ];
 
     try {
@@ -19,9 +19,9 @@ export const jackpotRouter = createRouter({
       // Ensure pools exist (seed if empty)
       if (pools.length === 0) {
         const defaults = [
-          { tier: "mini" as const, seedAmount: "0.01", currentAmount: "0.052", contributionRate: "0.001" },
-          { tier: "major" as const, seedAmount: "0.1", currentAmount: "0.523", contributionRate: "0.0005" },
-          { tier: "mega" as const, seedAmount: "1.0", currentAmount: "10.45", contributionRate: "0.0001" },
+          { tier: "mini" as const, seedAmount: "5", currentAmount: "5", contributionRate: "0.005" },
+          { tier: "major" as const, seedAmount: "25", currentAmount: "25", contributionRate: "0.003" },
+          { tier: "mega" as const, seedAmount: "100", currentAmount: "100", contributionRate: "0.002" },
         ];
 
         for (const def of defaults) {
@@ -38,20 +38,24 @@ export const jackpotRouter = createRouter({
         return newPools.map(p => ({
           tier: p.tier,
           amount: parseFloat(p.currentAmount),
-          bdtEquivalent: parseFloat(p.currentAmount) * (BDT_RATES[p.tier === "mega" ? "BTC" : "BTC"] || 1),
+          // A6: pools are USDT — the BDT figure uses the USDT rate (this
+          // previously multiplied by the BTC rate, showing ৳117 million).
+          bdtEquivalent: parseFloat(p.currentAmount) * (BDT_RATES.USDT || 1),
           seedAmount: parseFloat(p.seedAmount),
           contributionRate: parseFloat(p.contributionRate),
           hitCount: p.hitCount,
+          currency: "USDT",
         }));
       }
 
       return pools.map(p => ({
         tier: p.tier,
         amount: parseFloat(p.currentAmount),
-        bdtEquivalent: parseFloat(p.currentAmount) * (BDT_RATES.BTC || 1),
+        bdtEquivalent: parseFloat(p.currentAmount) * (BDT_RATES.USDT || 1),
         seedAmount: parseFloat(p.seedAmount),
         contributionRate: parseFloat(p.contributionRate),
         hitCount: p.hitCount,
+        currency: "USDT",
       }));
     } catch {
       // Fallback: return default seed pools when DB is unavailable

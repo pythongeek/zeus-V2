@@ -12,10 +12,12 @@ const MAX_BET = 1000;
 const MIN_BET_MICRO = parseMoney("0.1");
 const MAX_BET_MICRO = parseMoney("1000");
 
+// A6: pools are USDT-denominated and pool-funded. Seeds are the house
+// float restored after every hit; contributions (below) regrow them.
 const JACKPOT_SEEDS: Record<string, string> = {
-  mini: "0.01",
-  major: "0.1",
-  mega: "1.0",
+  mini: "5",
+  major: "25",
+  mega: "100",
 };
 
 function getDbSeedForTier(tier: string): string {
@@ -194,11 +196,11 @@ function checkThunderStrike(hash: string): boolean {
 }
 
 // Check provably fair jackpots derived from spin SHA-256 hash
-function checkJackpot(hash: string): { tier: string; amount: number } | null {
+function checkJackpot(hash: string): { tier: string } | null {
   const val = parseInt(hash.substring(24, 30), 16); // 24-bit value (0..16777215)
-  if (val < 16) return { tier: "mega", amount: 10000 };
-  if (val < 167) return { tier: "major", amount: 500 };
-  if (val < 1677) return { tier: "mini", amount: 50 };
+  if (val < 16) return { tier: "mega" };
+  if (val < 167) return { tier: "major" };
+  if (val < 1677) return { tier: "mini" };
   return null;
 }
 
@@ -363,10 +365,21 @@ export const gameRouter = createRouter({
         }
 
         const jackpot = checkJackpot(hash);
+        // A6: the award IS the tier's pool balance at this moment (read
+        // inside the transaction) — no longer a bet multiplier.
+        const poolRows = client
+          .prepare("SELECT tier, current_amount FROM jackpot_pool")
+          .all() as any[];
+        const poolMicroByTier: Record<string, bigint> = {};
+        for (const p of poolRows) {
+          poolMicroByTier[p.tier] = parseMoney(p.current_amount);
+        }
+        let jackpotAwardMicro = 0n;
         if (jackpot) {
           isJackpot = true;
           jackpotTier = jackpot.tier;
-          winMicro += spinBetMicro * BigInt(jackpot.amount);
+          jackpotAwardMicro = poolMicroByTier[jackpot.tier] ?? 0n;
+          winMicro += jackpotAwardMicro;
         }
 
         // Free-spin bookkeeping: consume one, add any retrigger/award.
@@ -468,27 +481,31 @@ export const gameRouter = createRouter({
           );
         }
 
-        // Jackpot pool movement (amounts unchanged from the pre-A2 model;
-        // A6 redesigns funding/awards). On a hit the tier resets to its
-        // seed; otherwise every tier receives the 1% contribution, exactly
-        // as the previous code did — now atomically with the spin.
-        const contributionMicro = isFreeSpin
-          ? 0n
-          : mulDivRound(spinBetMicro, 1n, 100n);
-        if (isJackpot && jackpotTier) {
-          client
-            .prepare(
-              "UPDATE jackpot_pool SET current_amount = ?, last_won_at = ?, last_won_by = ?, hit_count = hit_count + 1 WHERE tier = ?",
-            )
-            .run(getDbSeedForTier(jackpotTier), nowSec, ctx.user.id, jackpotTier);
-        } else {
-          const pools = client
-            .prepare("SELECT tier, current_amount FROM jackpot_pool")
-            .all() as any[];
-          for (const p of pools) {
+        // A6 pool movement: paid spins contribute 1% of the bet, split
+        // mini 0.5% / major 0.3% / mega 0.2%. The hit tier paid out its
+        // whole balance above and now reseeds to the house float.
+        const SHARES: Record<string, bigint> = { mini: 5n, major: 3n, mega: 2n };
+        for (const p of poolRows) {
+          if (jackpotTier && p.tier === jackpotTier) {
             client
-              .prepare("UPDATE jackpot_pool SET current_amount = ? WHERE tier = ?")
-              .run(fmtMoney(parseMoney(p.current_amount) + contributionMicro), p.tier);
+              .prepare(
+                "UPDATE jackpot_pool SET current_amount = ?, last_won_at = ?, last_won_by = ?, hit_count = hit_count + 1 WHERE tier = ?",
+              )
+              .run(getDbSeedForTier(p.tier), nowSec, ctx.user.id, p.tier);
+          } else if (!isFreeSpin) {
+            const share = mulDivRound(
+              spinBetMicro,
+              SHARES[p.tier] ?? 0n,
+              1000n,
+            );
+            if (share > 0n) {
+              client
+                .prepare("UPDATE jackpot_pool SET current_amount = ? WHERE tier = ?")
+                .run(
+                  fmtMoney((poolMicroByTier[p.tier] ?? 0n) + share),
+                  p.tier,
+                );
+            }
           }
         }
 
@@ -506,6 +523,7 @@ export const gameRouter = createRouter({
           hash,
           updatedMicro,
           jackpotTier,
+          jackpotAwardMicro,
           isFreeSpin,
           fsRemainingAfter,
           spinBetMicro,
@@ -541,6 +559,8 @@ export const gameRouter = createRouter({
         hash: out.hash,
         newBalance: fmtMoney(out.updatedMicro),
         jackpotTier: out.jackpotTier,
+        jackpotAward:
+          out.jackpotAwardMicro > 0n ? fmtMoney(out.jackpotAwardMicro) : null,
         isFreeSpin: out.isFreeSpin,
         freeSpinsRemaining: out.fsRemainingAfter,
         betUsed: fmtMoney(out.spinBetMicro),
@@ -593,7 +613,7 @@ export const gameRouter = createRouter({
         isScatter: parseInt(id) === SYMBOLS.SCATTER,
       })),
       paylines: PAYLINES.length,
-      rtp: 96.0, // A4 CERTIFIED (see rtp.test.ts): 1M-spin simulation of the shipped math = 96.02% total (base 68.2 + thunder 2.6 + free-spin chain + pool-funded jackpot ~1.17 at $1 reference bet)
+      rtp: 96.0, // A4 CERTIFIED (see rtp.test.ts): 1M-spin simulation of the shipped math = 96.02% total (base 68.2 + thunder 2.6 + free-spin chain + pool-funded jackpot 1.08pt at $1 reference bet; exact enumeration in rtp.test.ts)
       volatility: "HIGH",
     };
   }),

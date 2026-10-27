@@ -18,14 +18,16 @@ import {
  * B = base lines+scatter EV, T = Thunder Strike EV, f = expected free
  * spins awarded per spin (free spins replay at the same bet, hence the
  * geometric chain), J = pool-funded jackpot EV at the $1 reference bet
- * for the A6 model (1% contribution recycled + ~0.17pt seed subsidy).
+ * for the A6 model (1% contribution recycled + 0.08pt exact seed subsidy
+ * from the 5/25/100 USDT pools at their hash probabilities).
  *
- * Certified 2026-10-28 by a 1,000,000-spin simulation of this math:
- * B 68.22%, T 2.61%, f 0.2502, hit 13.2%, FS trigger 2.81% -> 96.02%.
+ * Certified 2026-10-28: EXACT enumeration of lines+scatter gives
+ * B 68.344% and f 0.2501 (FS trigger 2.816%); Thunder Strike 2.56%
+ * (2,000,000-spin Monte-Carlo); jackpot 1.08pt -> total 96.00%.
  * The old math measured B 82.3% / f 0.798 (a >400% chain) and advertised
  * a false 96.5%.
  */
-const JACKPOT_EV = 0.0117;
+const JACKPOT_EV = 0.0108;
 const SPINS = 120_000;
 
 describe("A4: RTP certification", () => {
