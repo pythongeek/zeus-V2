@@ -59,6 +59,12 @@ export const gameSessions = sqliteTable("game_sessions", {
   totalSpins: integer("total_spins", { mode: "number" }).default(0).notNull(),
   totalWagered: text("total_wagered").default("0").notNull(),
   totalWon: text("total_won").default("0").notNull(),
+  // A5: server-side free-spin state. While freeSpinsRemaining > 0 the next
+  // spins are free, played at freeSpinsBet/freeSpinsCurrency (locked at
+  // award time); awards during free spins add to the remaining count.
+  freeSpinsRemaining: integer("free_spins_remaining", { mode: "number" }).default(0).notNull(),
+  freeSpinsBet: text("free_spins_bet"),
+  freeSpinsCurrency: text("free_spins_currency"),
 }, (table) => ({
   idxUserActive: index("idx_user_active").on(table.userId, table.status),
   idxSeedHash: index("idx_seed_hash").on(table.serverSeedHash),
@@ -77,6 +83,7 @@ export const spins = sqliteTable("spins", {
   symbolsShown: text("symbols_shown", { mode: "json" }).notNull(),
   winAmount: text("win_amount").default("0").notNull(),
   winLines: text("win_lines", { mode: "json" }),
+  isFreeSpin: integer("is_free_spin", { mode: "boolean" }).default(false).notNull(),
   isBigWin: integer("is_big_win", { mode: "boolean" }).default(false).notNull(),
   isJackpot: integer("is_jackpot", { mode: "boolean" }).default(false).notNull(),
   featureTriggered: text("feature_triggered", { enum: ["none", "free_spins", "thunder_strike"] }).default("none").notNull(),

@@ -266,7 +266,6 @@ export const gameRouter = createRouter({
       if (betMicro < MIN_BET_MICRO || betMicro > MAX_BET_MICRO) {
         throw new Error(`Bet must be between ${MIN_BET} and ${MAX_BET}`);
       }
-      const betAmount = Number(betMicro) / 1e8; // engine/display float only
 
       // A2: the whole spin — session/balance reads, outcome calculation,
       // balance update, session update, spin record, jackpot movement and
@@ -288,11 +287,24 @@ export const gameRouter = createRouter({
           throw new Error("Active session not found for this user");
         }
 
+        // A5: free-spin state lives on the session. While free spins
+        // remain, this spin is FREE: it plays at the bet/currency locked
+        // when the spins were awarded, ignores the requested bet, and is
+        // never charged. Awards during a free spin retrigger (add).
+        const fsRemaining = (session.free_spins_remaining as number) ?? 0;
+        const isFreeSpin = fsRemaining > 0;
+        const spinBetMicro = isFreeSpin
+          ? parseMoney(session.free_spins_bet as string)
+          : betMicro;
+        const spinCurrency = isFreeSpin
+          ? (session.free_spins_currency as string)
+          : input.currency;
+
         const balRow = client
           .prepare("SELECT * FROM balances WHERE user_id = ? AND currency = ?")
-          .get(ctx.user.id, input.currency) as any;
+          .get(ctx.user.id, spinCurrency) as any;
         const availableMicro = balRow ? parseMoney(balRow.available) : 0n;
-        if (!balRow || availableMicro < betMicro) {
+        if (!isFreeSpin && (!balRow || availableMicro < spinBetMicro)) {
           throw new Error("Insufficient balance");
         }
 
@@ -304,7 +316,7 @@ export const gameRouter = createRouter({
           newNonce,
         );
 
-        const betPerLine = betAmount / PAYLINES.length;
+        const betPerLine = Number(spinBetMicro) / 1e8 / PAYLINES.length;
         const { lines, scatterCount, freeSpinsAwarded } =
           evaluatePaylines(symbols, betPerLine);
 
@@ -314,20 +326,20 @@ export const gameRouter = createRouter({
           let total = 0n;
           for (const l of ls) {
             total += mulDivRound(
-              betMicro,
+              spinBetMicro,
               BigInt(PAYOUTS[l.symbol][l.count as 3 | 4 | 5]),
               20n,
             );
           }
           if (sc >= 3) {
             total +=
-              betMicro *
+              spinBetMicro *
               BigInt(PAYOUTS[SYMBOLS.SCATTER][Math.min(sc, 5) as 3 | 4 | 5]);
           }
           return total;
         };
         let winMicro = microForResult(lines, scatterCount);
-        const isBigWin = winMicro >= betMicro * 50n;
+        const isBigWin = winMicro >= spinBetMicro * 50n;
         let isJackpot = false;
         let featureTriggered: "none" | "free_spins" | "thunder_strike" = "none";
         let jackpotTier: string | null = null;
@@ -346,7 +358,7 @@ export const gameRouter = createRouter({
           }
           const reeval = evaluatePaylines(symbols, betPerLine);
           const reevalMicro = microForResult(reeval.lines, reeval.scatterCount);
-          winMicro = reevalMicro > betMicro * 5n ? reevalMicro : betMicro * 5n; // A4: thunder floor 5x total bet (was 10x)
+          winMicro = reevalMicro > spinBetMicro * 5n ? reevalMicro : spinBetMicro * 5n; // A4: thunder floor 5x total bet (was 10x)
           lines.push(...reeval.lines);
         }
 
@@ -354,39 +366,69 @@ export const gameRouter = createRouter({
         if (jackpot) {
           isJackpot = true;
           jackpotTier = jackpot.tier;
-          winMicro += betMicro * BigInt(jackpot.amount);
+          winMicro += spinBetMicro * BigInt(jackpot.amount);
         }
 
-        const updatedMicro = availableMicro - betMicro + winMicro;
+        // Free-spin bookkeeping: consume one, add any retrigger/award.
+        const fsRemainingAfter = isFreeSpin
+          ? fsRemaining - 1 + freeSpinsAwarded
+          : freeSpinsAwarded;
+        const fsBetStored =
+          fsRemainingAfter > 0
+            ? isFreeSpin
+              ? (session.free_spins_bet as string)
+              : fmtMoney(spinBetMicro)
+            : null;
+        const fsCurrencyStored =
+          fsRemainingAfter > 0 ? spinCurrency : null;
+
+        const updatedMicro = isFreeSpin
+          ? availableMicro + winMicro
+          : availableMicro - spinBetMicro + winMicro;
         const nowSec = Math.floor(Date.now() / 1000);
 
-        client
-          .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE id = ?")
-          .run(fmtMoney(updatedMicro), nowSec, balRow.id);
+        if (balRow) {
+          client
+            .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE id = ?")
+            .run(fmtMoney(updatedMicro), nowSec, balRow.id);
+        } else {
+          // Only reachable on a free spin whose balance row never existed.
+          client
+            .prepare(
+              "INSERT INTO balances (user_id, currency, available, locked, total_deposited, total_withdrawn, updated_at) VALUES (?, ?, ?, '0', '0', '0', ?)",
+            )
+            .run(ctx.user.id, spinCurrency, fmtMoney(updatedMicro), nowSec);
+        }
 
         client
           .prepare(
-            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ? WHERE id = ?",
+            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ? WHERE id = ?",
           )
           .run(
             newNonce,
             session.total_spins + 1,
-            fmtMoney(parseMoney(session.total_wagered) + betMicro),
+            fmtMoney(
+              parseMoney(session.total_wagered) +
+                (isFreeSpin ? 0n : spinBetMicro),
+            ),
             fmtMoney(parseMoney(session.total_won) + winMicro),
+            fsRemainingAfter,
+            fsBetStored,
+            fsCurrencyStored,
             session.id,
           );
 
         const spinRow = client
           .prepare(
-            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
           )
           .get(
             session.id,
             ctx.user.id,
             newNonce,
-            fmtMoney(betMicro),
-            input.currency,
+            fmtMoney(spinBetMicro),
+            spinCurrency,
             JSON.stringify(reelStops),
             JSON.stringify(symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]))),
             fmtMoney(winMicro),
@@ -396,28 +438,31 @@ export const gameRouter = createRouter({
             featureTriggered,
             freeSpinsAwarded,
             hash,
+            isFreeSpin ? 1 : 0,
           ) as any;
         const spinId = spinRow.id as number;
 
-        // Ledger: debit leg first, then the credit leg when there is a win.
-        // balance_after is the player's available balance after that leg.
+        // Ledger: paid spins write a debit leg (then a credit leg on a
+        // win); free spins write only a free_spin_credit leg on a win.
         const insLedger = client.prepare(
           "INSERT INTO ledger_entries (user_id, spin_id, kind, currency, amount, balance_after) VALUES (?, ?, ?, ?, ?, ?)",
         );
-        insLedger.run(
-          ctx.user.id,
-          spinId,
-          "spin_debit",
-          input.currency,
-          fmtMoney(-betMicro),
-          fmtMoney(availableMicro - betMicro),
-        );
+        if (!isFreeSpin) {
+          insLedger.run(
+            ctx.user.id,
+            spinId,
+            "spin_debit",
+            spinCurrency,
+            fmtMoney(-spinBetMicro),
+            fmtMoney(availableMicro - spinBetMicro),
+          );
+        }
         if (winMicro > 0n) {
           insLedger.run(
             ctx.user.id,
             spinId,
-            "spin_credit",
-            input.currency,
+            isFreeSpin ? "free_spin_credit" : "spin_credit",
+            spinCurrency,
             fmtMoney(winMicro),
             fmtMoney(updatedMicro),
           );
@@ -427,7 +472,9 @@ export const gameRouter = createRouter({
         // A6 redesigns funding/awards). On a hit the tier resets to its
         // seed; otherwise every tier receives the 1% contribution, exactly
         // as the previous code did — now atomically with the spin.
-        const contributionMicro = mulDivRound(betMicro, 1n, 100n);
+        const contributionMicro = isFreeSpin
+          ? 0n
+          : mulDivRound(spinBetMicro, 1n, 100n);
         if (isJackpot && jackpotTier) {
           client
             .prepare(
@@ -459,6 +506,10 @@ export const gameRouter = createRouter({
           hash,
           updatedMicro,
           jackpotTier,
+          isFreeSpin,
+          fsRemainingAfter,
+          spinBetMicro,
+          spinCurrency,
         };
       });
 
@@ -490,6 +541,10 @@ export const gameRouter = createRouter({
         hash: out.hash,
         newBalance: fmtMoney(out.updatedMicro),
         jackpotTier: out.jackpotTier,
+        isFreeSpin: out.isFreeSpin,
+        freeSpinsRemaining: out.fsRemainingAfter,
+        betUsed: fmtMoney(out.spinBetMicro),
+        currencyUsed: out.spinCurrency,
       };
     }),
 
@@ -508,6 +563,12 @@ export const gameRouter = createRouter({
 
       if (!session) {
         throw new Error("Session not found");
+      }
+
+      if ((session.freeSpinsRemaining ?? 0) > 0) {
+        throw new Error(
+          "Free spins still active: finish them before ending the session",
+        );
       }
 
       await db.update(gameSessions)

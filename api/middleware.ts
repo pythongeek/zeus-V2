@@ -24,6 +24,7 @@ const USER_FACING_EXACT = new Set([
   "Invalid bet amount",
   "Active session not found for this user",
   "Session not found",
+  "Free spins still active: finish them before ending the session",
   "Spin could not be recorded — please try again",
   "Deposit transaction not found",
   "Withdrawal transaction not found",

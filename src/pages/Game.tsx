@@ -426,13 +426,30 @@ export default function Game() {
       // Animate win counter
       animateWinCounter(0, winAmount, 1000);
 
-      // Free spins
-      if (result.freeSpinsAwarded > 0) {
-        store.setFreeSpinsRemaining(result.freeSpinsAwarded);
-        store.setFreeSpinsTotal(result.freeSpinsAwarded);
+      // Free spins (A5: the server owns the state — remaining comes from
+      // the response, never from local award math; retriggers add up).
+      if (typeof result.freeSpinsRemaining === "number") {
+        store.setFreeSpinsRemaining(result.freeSpinsRemaining);
+        if (result.freeSpinsAwarded > 0) {
+          store.setFreeSpinsTotal(
+            result.isFreeSpin
+              ? store.freeSpinsTotal + result.freeSpinsAwarded
+              : result.freeSpinsAwarded,
+          );
+        }
+        if (result.freeSpinsRemaining === 0) store.setFreeSpinsTotal(0);
       }
     } else {
       store.setGameState("idle");
+    }
+
+    // Free-spin auto-consume (A5): while the server says free spins
+    // remain, keep spinning (they are free) until the count reaches zero.
+    if (!store.isAutoSpinning && (result.freeSpinsRemaining ?? 0) > 0) {
+      autoSpinTimer.current = setTimeout(() => {
+        store.setGameState("idle");
+        handleSpin();
+      }, 1600);
     }
 
     // Auto spin handling
