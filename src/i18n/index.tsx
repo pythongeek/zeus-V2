@@ -12,6 +12,8 @@ interface LanguageCtx {
   lang: Lang;
   setLang: (l: Lang) => void;
   t: (key: StringKey, vars?: Record<string, string | number>) => string;
+  /** E2: render a number/string with Bangla digits when lang is bn. */
+  num: (text: string | number) => string;
 }
 
 const Ctx = createContext<LanguageCtx | null>(null);
@@ -25,7 +27,17 @@ function initialLang(): Lang {
   } catch {
     // storage unavailable
   }
-  // Bangladesh-first audience
+  // E2: first visit — honour the browser language, then the timezone,
+  // then the Bangladesh-first default.
+  try {
+    const nav = (navigator.language || "").toLowerCase();
+    if (nav.startsWith("bn")) return "bn";
+    if (nav.startsWith("en")) return "en";
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz === "Asia/Dhaka") return "bn";
+  } catch {
+    // fall through
+  }
   return "bn";
 }
 
@@ -55,7 +67,16 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     [lang],
   );
 
-  const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
+  const num = useCallback(
+    (text: string | number) => {
+      const s = String(text);
+      if (lang !== "bn") return s;
+      return s.replace(/[0-9]/g, (d) => "০১২৩৪৫৬৭৮৯"[Number(d)]);
+    },
+    [lang],
+  );
+
+  const value = useMemo(() => ({ lang, setLang, t, num }), [lang, setLang, t, num]);
 
   // Reflect language on <html> for font selection
   if (typeof document !== "undefined") {
@@ -80,7 +101,8 @@ export function LanguageToggle({ className = "" }: { className?: string }) {
       className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${className}`}
       title="Language / ভাষা"
     >
-      {lang === "bn" ? "বাংলা" : "EN"}
+      {/* E2: the toggle names the language you switch TO, not the current one */}
+      {lang === "bn" ? "EN" : "বাংলা"}
     </button>
   );
 }

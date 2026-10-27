@@ -45,7 +45,7 @@ const BDT_RATES: Record<string, number> = {
 
 export default function Game() {
   const store = useGameStore();
-  const { t } = useLang();
+  const { t, num } = useLang();
   const { isAuthenticated } = useAuth({
     redirectOnUnauthenticated: true,
     redirectPath: "/login",
@@ -651,7 +651,7 @@ export default function Game() {
           {/* Balance */}
           <div className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-4 py-2 text-right">
             <div className="text-sm font-mono font-semibold text-white">
-              {CURRENCY_SYMBOLS[store.activeCurrency]}{activeBalance?.available.toFixed(4) || "0.0000"}
+              {CURRENCY_SYMBOLS[store.activeCurrency]}{num(activeBalance?.available.toFixed(4) || "0.0000")}
             </div>
             <div className="text-xs text-[#5E5E6E]">
               ৳{bdtEquivalent.toLocaleString("bn-BD")}
@@ -713,7 +713,7 @@ export default function Game() {
             >
               <div className="text-xs uppercase tracking-wider text-[#5E5E6E]">{jp.tier}</div>
               <div className="text-lg font-mono font-bold text-[#D4AF37]">
-                {jp.amount.toFixed(2)} {jp.currency ?? "USDT"}
+                {num(jp.amount.toFixed(2))} {jp.currency ?? "USDT"}
               </div>
               <div className="text-xs text-[#5E5E6E]">৳{(jp.bdtEquivalent / 1000000).toFixed(1)}M</div>
             </div>
@@ -808,7 +808,7 @@ export default function Game() {
                   </Button>
                   <div className="bg-[#0A0A0F] border border-[#2A2A35] rounded-lg px-4 py-2 min-w-[120px] text-center">
                     <span className="font-mono font-semibold text-white">
-                      {CURRENCY_SYMBOLS[store.activeCurrency]}{store.betAmount.toFixed(2)}
+                      {CURRENCY_SYMBOLS[store.activeCurrency]}{num(store.betAmount.toFixed(2))}
                     </span>
                   </div>
                   <Button
@@ -958,7 +958,7 @@ export default function Game() {
                       : "bg-[#1A1A25] border border-[#2A2A35] text-[#5E5E6E]"
                   }`}
                 >
-                  {s.isWin ? "+" : ""}{parseFloat(s.winAmount).toFixed(2)} {s.currency}
+                  {s.isWin ? "+" : ""}{num(parseFloat(s.winAmount).toFixed(2))} {s.currency}
                 </div>
               ))}
             </div>
