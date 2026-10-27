@@ -101,6 +101,8 @@ export const strings = {
 
     // Errors / toasts
     insufficientBalance: "Insufficient {cur} balance. Please deposit funds or lower your bet.",
+    maintenanceTitle: "Under Maintenance",
+    maintenanceBody: "Zeus Thunder Slots is briefly down for maintenance. Please check back shortly — your balance is safe.",
     spinFailed: "Spin failed. Please try again.",
     sessionFailed: "Failed to initialize game session",
     celebrateCollect: "Awesome!",
@@ -259,6 +261,8 @@ export const strings = {
 
     // Errors / toasts
     insufficientBalance: "{cur} ব্যালেন্স অপর্যাপ্ত। ডিপোজিট করুন বা বেট কমান।",
+    maintenanceTitle: "রক্ষণাবেক্ষণ চলছে",
+    maintenanceBody: "Zeus Thunder Slots সাময়িক রক্ষণাবেক্ষণের জন্য বন্ধ আছে। কিছুক্ষণ পরে আবার চেষ্টা করুন — আপনার ব্যালেন্স নিরাপদ আছে।",
     spinFailed: "স্পিন ব্যর্থ হয়েছে। আবার চেষ্টা করুন।",
     sessionFailed: "গেম সেশন শুরু করা যায়নি",
     celebrateCollect: "দারুণ!",

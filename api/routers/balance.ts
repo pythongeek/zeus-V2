@@ -3,6 +3,7 @@ import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { balances, transactions } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
+import { getSetting } from "../lib/settings";
 import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
 
@@ -12,6 +13,20 @@ const BDT_RATES: Record<string, number> = {
   ETH: 550000,   // ~1 ETH = 550,000 BDT
   USDT: 110,     // ~1 USDT = 110 BDT
 };
+
+// B2: FX rates come from admin settings (fx_rates); BDT_RATES remains
+// the shipped fallback for any currency the setting does not mention.
+export function getFxRates(): Record<string, number> {
+  const cfg = getSetting<Record<string, number>>("fx_rates");
+  return { ...BDT_RATES, ...(cfg && typeof cfg === "object" ? cfg : {}) };
+}
+
+function assertCurrencyEnabled(currency: string) {
+  const enabled = getSetting<string[]>("currencies_enabled");
+  if (Array.isArray(enabled) && !enabled.includes(currency)) {
+    throw new Error("Currency not enabled");
+  }
+}
 
 export const balanceRouter = createRouter({
   get: authedQuery.query(async ({ ctx }) => {
@@ -47,7 +62,7 @@ export const balanceRouter = createRouter({
         const existing = userBalances.find(b => b.currency === currency);
         const avail = existing ? parseFloat(existing.available) : 0;
         const locked = existing ? parseFloat(existing.locked) : 0;
-        const cryptoRate = BDT_RATES[currency] || 1;
+        const cryptoRate = getFxRates()[currency] || 1;
         return {
           currency,
           available: avail,
@@ -64,10 +79,11 @@ export const balanceRouter = createRouter({
 
   deposit: authedQuery
     .input(z.object({
-      currency: z.enum(["BTC", "ETH", "USDT"]),
+      currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
       amount: z.string().regex(/^\d+\.?\d*$/),
     }))
     .mutation(async ({ ctx, input }) => {
+      assertCurrencyEnabled(input.currency);
       const db = getDb();
       const amount = parseFloat(input.amount);
 
@@ -98,15 +114,26 @@ export const balanceRouter = createRouter({
 
   withdraw: authedQuery
     .input(z.object({
-      currency: z.enum(["BTC", "ETH", "USDT"]),
+      currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
       amount: z.string().regex(/^\d+\.?\d*$/),
-      toAddress: z.string().min(26).max(64),
+      toAddress: z.string().min(8).max(128),
     }))
     .mutation(async ({ ctx, input }) => {
+      assertCurrencyEnabled(input.currency);
       const db = getDb();
       const amountMicro = parseMoney(input.amount);
 
       if (amountMicro <= 0n) throw new Error("Invalid amount");
+
+      // B2: per-currency withdrawal limits from admin settings.
+      const minCfg = getSetting<Record<string, string>>("withdraw_min");
+      const maxCfg = getSetting<Record<string, string>>("withdraw_max");
+      if (minCfg?.[input.currency] && amountMicro < parseMoney(minCfg[input.currency])) {
+        throw new Error("Withdrawal below minimum");
+      }
+      if (maxCfg?.[input.currency] && amountMicro > parseMoney(maxCfg[input.currency])) {
+        throw new Error("Withdrawal above maximum");
+      }
 
       // Check balance
       const balance = await db.select().from(balances)
@@ -128,8 +155,11 @@ export const balanceRouter = createRouter({
         })
         .where(eq(balances.id, balance.id));
 
-      // Create withdrawal transaction
-      const fee = input.currency === "BTC" ? 0.0001 : input.currency === "ETH" ? 0.001 : 1;
+      // Create withdrawal transaction (fee from admin settings — B2)
+      const feeCfg = getSetting<Record<string, string>>("withdraw_fees");
+      const fee = parseFloat(
+        canonicalMoney(feeCfg?.[input.currency] ?? (input.currency === "BTC" ? "0.0001" : input.currency === "ETH" ? "0.001" : "1")),
+      );
       const [tx] = await db.insert(transactions).values({
         userId: ctx.user.id,
         type: "withdrawal",

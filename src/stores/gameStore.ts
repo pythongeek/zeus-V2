@@ -115,8 +115,11 @@ interface GameStore {
   setClientSeed: (seed: string) => void;
 
   // Jackpot
-  jackpots: { tier: string; amount: number; bdtEquivalent: number }[];
-  setJackpots: (jackpots: { tier: string; amount: number; bdtEquivalent: number }[]) => void;
+  jackpots: { tier: string; amount: number; bdtEquivalent: number; currency?: string }[];
+  setJackpots: (jackpots: { tier: string; amount: number; bdtEquivalent: number; currency?: string }[]) => void;
+  // B2: public admin-controlled config from game.getConfig (null until loaded)
+  config: Record<string, any> | null;
+  setConfig: (config: Record<string, any>) => void;
 }
 
 export const useGameStore = create<GameStore>((set) => ({
@@ -184,4 +187,6 @@ export const useGameStore = create<GameStore>((set) => ({
 
   jackpots: [],
   setJackpots: (jackpots) => set({ jackpots }),
+  config: null,
+  setConfig: (config) => set({ config }),
 }));

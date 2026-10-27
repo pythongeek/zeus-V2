@@ -60,6 +60,122 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "string", scope: "public", def: "bn", group: "site",
     labelEn: "Default language (bn/en)", labelBn: "ডিফল্ট ভাষা (bn/en)",
   },
+  // ---- B2: game math (admin-only; editing requires RTP re-certification) ----
+  math_paytable: {
+    type: "json", scope: "admin", group: "math",
+    def: {
+      "0": { "3": 50, "4": 200, "5": 1000 },
+      "1": { "3": 2, "4": 5, "5": 20 },
+      "2": { "3": 30, "4": 100, "5": 500 },
+      "3": { "3": 25, "4": 80, "5": 400 },
+      "4": { "3": 20, "4": 75, "5": 300 },
+      "5": { "3": 15, "4": 40, "5": 200 },
+      "6": { "3": 12, "4": 30, "5": 150 },
+      "7": { "3": 10, "4": 30, "5": 100 },
+      "8": { "3": 5, "4": 18, "5": 75 },
+      "9": { "3": 5, "4": 18, "5": 75 },
+      "10": { "3": 4, "4": 12, "5": 60 },
+    },
+    labelEn: "Paytable (multipliers by symbol id: 3/4/5 of a kind)", labelBn: "পেটেবল (সিম্বল আইডি অনুযায়ী গুণক: ৩/৪/৫টি)",
+  },
+  math_reels: {
+    type: "json", scope: "admin", group: "math",
+    def: [
+      [0,0,1,1,2,2,2,3,3,3,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8,8,9,9,9,9,9,10,10,10,10,10],
+      [0,0,10,1,2,2,2,3,3,3,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8,8,9,9,9,9,9,10,10,10,10,10],
+      [0,0,0,1,1,2,2,2,3,3,3,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8,8,9,9,9,9,9,10,10,10,10,10],
+      [0,0,10,1,2,2,2,3,3,3,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8,8,9,9,9,9,9,10,10,10,10,10],
+      [0,0,10,1,2,2,2,3,3,3,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8,8,8,9,9,9,9,9,10,10,10,10,10],
+    ],
+    labelEn: "Reel strips (symbol ids per reel)", labelBn: "রিল স্ট্রিপ (প্রতি রিলে সিম্বল আইডি)",
+  },
+  math_free_spins: {
+    type: "json", scope: "admin", group: "math",
+    def: { "3": 8, "4": 12, "5": 20 },
+    labelEn: "Free spins awarded for 3/4/5 scatters", labelBn: "৩/৪/৫ স্ক্যাটারে ফ্রি স্পিন",
+  },
+  math_thunder: {
+    type: "json", scope: "admin", group: "math",
+    def: { "chanceDenominator": 200, "floorX": 5 },
+    labelEn: "Thunder Strike: 1-in-N chance on zero-win spins, minimum win × bet", labelBn: "থান্ডার স্ট্রাইক: শূন্য-জয়ের স্পিনে সম্ভাবনা ও ন্যূনতম জয়",
+  },
+  jackpot_shares: {
+    type: "json", scope: "admin", group: "math",
+    def: { "mini": 5, "major": 3, "mega": 2 },
+    labelEn: "Jackpot contribution per 1000 of bet (total 10 = 1%)", labelBn: "জ্যাকপট অবদান (প্রতি ১০০০ বেটে)",
+  },
+  jackpot_seeds: {
+    type: "json", scope: "admin", group: "math",
+    def: { "mini": "5", "major": "25", "mega": "100" },
+    labelEn: "Jackpot seed amounts (USDT)", labelBn: "জ্যাকপট সিড পরিমাণ (USDT)",
+  },
+  rtp_declared: {
+    type: "number", scope: "admin", def: 96.0, group: "math",
+    labelEn: "Declared RTP % (update only after re-certification)", labelBn: "ঘোষিত RTP % (পুনঃসার্টিফিকেশনের পরই বদলান)",
+  },
+  // ---- B2: features, currencies, presentation (public) ----
+  features: {
+    type: "json", scope: "public", group: "features",
+    def: { "freeSpins": true, "thunder": true, "jackpots": true },
+    labelEn: "Feature toggles (freeSpins / thunder / jackpots)", labelBn: "ফিচার টগল (ফ্রি স্পিন / থান্ডার / জ্যাকপট)",
+  },
+  currencies_enabled: {
+    type: "json", scope: "public", group: "currencies",
+    def: ["USDT", "BDT"],
+    labelEn: "Enabled currencies for play, deposits and withdrawals", labelBn: "সক্রিয় মুদ্রা (খেলা, জমা ও উত্তোলনের জন্য)",
+  },
+  fx_rates: {
+    type: "json", scope: "public", group: "currencies",
+    def: { "BTC": 11000000, "ETH": 380000, "USDT": 110, "BDT": 1 },
+    labelEn: "BDT exchange rates per unit (display + conversions)", labelBn: "BDT বিনিময় হার (প্রতি ইউনিট)",
+  },
+  withdraw_fees: {
+    type: "json", scope: "public", group: "currencies",
+    def: { "BTC": "0.0001", "ETH": "0.001", "USDT": "1", "BDT": "10" },
+    labelEn: "Withdrawal fee per currency", labelBn: "প্রতি মুদ্রায় উত্তোলন ফি",
+  },
+  withdraw_min: {
+    type: "json", scope: "public", group: "currencies",
+    def: { "BTC": "0.001", "ETH": "0.01", "USDT": "5", "BDT": "500" },
+    labelEn: "Minimum withdrawal per currency", labelBn: "প্রতি মুদ্রায় সর্বনিম্ন উত্তোলন",
+  },
+  withdraw_max: {
+    type: "json", scope: "public", group: "currencies",
+    def: { "BTC": "1", "ETH": "10", "USDT": "10000", "BDT": "1000000" },
+    labelEn: "Maximum withdrawal per currency", labelBn: "প্রতি মুদ্রায় সর্বোচ্চ উত্তোলন",
+  },
+  bet_steps: {
+    type: "json", scope: "public", group: "bets",
+    def: [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000],
+    labelEn: "Bet step ladder (for +/- controls)", labelBn: "বেট স্টেপ (＋/－ নিয়ন্ত্রণের জন্য)",
+  },
+  auto_spin_options: {
+    type: "json", scope: "public", group: "presentation",
+    def: [10, 25, 50, 100],
+    labelEn: "Auto-spin count options", labelBn: "অটো-স্পিন সংখ্যার অপশন",
+  },
+  turbo_delays: {
+    type: "json", scope: "public", group: "presentation",
+    def: [120, 180, 240, 300, 360],
+    labelEn: "Turbo reel stop delays (ms per reel)", labelBn: "টার্বো রিল থামার বিলম্ব (মিসে/রিল)",
+  },
+  normal_delays: {
+    type: "json", scope: "public", group: "presentation",
+    def: [350, 500, 650, 800, 950],
+    labelEn: "Normal reel stop delays (ms per reel)", labelBn: "সাধারণ রিল থামার বিলম্ব (মিসে/রিল)",
+  },
+  celebrations_enabled: {
+    type: "boolean", scope: "public", def: true, group: "presentation",
+    labelEn: "Win celebrations enabled", labelBn: "জয়ের উদ্‌যাপন সক্রিয়",
+  },
+  sfx_volume_default: {
+    type: "number", scope: "public", def: 80, group: "presentation",
+    labelEn: "Default sound-effects volume (0-100, first visit)", labelBn: "ডিফল্ট সাউন্ড ইফেক্ট ভলিউম (০-১০০, প্রথম ভিজিটে)",
+  },
+  music_volume_default: {
+    type: "number", scope: "public", def: 55, group: "presentation",
+    labelEn: "Default music volume (0-100, first visit)", labelBn: "ডিফল্ট মিউজিক ভলিউম (০-১০০, প্রথম ভিজিটে)",
+  },
 };
 
 const CACHE_TTL_MS = 5_000;

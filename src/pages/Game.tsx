@@ -209,6 +209,25 @@ export default function Game() {
     }
   }, [jackpotsQuery.data]);
 
+  // B2: admin-controlled public config — bet limits, feature toggles,
+  // timings, announcement/maintenance, first-visit sound defaults.
+  const configQuery = trpc.game.getConfig.useQuery(undefined, { staleTime: 30000 });
+  useEffect(() => {
+    const cfg = configQuery.data as Record<string, any> | undefined;
+    if (!cfg) return;
+    store.setConfig(cfg);
+    const patch: Record<string, number> = {};
+    if (typeof cfg.min_bet === "string") patch.minBet = parseFloat(cfg.min_bet);
+    if (typeof cfg.max_bet === "string") patch.maxBet = parseFloat(cfg.max_bet);
+    if (Object.keys(patch).length) useGameStore.setState(patch);
+    if (!localStorage.getItem("zeus-audio-init")) {
+      if (typeof cfg.sfx_volume_default === "number") store.setSfxVolume(cfg.sfx_volume_default);
+      if (typeof cfg.music_volume_default === "number") store.setMusicVolume(cfg.music_volume_default);
+      localStorage.setItem("zeus-audio-init", "1");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configQuery.data]);
+
   // Initialize session on mount — only when authenticated
   useEffect(() => {
     if (isAuthenticated && !store.session) {
@@ -262,7 +281,7 @@ export default function Game() {
     const spinStartedAt = performance.now();
     engineRef.current?.spin(reelSymbolsRef.current, {
       turbo: store.turboMode,
-      stopDelays: store.turboMode ? [120, 180, 240, 300, 360] : [350, 500, 650, 800, 950],
+      stopDelays: store.turboMode ? (store.config?.turbo_delays ?? [120, 180, 240, 300, 360]) : (store.config?.normal_delays ?? [350, 500, 650, 800, 950]),
     });
 
     try {
@@ -290,7 +309,7 @@ export default function Game() {
       const scatterOnReel5 = finalSymbols[4]?.includes("thunderbolt") ?? false;
       const anticipate = scattersEarly >= 2;
 
-      const baseDelays = store.turboMode ? [120, 180, 240, 300, 360] : [350, 500, 650, 800, 950];
+      const baseDelays: number[] = store.turboMode ? (store.config?.turbo_delays ?? [120, 180, 240, 300, 360]) : (store.config?.normal_delays ?? [350, 500, 650, 800, 950]);
       const engine = engineRef.current;
 
       baseDelays.forEach((delay, i) => {
@@ -598,11 +617,24 @@ export default function Game() {
         </div>
       </header>
 
+      {/* B2: announcement banner + maintenance overlay (admin config) */}
+      {store.config?.announcement ? (
+        <div className="relative z-20 bg-[#D4AF37] text-black text-center text-sm font-medium px-4 py-2">
+          {store.config.announcement}
+        </div>
+      ) : null}
+      {store.config?.maintenance_mode ? (
+        <div className="fixed inset-0 z-50 bg-[#0A0A0F]/95 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="text-3xl font-bold text-[#D4AF37]">{t("maintenanceTitle")}</div>
+          <p className="text-[#B8B8C8] max-w-md">{t("maintenanceBody")}</p>
+        </div>
+      ) : null}
+
       {/* Main Game Area */}
       <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">
         {/* Jackpot Meters */}
         <div className="flex gap-6 mb-6">
-          {store.jackpots.map((jp) => (
+          {((store.config?.features?.jackpots ?? true) ? store.jackpots : []).map((jp) => (
             <div
               key={jp.tier}
               className={`px-5 py-2 rounded-lg border bg-[#1A1A25]/80 backdrop-blur ${
@@ -612,7 +644,7 @@ export default function Game() {
             >
               <div className="text-xs uppercase tracking-wider text-[#5E5E6E]">{jp.tier}</div>
               <div className="text-lg font-mono font-bold text-[#D4AF37]">
-                {jp.amount.toFixed(3)} BTC
+                {jp.amount.toFixed(2)} {jp.currency ?? "USDT"}
               </div>
               <div className="text-xs text-[#5E5E6E]">৳{(jp.bdtEquivalent / 1000000).toFixed(1)}M</div>
             </div>
@@ -700,7 +732,7 @@ export default function Game() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => store.setBetAmount(Math.max(store.minBet, store.betAmount / 2))}
+                    onClick={() => { const steps = (store.config?.bet_steps as number[] | undefined) ?? []; const below = steps.filter((s) => s < store.betAmount - 1e-9); store.setBetAmount(below.length ? below[below.length - 1] : store.minBet); }}
                     className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs"
                   >
                     ½
@@ -713,7 +745,7 @@ export default function Game() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => store.setBetAmount(Math.min(store.maxBet, store.betAmount * 2))}
+                    onClick={() => { const steps = (store.config?.bet_steps as number[] | undefined) ?? []; const above = steps.filter((s) => s > store.betAmount + 1e-9); store.setBetAmount(above.length ? above[0] : store.maxBet); }}
                     className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs"
                   >
                     2×
@@ -756,10 +788,9 @@ export default function Game() {
                   disabled={store.gameState === "spinning"}
                 >
                   <option value={0}>{t("autoOff")}</option>
-                  <option value={10}>{t("autoSpins", { n: 10 })}</option>
-                  <option value={25}>{t("autoSpins", { n: 25 })}</option>
-                  <option value={50}>{t("autoSpins", { n: 50 })}</option>
-                  <option value={100}>{t("autoSpins", { n: 100 })}</option>
+                  {((store.config?.auto_spin_options as number[] | undefined) ?? [10, 25, 50, 100]).map((n) => (
+                    <option key={n} value={n}>{t("autoSpins", { n })}</option>
+                  ))}
                 </select>
                 <Button
                   variant="outline"

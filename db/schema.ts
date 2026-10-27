@@ -102,7 +102,7 @@ export const transactions = sqliteTable("transactions", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
   userId: integer("user_id", { mode: "number" }).notNull(),
   type: text("type", { enum: ["deposit", "withdrawal"] }).notNull(),
-  currency: text("currency", { enum: ["BTC", "ETH", "USDT"] }).notNull(),
+  currency: text("currency", { enum: ["BTC", "ETH", "USDT", "BDT"] }).notNull(),
   amount: text("amount").notNull(),
   fee: text("fee").default("0").notNull(),
   status: text("status", { enum: ["pending", "confirming", "confirmed", "failed", "cancelled"] }).default("pending").notNull(),

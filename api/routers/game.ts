@@ -20,7 +20,9 @@ const JACKPOT_SEEDS: Record<string, string> = {
 };
 
 function getDbSeedForTier(tier: string): string {
-  return JACKPOT_SEEDS[tier] ?? "0.01";
+  // B2: seeds are admin-configurable; the const is the fallback.
+  const seeds = getSetting<Record<string, string>>("jackpot_seeds");
+  return seeds?.[tier] ?? JACKPOT_SEEDS[tier] ?? "5";
 }
 
 // Symbol definitions
@@ -68,6 +70,66 @@ const REEL_STRIPS = [
   [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
 ];
 
+// B2: the game math is admin-configurable through settings. Defaults
+// below are exactly the A4-certified constants (PAYOUTS / REEL_STRIPS /
+// free-spin awards / thunder). Any invalid stored shape falls back to
+// the certified default for that piece. NOTE: changing reels/paytable
+// invalidates fairness verification for spins played under the old math
+// and requires RTP re-certification (see admin UI warning).
+export interface MathConfig {
+  payouts: typeof PAYOUTS;
+  strips: number[][];
+  freeSpins: Record<string, number>;
+  thunderDenominator: number;
+  thunderFloorX: number;
+}
+const DEFAULT_FREE_SPINS: Record<string, number> = { "3": 8, "4": 12, "5": 20 };
+
+export function getMathConfig(): MathConfig {
+  const cfg: MathConfig = {
+    payouts: PAYOUTS,
+    strips: REEL_STRIPS,
+    freeSpins: DEFAULT_FREE_SPINS,
+    thunderDenominator: 200,
+    thunderFloorX: 5,
+  };
+  try {
+    const p = getSetting<Record<string, { 3: number; 4: number; 5: number }>>("math_paytable");
+    if (p && typeof p === "object") {
+      const merged: Record<number, { 3: number; 4: number; 5: number }> = { ...PAYOUTS };
+      let ok = true;
+      for (let id = 0; id <= 10; id++) {
+        const e = (p as any)[String(id)];
+        if (!e || ![3, 4, 5].every((k) => Number.isFinite(e[k]) && e[k] >= 0)) { ok = false; break; }
+        merged[id] = { 3: e[3], 4: e[4], 5: e[5] };
+      }
+      if (ok) cfg.payouts = merged as typeof PAYOUTS;
+    }
+  } catch { /* keep default */ }
+  try {
+    const st = getSetting<number[][]>("math_reels");
+    if (
+      Array.isArray(st) && st.length === 5 &&
+      st.every((r) => Array.isArray(r) && r.length >= 10 && r.every((v) => Number.isInteger(v) && v >= 0 && v <= 10))
+    ) cfg.strips = st;
+  } catch { /* keep default */ }
+  try {
+    const fs = getSetting<Record<string, number>>("math_free_spins");
+    if (fs && ["3", "4", "5"].every((k) => Number.isInteger(fs[k]) && fs[k] >= 0 && fs[k] <= 1000)) {
+      cfg.freeSpins = { "3": fs["3"], "4": fs["4"], "5": fs["5"] };
+    }
+  } catch { /* keep default */ }
+  try {
+    const th = getSetting<{ chanceDenominator: number; floorX: number }>("math_thunder");
+    if (th && Number.isInteger(th.chanceDenominator) && th.chanceDenominator >= 1 && th.chanceDenominator <= 100000 &&
+        Number.isFinite(th.floorX) && th.floorX >= 0 && th.floorX <= 100) {
+      cfg.thunderDenominator = th.chanceDenominator;
+      cfg.thunderFloorX = th.floorX;
+    }
+  } catch { /* keep default */ }
+  return cfg;
+}
+
 // 20 paylines (row indices for each reel)
 const PAYLINES = [
   [1,1,1,1,1], // Middle row
@@ -96,7 +158,8 @@ const PAYLINES = [
 function calculateSpin(
   serverSeed: string,
   clientSeed: string,
-  nonce: number
+  nonce: number,
+  strips: number[][] = REEL_STRIPS
 ) {
   const hash = crypto
     .createHash("sha256")
@@ -108,7 +171,7 @@ function calculateSpin(
   for (let i = 0; i < 5; i++) {
     const bytePair = hash.substring(i * 4, i * 4 + 4);
     const value = parseInt(bytePair, 16);
-    const reelLength = REEL_STRIPS[i].length;
+    const reelLength = strips[i].length;
     reelStops.push(value % reelLength);
   }
 
@@ -117,8 +180,8 @@ function calculateSpin(
   for (let reel = 0; reel < 5; reel++) {
     const reelSymbols: number[] = [];
     for (let row = 0; row < 3; row++) {
-      const pos = (reelStops[reel] + row) % REEL_STRIPS[reel].length;
-      reelSymbols.push(REEL_STRIPS[reel][pos]);
+      const pos = (reelStops[reel] + row) % strips[reel].length;
+      reelSymbols.push(strips[reel][pos]);
     }
     symbols.push(reelSymbols);
   }
@@ -129,7 +192,11 @@ function calculateSpin(
 // Evaluate paylines
 function evaluatePaylines(
   symbols: number[][],
-  betPerLine: number
+  betPerLine: number,
+  math: { payouts: typeof PAYOUTS; freeSpins: Record<string, number> } = {
+    payouts: PAYOUTS,
+    freeSpins: DEFAULT_FREE_SPINS,
+  }
 ): { lines: Array<{ lineIndex: number; symbol: number; count: number; payout: number; positions: Array<[number, number]> }>; totalPayout: number; scatterCount: number; freeSpinsAwarded: number } {
   const lines: Array<{ lineIndex: number; symbol: number; count: number; payout: number; positions: Array<[number, number]> }> = [];
   let totalPayout = 0;
@@ -159,8 +226,8 @@ function evaluatePaylines(
 
     if (matchSymbol === -1) matchSymbol = SYMBOLS.ZEUS;
 
-    if (matchCount >= 3 && PAYOUTS[matchSymbol]) {
-      const payout = PAYOUTS[matchSymbol][matchCount as 3 | 4 | 5] * betPerLine;
+    if (matchCount >= 3 && math.payouts[matchSymbol]) {
+      const payout = math.payouts[matchSymbol][matchCount as 3 | 4 | 5] * betPerLine;
       if (payout > 0) {
         lines.push({ lineIndex: li, symbol: matchSymbol, count: matchCount, payout, positions });
         totalPayout += payout;
@@ -180,18 +247,18 @@ function evaluatePaylines(
 
   let freeSpinsAwarded = 0;
   if (scatterCount >= 3) {
-    const scatterPayout = PAYOUTS[SYMBOLS.SCATTER][Math.min(scatterCount, 5) as 3 | 4 | 5] * betPerLine * PAYLINES.length;
+    const scatterPayout = math.payouts[SYMBOLS.SCATTER][Math.min(scatterCount, 5) as 3 | 4 | 5] * betPerLine * PAYLINES.length;
     totalPayout += scatterPayout;
-    freeSpinsAwarded = scatterCount === 3 ? 8 : scatterCount === 4 ? 12 : 20;
+    freeSpinsAwarded = math.freeSpins[String(Math.min(scatterCount, 5))] ?? 0;
   }
 
   return { lines, totalPayout, scatterCount, freeSpinsAwarded };
 }
 
 // Check for provably fair thunder strike bonus derived from spin SHA-256 hash
-function checkThunderStrike(hash: string): boolean {
+function checkThunderStrike(hash: string, denominator = 200): boolean {
   const val = parseInt(hash.substring(20, 24), 16);
-  return (val % 200) === 0; // 0.5% deterministic chance (A4 rebalance: was 1%)
+  return val % denominator === 0; // default 0.5% (A4 rebalance: was 1%)
 }
 
 // Check provably fair jackpots derived from spin SHA-256 hash
@@ -267,6 +334,13 @@ export const gameRouter = createRouter({
       if (getSetting<boolean>("maintenance_mode")) {
         throw new Error("Game is under maintenance");
       }
+      const enabledCurrencies = getSetting<string[]>("currencies_enabled");
+      if (
+        Array.isArray(enabledCurrencies) &&
+        !enabledCurrencies.includes(input.currency)
+      ) {
+        throw new Error("Currency not enabled");
+      }
       const minMicro = parseMoney(getSetting<string>("min_bet"));
       const maxMicro = parseMoney(getSetting<string>("max_bet"));
       if (betMicro < minMicro || betMicro > maxMicro) {
@@ -316,17 +390,22 @@ export const gameRouter = createRouter({
           throw new Error("Insufficient balance");
         }
 
-        // Provably fair outcome for this spin
+        // Provably fair outcome for this spin (math + feature toggles
+        // are read per spin from admin settings — B2)
+        const math = getMathConfig();
+        const features = getSetting<{ freeSpins: boolean; thunder: boolean; jackpots: boolean }>("features");
         const newNonce = session.nonce + 1;
         const { reelStops, symbols, hash } = calculateSpin(
           session.server_seed,
           session.client_seed,
           newNonce,
+          math.strips,
         );
 
         const betPerLine = Number(spinBetMicro) / 1e8 / PAYLINES.length;
-        const { lines, scatterCount, freeSpinsAwarded } =
-          evaluatePaylines(symbols, betPerLine);
+        const { lines, scatterCount, freeSpinsAwarded: rawAward } =
+          evaluatePaylines(symbols, betPerLine, math);
+        const freeSpinsAwarded = features.freeSpins ? rawAward : 0;
 
         // Exact win in micro units, recomputed from line multipliers —
         // evaluatePaylines works in floats; money never does (A3).
@@ -335,14 +414,14 @@ export const gameRouter = createRouter({
           for (const l of ls) {
             total += mulDivRound(
               spinBetMicro,
-              BigInt(PAYOUTS[l.symbol][l.count as 3 | 4 | 5]),
+              BigInt(math.payouts[l.symbol][l.count as 3 | 4 | 5]),
               20n,
             );
           }
           if (sc >= 3) {
             total +=
               spinBetMicro *
-              BigInt(PAYOUTS[SYMBOLS.SCATTER][Math.min(sc, 5) as 3 | 4 | 5]);
+              BigInt(math.payouts[SYMBOLS.SCATTER][Math.min(sc, 5) as 3 | 4 | 5]);
           }
           return total;
         };
@@ -352,11 +431,11 @@ export const gameRouter = createRouter({
         let featureTriggered: "none" | "free_spins" | "thunder_strike" = "none";
         let jackpotTier: string | null = null;
 
-        if (scatterCount >= 3) {
+        if (scatterCount >= 3 && freeSpinsAwarded > 0) {
           featureTriggered = "free_spins";
         }
 
-        if (winMicro === 0n && checkThunderStrike(hash)) {
+        if (winMicro === 0n && features.thunder && checkThunderStrike(hash, math.thunderDenominator)) {
           featureTriggered = "thunder_strike";
           const numTransforms = (parseInt(hash.substring(30, 32), 16) % 3) + 1;
           for (let i = 0; i < numTransforms; i++) {
@@ -364,13 +443,18 @@ export const gameRouter = createRouter({
             const row = parseInt(hash.substring(34 + i * 4, 36 + i * 4), 16) % 3;
             symbols[r][row] = SYMBOLS.ZEUS;
           }
-          const reeval = evaluatePaylines(symbols, betPerLine);
+          const reeval = evaluatePaylines(symbols, betPerLine, math);
           const reevalMicro = microForResult(reeval.lines, reeval.scatterCount);
-          winMicro = reevalMicro > spinBetMicro * 5n ? reevalMicro : spinBetMicro * 5n; // A4: thunder floor 5x total bet (was 10x)
+          const thunderFloor = mulDivRound(
+            spinBetMicro,
+            BigInt(Math.round(math.thunderFloorX * 100)),
+            100n,
+          );
+          winMicro = reevalMicro > thunderFloor ? reevalMicro : thunderFloor; // A4/B2: thunder floor from math settings
           lines.push(...reeval.lines);
         }
 
-        const jackpot = checkJackpot(hash);
+        const jackpot = features.jackpots ? checkJackpot(hash) : null;
         // A6: the award IS the tier's pool balance at this moment (read
         // inside the transaction) — no longer a bet multiplier.
         const poolRows = client
@@ -490,8 +574,13 @@ export const gameRouter = createRouter({
         // A6 pool movement: paid spins contribute 1% of the bet, split
         // mini 0.5% / major 0.3% / mega 0.2%. The hit tier paid out its
         // whole balance above and now reseeds to the house float.
-        const SHARES: Record<string, bigint> = { mini: 5n, major: 3n, mega: 2n };
-        for (const p of poolRows) {
+        const sharesCfg = getSetting<Record<string, number>>("jackpot_shares");
+        const SHARES: Record<string, bigint> = {
+          mini: BigInt(sharesCfg?.mini ?? 5),
+          major: BigInt(sharesCfg?.major ?? 3),
+          mega: BigInt(sharesCfg?.mega ?? 2),
+        };
+        for (const p of features.jackpots ? poolRows : []) {
           if (jackpotTier && p.tier === jackpotTier) {
             client
               .prepare(
@@ -614,12 +703,12 @@ export const gameRouter = createRouter({
       symbols: Object.entries(SYMBOL_NAMES).map(([id, name]) => ({
         id: parseInt(id),
         name,
-        payouts: PAYOUTS[parseInt(id)] || null,
+        payouts: getMathConfig().payouts[parseInt(id)] || null,
         isWild: parseInt(id) === SYMBOLS.ZEUS,
         isScatter: parseInt(id) === SYMBOLS.SCATTER,
       })),
       paylines: PAYLINES.length,
-      rtp: 96.0, // A4 CERTIFIED (see rtp.test.ts): 1M-spin simulation of the shipped math = 96.02% total (base 68.2 + thunder 2.6 + free-spin chain + pool-funded jackpot 1.08pt at $1 reference bet; exact enumeration in rtp.test.ts)
+      rtp: getSetting<number>("rtp_declared"), // A4-certified 96.0 for the default math (see rtp.test.ts); admin updates only after re-certification
       volatility: "HIGH",
     };
   }),
