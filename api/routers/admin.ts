@@ -279,4 +279,17 @@ export const adminRouter = createRouter({
       await writeAudit(ctx, "admin.updateSettings", { keys: changed });
       return { success: true, changed };
     }),
+
+  // ===== B3: change audit log (read) =====
+
+  getAuditLog: adminQuery
+    .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db
+        .select()
+        .from(auditLog)
+        .orderBy(desc(auditLog.createdAt))
+        .limit(input?.limit ?? 50);
+    }),
 });

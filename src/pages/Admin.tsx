@@ -11,6 +11,182 @@ import { useAuth } from "@/hooks/useAuth";
 import { Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
+// B3: Admin Game Config — every admin-controllable setting (B1/B2) edited
+// in one card, grouped, with EN/BN labels from the API definitions, typed
+// inputs (toggle / number / money / text / JSON), an RTP warning when math
+// keys are dirty, and the recent-change audit trail underneath.
+function GameConfigCard({ enabled }: { enabled: boolean }) {
+  const { t, lang } = useLang();
+  const utils = trpc.useUtils();
+  const { data: settingsList, isLoading } = trpc.admin.getSettings.useQuery(
+    undefined,
+    { enabled, retry: false },
+  );
+  const { data: auditRows } = trpc.admin.getAuditLog.useQuery(
+    { limit: 8 },
+    { enabled, retry: false },
+  );
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [dirtyKeys, setDirtyKeys] = useState<string[]>([]);
+
+  const updateMutation = trpc.admin.updateSettings.useMutation({
+    onSuccess: async () => {
+      toast.success(t("configSaved"));
+      setDirtyKeys([]);
+      setDrafts({});
+      await utils.admin.getSettings.invalidate();
+      await utils.admin.getAuditLog.invalidate();
+      await utils.game.getConfig.invalidate();
+    },
+    onError: (err) => toast.error(`${t("configSaveFailed")}: ${err.message}`),
+  });
+
+  if (!enabled) return null;
+
+  const groups = ["site", "bets", "features", "currencies", "presentation", "math"];
+  const mathDirty = (settingsList ?? []).some(
+    (s) => s.group === "math" && dirtyKeys.includes(s.key),
+  );
+
+  const draftFor = (s: any): string => {
+    if (drafts[s.key] !== undefined) return drafts[s.key];
+    if (s.type === "json") return JSON.stringify(s.value, null, 1);
+    if (s.type === "boolean") return s.value ? "true" : "false";
+    return String(s.value ?? "");
+  };
+
+  const setDraft = (key: string, value: string) => {
+    setDrafts((d) => ({ ...d, [key]: value }));
+    setDirtyKeys((k) => (k.includes(key) ? k : [...k, key]));
+  };
+
+  const handleSave = () => {
+    if (!settingsList) return;
+    const entries: Record<string, unknown> = {};
+    for (const key of dirtyKeys) {
+      const def = settingsList.find((s) => s.key === key);
+      if (!def) continue;
+      const raw = drafts[key];
+      try {
+        if (def.type === "number") {
+          const n = Number(raw);
+          if (!Number.isFinite(n)) throw new Error("number");
+          entries[key] = n;
+        } else if (def.type === "boolean") {
+          entries[key] = raw === "true";
+        } else if (def.type === "json") {
+          entries[key] = JSON.parse(raw);
+        } else {
+          entries[key] = raw;
+        }
+      } catch {
+        toast.error(`${t("configInvalidJson")} ${key}`);
+        return;
+      }
+    }
+    updateMutation.mutate({ entries });
+  };
+
+  return (
+    <Card className="bg-slate-900/80 border-slate-800 mt-6">
+      <CardHeader>
+        <CardTitle className="text-amber-400">{t("gameConfig")}</CardTitle>
+        <CardDescription className="text-slate-400">{t("gameConfigDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {isLoading || !settingsList ? (
+          <div className="text-slate-400 text-sm">…</div>
+        ) : (
+          groups.map((group) => {
+            const items = settingsList.filter((s) => s.group === group);
+            if (!items.length) return null;
+            return (
+              <div key={group}>
+                <h3 className="text-sm font-semibold text-slate-300 mb-3">
+                  {t(`cfgGroup_${group}` as any)}
+                </h3>
+                <div className="grid gap-4 md:grid-cols-2">
+                  {items.map((s) => (
+                    <label key={s.key} className="block">
+                      <span className="block text-xs text-slate-400 mb-1">
+                        {lang === "bn" ? s.labelBn : s.labelEn}
+                        <span className="text-slate-600"> · {s.key}</span>
+                      </span>
+                      {s.type === "boolean" ? (
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-amber-500"
+                          checked={draftFor(s) === "true"}
+                          onChange={(e) =>
+                            setDraft(s.key, e.target.checked ? "true" : "false")
+                          }
+                        />
+                      ) : s.type === "json" ? (
+                        <textarea
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200 min-h-[72px]"
+                          value={draftFor(s)}
+                          onChange={(e) => setDraft(s.key, e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          className="bg-slate-950 border-slate-700 text-slate-200"
+                          value={draftFor(s)}
+                          inputMode={s.type === "string" ? "text" : "decimal"}
+                          onChange={(e) => setDraft(s.key, e.target.value)}
+                        />
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+
+        {mathDirty && (
+          <div className="rounded border border-amber-500/50 bg-amber-500/10 text-amber-300 text-xs px-3 py-2">
+            {t("rtpWarning")}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <Button
+            className="bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+            disabled={!dirtyKeys.length || updateMutation.isPending}
+            onClick={handleSave}
+          >
+            {t("saveChanges")}
+            {dirtyKeys.length ? ` (${dirtyKeys.length})` : ""}
+          </Button>
+        </div>
+
+        {!!auditRows?.length && (
+          <div>
+            <h3 className="text-sm font-semibold text-slate-300 mb-2">
+              {t("recentChanges")}
+            </h3>
+            <ul className="space-y-1 text-xs text-slate-400">
+              {auditRows.map((row: any) => (
+                <li key={row.id} className="flex gap-2 flex-wrap">
+                  <span className="text-slate-500">
+                    {new Date(row.createdAt).toLocaleString()}
+                  </span>
+                  <span className="text-slate-200">{row.action}</span>
+                  <span className="text-slate-500 truncate max-w-[420px]">
+                    {typeof row.details === "object"
+                      ? JSON.stringify(row.details)
+                      : String(row.details ?? "")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Admin() {
   const { t } = useLang();
   const navigate = useNavigate();
@@ -394,6 +570,7 @@ export default function Admin() {
           )}
         </CardContent>
       </Card>
+      <GameConfigCard enabled={isAuthenticated && isAdmin} />
     </div>
   );
 }
