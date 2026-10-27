@@ -661,7 +661,7 @@ export default function Game() {
 
         {/* Zeus Character (decorative) */}
         <div className="absolute right-8 top-20 w-48 h-72 opacity-40 pointer-events-none hidden lg:block">
-          <img src="/assets/zeus-character.png" alt="Zeus" className="w-full h-full object-contain" />
+          <img src="/assets/zeus-character.webp" alt="Zeus" className="w-full h-full object-contain" />
         </div>
 
         {/* Slot Machine Frame */}
@@ -683,7 +683,7 @@ export default function Game() {
                       {reel.map((symbol, rowIndex) => (
                         <div key={rowIndex} className="relative w-full aspect-square flex items-center justify-center p-1">
                           <img
-                            src={`/assets/symbol-${symbol}.png`}
+                            src={`/assets/symbol-${symbol}.webp`}
                             alt={symbol}
                             className={`w-full h-full object-contain ${
                               store.gameState === "spinning" ? "blur-[2px]" : ""
@@ -817,7 +817,7 @@ export default function Game() {
                 }`}
               >
                 <img
-                  src="/assets/btn-spin.png"
+                  src="/assets/btn-spin.webp"
                   alt={t("spinAlt")}
                   className={`w-full h-full object-contain ${
                     store.gameState === "spinning" ? "animate-spin-slow" : ""
@@ -946,7 +946,7 @@ export default function Game() {
               {PAYTABLE_DATA.map((item) => (
                 <div key={item.symbol} className="flex items-center gap-3 bg-[#1A1A25] rounded-lg p-3">
                   <img
-                    src={`/assets/symbol-${item.symbol}.png`}
+                    src={`/assets/symbol-${item.symbol}.webp`}
                     alt={item.name}
                     className="w-12 h-12 object-contain"
                   />

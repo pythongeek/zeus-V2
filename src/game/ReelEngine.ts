@@ -132,7 +132,7 @@ export class ReelEngine {
     const loads = SYMBOL_KEYS.map(
       (key) =>
         new Promise<void>((resolve) => {
-          const tex = Texture.from(`/assets/symbol-${key}.png`);
+          const tex = Texture.from(`/assets/symbol-${key}.webp`);
           // Texture.from is sync-ish for browser images; ensure fallback works
           this.symbolTextures.set(key, tex);
           resolve();

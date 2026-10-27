@@ -218,7 +218,7 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
           className="absolute bottom-0 left-1/2 -translate-x-1/2 w-64 h-96 opacity-90 pointer-events-none"
         >
           <img
-            src="/assets/zeus-character.png"
+            src="/assets/zeus-character.webp"
             alt=""
             className="w-full h-full object-contain"
             style={{ filter: "drop-shadow(0 0 40px rgba(212,175,55,0.8))" }}
