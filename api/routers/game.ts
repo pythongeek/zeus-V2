@@ -490,46 +490,33 @@ export const gameRouter = createRouter({
   getSessionSpins: authedQuery
     .input(z.object({ sessionId: z.number() }))
     .query(async ({ ctx, input }) => {
-      try {
-        const db = getDb();
-        const session = await db.select().from(gameSessions)
-          .where(and(
-            eq(gameSessions.id, input.sessionId),
-            eq(gameSessions.userId, ctx.user.id)
-          ))
-          .then(rows => rows[0]);
+      // A1 (Z-01): strict lookup only — the previous version returned a
+      // fabricated demo session (fake hash, fake totals) when the real one
+      // was missing. Never invent money/session data; a missing session is
+      // an error, and DB failures surface instead of being masked.
+      const db = getDb();
+      const session = await db.select().from(gameSessions)
+        .where(and(
+          eq(gameSessions.id, input.sessionId),
+          eq(gameSessions.userId, ctx.user.id)
+        ))
+        .then(rows => rows[0]);
 
-        if (session) {
-          const spinRecords = await db.select()
-            .from(spins)
-            .where(eq(spins.sessionId, input.sessionId))
-            .orderBy(spins.nonce);
-
-          return {
-            session: {
-              ...session,
-              serverSeed: session.status === "completed" ? session.serverSeed : null,
-            },
-            spins: spinRecords,
-          };
-        }
-      } catch {
-        // Fallback
+      if (!session) {
+        throw new Error("Session not found");
       }
+
+      const spinRecords = await db.select()
+        .from(spins)
+        .where(eq(spins.sessionId, input.sessionId))
+        .orderBy(spins.nonce);
 
       return {
         session: {
-          id: input.sessionId,
-          serverSeedHash: "a1b2c3d4e5f67890",
-          serverSeed: null,
-          clientSeed: "demo_client_seed",
-          nonce: 1,
-          status: "active",
-          totalSpins: 1,
-          totalWagered: "10",
-          totalWon: "15",
+          ...session,
+          serverSeed: session.status === "completed" ? session.serverSeed : null,
         },
-        spins: [],
+        spins: spinRecords,
       };
     }),
 });

@@ -35,6 +35,15 @@ export const fairnessRouter = createRouter({
 
       if (!spin) throw new Error("Spin not found");
 
+      // A1 (Z-01): the server seed decides every FUTURE spin in this session
+      // (SHA-256(serverSeed + clientSeed + nonce)), so it must never leave the
+      // server while the session is active. It is revealed only after the
+      // session completes — mirroring fairness.getSession and endSession.
+      const revealed = session.status === "completed";
+      const seedForDisplay = revealed
+        ? session.serverSeed
+        : "<hidden until this session ends>";
+
       // Recalculate the hash
       const hash = crypto
         .createHash("sha256")
@@ -61,17 +70,31 @@ export const fairnessRouter = createRouter({
         symbols.push(reelSymbols);
       }
 
-      const storedSymbols = JSON.parse(spin.symbolsShown as string);
-      const storedPositions = JSON.parse(spin.reelPositions as string);
+      // better-sqlite3/drizzle returns json-mode columns already parsed,
+      // while the D1 shape returns raw text — accept both. The previous
+      // unconditional JSON.parse coerced the parsed array to a comma-joined
+      // string and threw, so verify failed for every real spin.
+      const storedSymbols = typeof spin.symbolsShown === "string"
+        ? JSON.parse(spin.symbolsShown)
+        : spin.symbolsShown;
+      const storedPositions = typeof spin.reelPositions === "string"
+        ? JSON.parse(spin.reelPositions)
+        : spin.reelPositions;
 
       // Verify match
       const hashMatch = hash === spin.hash;
       const positionsMatch = JSON.stringify(reelStops) === JSON.stringify(storedPositions);
-      const symbolsMatch = JSON.stringify(symbols) === JSON.stringify(storedSymbols);
+      // Stored symbols are NAMES (e.g. "zeus"); the recalculated grid is
+      // numeric ids — map to names before comparing. The previous direct
+      // comparison could never match, so verified was always false.
+      const symbolsMatch =
+        JSON.stringify(symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]))) ===
+        JSON.stringify(storedSymbols);
 
       return {
         verified: hashMatch && positionsMatch && symbolsMatch,
-        serverSeed: session.serverSeed,
+        serverSeed: revealed ? session.serverSeed : null,
+        serverSeedHash: session.serverSeedHash,
         clientSeed: session.clientSeed,
         nonce: input.nonce,
         hash,
@@ -83,7 +106,7 @@ export const fairnessRouter = createRouter({
         symbols: symbols.map(col => col.map(s => SYMBOL_NAMES[s])),
         winAmount: spin.winAmount,
         calculationSteps: [
-          `Step 1: hash = SHA-256("${session.serverSeed}" + "${session.clientSeed}" + "${input.nonce}")`,
+          `Step 1: hash = SHA-256("${seedForDisplay}" + "${session.clientSeed}" + "${input.nonce}")`,
           `Step 2: hash = "${hash}"`,
           `Step 3: reel_1 = hex("${hash.substring(0, 4)}") % ${REEL_STRIPS[0].length} = ${reelStops[0]}`,
           `Step 4: reel_2 = hex("${hash.substring(4, 8)}") % ${REEL_STRIPS[1].length} = ${reelStops[1]}`,
@@ -127,9 +150,10 @@ export const fairnessRouter = createRouter({
         },
         spins: spinRecords.map(s => ({
           ...s,
-          symbolsShown: JSON.parse(s.symbolsShown as string),
-          reelPositions: JSON.parse(s.reelPositions as string),
-          winLines: s.winLines ? JSON.parse(s.winLines as string) : null,
+          // Same dual-shape handling as verify above (parsed vs raw text).
+          symbolsShown: typeof s.symbolsShown === "string" ? JSON.parse(s.symbolsShown) : s.symbolsShown,
+          reelPositions: typeof s.reelPositions === "string" ? JSON.parse(s.reelPositions) : s.reelPositions,
+          winLines: typeof s.winLines === "string" ? JSON.parse(s.winLines) : (s.winLines ?? null),
         })),
       };
     }),
