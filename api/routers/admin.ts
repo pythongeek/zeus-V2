@@ -3,6 +3,7 @@ import { createRouter, adminQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
+import { getAllSettings, setSetting } from "../lib/settings";
 import { count, sum, desc, eq, and } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
@@ -259,5 +260,23 @@ export const adminRouter = createRouter({
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, reason: input.reason ?? null,
       });
       return { success: true, txId: tx.id };
+    }),
+
+  // ===== B1: game settings (admin control plane) =====
+
+  getSettings: adminQuery.query(async () => {
+    return getAllSettings();
+  }),
+
+  updateSettings: adminQuery
+    .input(z.object({ entries: z.record(z.string(), z.unknown()) }))
+    .mutation(async ({ ctx, input }) => {
+      const changed: string[] = [];
+      for (const [key, value] of Object.entries(input.entries)) {
+        setSetting(key, value, ctx.user?.id ?? null);
+        changed.push(key);
+      }
+      await writeAudit(ctx, "admin.updateSettings", { keys: changed });
+      return { success: true, changed };
     }),
 });

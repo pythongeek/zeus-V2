@@ -166,6 +166,15 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
 
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
 
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(), // JSON-encoded typed value (see api/lib/settings.ts)
+  updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
+  updatedBy: integer("updated_by", { mode: "number" }),
+});
+
+export type SettingRow = typeof settings.$inferSelect;
+
 export const verificationCodes = sqliteTable("verification_codes", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
   identifier: text("identifier").notNull(),

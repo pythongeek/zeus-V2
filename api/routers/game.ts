@@ -2,15 +2,14 @@ import { z } from "zod";
 import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
+import { getSetting, getPublicConfig } from "../lib/settings";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
 
 // Bet limits (server-enforced; mirror the frontend store)
-const MIN_BET = 0.1;
-const MAX_BET = 1000;
-const MIN_BET_MICRO = parseMoney("0.1");
-const MAX_BET_MICRO = parseMoney("1000");
+// Bet limits live in admin settings (B1: min_bet / max_bet) and are
+// read per spin; the defaults preserve the original 0.1 / 1000.
 
 // A6: pools are USDT-denominated and pool-funded. Seeds are the house
 // float restored after every hit; contributions (below) regrow them.
@@ -265,8 +264,15 @@ export const gameRouter = createRouter({
       if (betMicro <= 0n) {
         throw new Error("Invalid bet amount");
       }
-      if (betMicro < MIN_BET_MICRO || betMicro > MAX_BET_MICRO) {
-        throw new Error(`Bet must be between ${MIN_BET} and ${MAX_BET}`);
+      if (getSetting<boolean>("maintenance_mode")) {
+        throw new Error("Game is under maintenance");
+      }
+      const minMicro = parseMoney(getSetting<string>("min_bet"));
+      const maxMicro = parseMoney(getSetting<string>("max_bet"));
+      if (betMicro < minMicro || betMicro > maxMicro) {
+        throw new Error(
+          `Bet must be between ${fmtMoney(minMicro)} and ${fmtMoney(maxMicro)}`,
+        );
       }
 
       // A2: the whole spin — session/balance reads, outcome calculation,
@@ -632,6 +638,11 @@ export const gameRouter = createRouter({
         return [];
       }
     }),
+
+  // B1: public admin-controlled configuration for the game client.
+  getConfig: publicQuery.query(async () => {
+    return getPublicConfig();
+  }),
 
   getSessionSpins: authedQuery
     .input(z.object({ sessionId: z.number() }))

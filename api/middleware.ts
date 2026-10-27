@@ -25,6 +25,7 @@ const USER_FACING_EXACT = new Set([
   "Active session not found for this user",
   "Session not found",
   "Free spins still active: finish them before ending the session",
+  "Game is under maintenance",
   "Spin could not be recorded — please try again",
   "Deposit transaction not found",
   "Withdrawal transaction not found",
