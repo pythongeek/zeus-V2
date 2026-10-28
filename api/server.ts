@@ -61,6 +61,16 @@ app.use(compress());
 // deploys take effect immediately.
 app.use("*", async (c, next) => {
   await next();
+  // F2: security headers on every response.
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  c.header(
+    "Content-Security-Policy",
+    "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  );
   const p = c.req.path;
   if (p.startsWith("/api/")) return;
   if (p.startsWith("/assets/")) {

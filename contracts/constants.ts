@@ -1,6 +1,6 @@
 export const Session = {
   cookieName: "kimi_sid",
-  maxAgeMs: 365 * 24 * 60 * 60 * 1000,
+  maxAgeMs: 30 * 24 * 60 * 60 * 1000, // F2: 30 days (was 365)
 } as const;
 
 export const ErrorMessages = {
