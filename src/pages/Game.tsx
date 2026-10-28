@@ -383,6 +383,19 @@ export default function Game() {
     }
   };
 
+  // U3: unlock audio on the first touch/click/keypress anywhere —
+  // mobile browsers only start an AudioContext inside a gesture, and
+  // waiting for the spin handler meant early cues never sounded.
+  useEffect(() => {
+    const unlock = () => { audio.unlock(); };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
   // Keep the audio engine in sync with persisted prefs
   useEffect(() => {
     audio.setMaster(store.masterVolume);

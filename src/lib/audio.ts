@@ -29,9 +29,16 @@ function loadPrefs(): AudioPrefs {
   return { ...DEFAULTS };
 }
 
+const CORE_SFX = [
+  "ui-click",
+  "reel-stop-1", "reel-stop-2", "reel-stop-3", "reel-stop-4", "reel-stop-5",
+  "symbol-land", "win-small", "count-tick",
+];
+
 class SoundManager {
   private prefs: AudioPrefs = loadPrefs();
   private loops = new Map<string, Howl>();
+  private pool = new Map<string, Howl>();
   private unlocked = false;
   private listeners = new Set<(prefs: AudioPrefs) => void>();
 
@@ -69,9 +76,29 @@ class SoundManager {
 
   /** Call once from a user gesture to allow autoplay. */
   unlock() {
+    // U3: also resume a suspended AudioContext (mobile webviews suspend
+    // it until a gesture lands in the right place) and warm the core SFX
+    // pool so the first spin is not silent while files stream in.
+    const ctx = (Howler as unknown as { ctx?: AudioContext }).ctx;
+    if (ctx && ctx.state === "suspended") {
+      void ctx.resume().catch(() => { /* a later gesture will retry */ });
+    }
     if (this.unlocked) return;
     this.unlocked = true;
     Howler.volume(this.effectiveMaster());
+    this.preloadCore();
+  }
+
+  /** Preload the small, every-spin sounds so play() never waits on I/O. */
+  private preloadCore() {
+    for (const name of CORE_SFX) {
+      if (this.pool.has(name)) continue;
+      this.pool.set(name, new Howl({
+        src: [`/assets/audio/${name}.wav`],
+        preload: true,
+        volume: this.chGain("sfx"),
+      }));
+    }
   }
 
   setEnabled(on: boolean) {
@@ -104,9 +131,18 @@ class SoundManager {
   /** One-shot SFX from public/assets/audio */
   play(name: string, gain = 1) {
     if (!this.unlocked || !this.prefs.enabled) return;
+    const volume = Math.min(1, this.chGain("sfx") * gain);
+    // U3: pooled core sounds play instantly (already decoded); anything
+    // else keeps the create-on-demand path for rare celebration sounds.
+    const pooled = this.pool.get(name);
+    if (pooled) {
+      const id = pooled.play();
+      pooled.volume(volume, id);
+      return;
+    }
     const howl = new Howl({
       src: [`/assets/audio/${name}.wav`],
-      volume: Math.min(1, this.chGain("sfx") * gain),
+      volume,
       preload: true,
     });
     howl.play();
