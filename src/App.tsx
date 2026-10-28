@@ -7,6 +7,8 @@ import { lazy, Suspense } from "react";
 // C2: admin + login + 404 are split out of the player bundle.
 const Login = lazy(() => import("./pages/Login"));
 const Admin = lazy(() => import("./pages/Admin"));
+// AP1: forced admin 2FA enrollment page.
+const Security = lazy(() => import("./pages/Security"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 // F3: legal pages (Terms / Privacy / Responsible Gaming).
 const TermsPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.TermsPage })));
@@ -21,6 +23,7 @@ function App() {
         <Route path="/" element={<Game />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/security" element={<Security />} />
         <Route path="/terms" element={<TermsPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/responsible-gaming" element={<ResponsibleGamingPage />} />

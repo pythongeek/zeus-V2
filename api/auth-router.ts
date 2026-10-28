@@ -12,6 +12,8 @@ function publicUser(user: {
   phone: string | null;
   avatar: string | null;
   role: string;
+  totpEnabled?: boolean;
+  authScope?: string;
 }) {
   return {
     id: user.id,
@@ -21,6 +23,10 @@ function publicUser(user: {
     phone: user.phone,
     avatar: user.avatar,
     role: user.role,
+    // AP1: clients need these to route admins into 2FA setup / show
+    // security state. The secret itself never crosses the wire.
+    totpEnabled: !!user.totpEnabled,
+    authScope: user.authScope === "setup" ? "setup" : "full",
   };
 }
 

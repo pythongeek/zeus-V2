@@ -124,6 +124,13 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: ["USDT", "BDT"],
     labelEn: "Enabled currencies for play, deposits and withdrawals", labelBn: "সক্রিয় মুদ্রা (খেলা, জমা ও উত্তোলনের জন্য)",
   },
+  // AP1: admin two-factor enforcement (Golden Toss parity). Admin
+  // scope — never exposed in the public game config.
+  admin_2fa_required: {
+    type: "boolean", scope: "admin", group: "security",
+    def: false,
+    labelEn: "Require two-factor authentication (authenticator app) for all admin accounts", labelBn: "সব অ্যাডমিন অ্যাকাউন্টের জন্য টু-ফ্যাক্টর অথেনটিকেশন (অথেনটিকেটর অ্যাপ) বাধ্যতামূলক",
+  },
   binance_pay_id: {
     type: "string", scope: "public", group: "currencies",
     def: "",

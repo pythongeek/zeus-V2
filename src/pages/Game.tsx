@@ -270,6 +270,12 @@ export default function Game() {
     redirectPath: "/login",
   });
   const navigate = useNavigate();
+  // AP1: a setup-scoped admin session must complete 2FA enrollment first.
+  useEffect(() => {
+    if ((user as { authScope?: string } | null)?.authScope === "setup") {
+      navigate("/security");
+    }
+  }, [user, navigate]);
   const [reelSymbols, setReelSymbols] = useState<string[][]>([
     ["ace", "king", "queen"],
     ["shield", "helmet", "amphora"],

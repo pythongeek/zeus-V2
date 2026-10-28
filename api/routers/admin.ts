@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, adminQuery } from "../middleware";
+import { createRouter, adminFullQuery as adminQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";

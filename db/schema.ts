@@ -14,6 +14,10 @@ export const users = sqliteTable("users", {
   email: text("email"),
   phone: text("phone"),
   passwordHash: text("password_hash"),
+  // AP1: admin two-factor auth. Secret is AES-256-GCM encrypted
+  // (api/lib/totp.ts); totpEnabled flips only after a code verifies.
+  totpSecret: text("totp_secret"),
+  totpEnabled: integer("totp_enabled", { mode: "boolean" }).default(false).notNull(),
   avatar: text("avatar"),
   role: text("role", { enum: ["user", "admin"] }).default("user").notNull(),
   walletAddress: text("wallet_address").unique(),
@@ -30,6 +34,15 @@ export const users = sqliteTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+// AP1: one-time recovery codes for admin 2FA (SHA-256 hashes only).
+export const totpRecoveryCodes = sqliteTable("totp_recovery_codes", {
+  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+  userId: integer("user_id", { mode: "number" }).notNull(),
+  codeHash: text("code_hash").notNull(),
+  usedAt: integer("used_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
+});
 
 export const balances = sqliteTable("balances", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),

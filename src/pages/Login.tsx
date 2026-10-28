@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/providers/trpc";
 import { toast } from "sonner";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useMagicLogin } from "@/hooks/useMagicLogin";
 import { useLang, LanguageToggle } from "@/i18n";
@@ -18,6 +19,9 @@ function AuthForm() {
 
   const register = trpc.authLocal.register.useMutation();
   const login = trpc.authLocal.login.useMutation();
+  const verifyTotp = trpc.authLocal.verifyTotp.useMutation();
+  // AP1: admin accounts with 2FA get a code step after the password.
+  const [totpStep, setTotpStep] = useState(false);
 
   const afterAuth = async (msg: string) => {
     toast.success(msg);
@@ -66,7 +70,23 @@ function AuthForm() {
     const password = String(fd.get("password") || "");
 
     try {
-      await login.mutateAsync({ identifier, password });
+      const res = await login.mutateAsync({ identifier, password });
+      if ((res as { requiresTotp?: boolean }).requiresTotp) {
+        setTotpStep(true);
+        return;
+      }
+      await afterAuth(t("welcomeBackToast"));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("loginFailed"));
+    }
+  };
+
+  const onVerifyTotp = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const code = String(fd.get("code") || "").trim();
+    try {
+      await verifyTotp.mutateAsync({ code });
       await afterAuth(t("welcomeBackToast"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("loginFailed"));
@@ -75,6 +95,44 @@ function AuthForm() {
 
   const inputCls = "pl-9 bg-[#0D0D16] border-[#2E2E3E] text-white placeholder:text-[#5E5E72]";
   const labelCls = "text-[#C9C9D6]";
+
+  if (totpStep) {
+    return (
+      <form onSubmit={onVerifyTotp} className="space-y-4">
+        <div className="text-center space-y-1">
+          <div className="text-base font-semibold text-white">{t("totpTitle")}</div>
+          <p className="text-xs text-[#8A8AA0]">{t("totpLoginDesc")}</p>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="totp-code" className={labelCls}>{t("totpCodeLabel")}</Label>
+          <Input
+            id="totp-code"
+            name="code"
+            placeholder="123456"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            className="bg-[#0D0D16] border-[#2E2E3E] text-white placeholder:text-[#5E5E72] text-center font-mono tracking-widest"
+            required
+          />
+        </div>
+        <Button
+          type="submit"
+          className="w-full bg-[#D4AF37] text-black hover:bg-[#F4D03F] font-semibold"
+          disabled={verifyTotp.isPending}
+        >
+          {t("totpVerifyBtn")}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className="w-full text-[#8A8AA0] hover:text-white"
+          onClick={() => setTotpStep(false)}
+        >
+          {t("totpBackToLogin")}
+        </Button>
+      </form>
+    );
+  }
 
   return (
     <Tabs defaultValue="login" className="w-full">

@@ -31,5 +31,9 @@ export async function authenticateSession(headers: Headers): Promise<User> {
   if (!user.isActive) {
     throw new Error("Account disabled");
   }
+  // AP1: carry the session's 2FA scope alongside the user row so
+  // middleware can restrict setup-scoped admin sessions.
+  (user as User & { authScope?: string }).authScope =
+    claim.scope === "setup" ? "setup" : "full";
   return user;
 }

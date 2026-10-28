@@ -43,6 +43,13 @@ const USER_FACING_EXACT = new Set([
   "Deposit transaction not found",
   "Withdrawal transaction not found",
   "User balance row missing",
+  "Admin two-factor setup is required before using the admin panel",
+  "Invalid two-factor code",
+  "Two-factor session expired — please log in again",
+  "Two-factor is already enabled",
+  "Two-factor is not set up yet",
+  "Two-factor setup is for admin accounts only",
+  "Two-factor cannot be disabled while it is required for all admins",
 ]);
 const USER_FACING_PREFIXES = [
   "Your account is self-excluded until",
@@ -102,3 +109,19 @@ function requireRole(role: string) {
 
 export const authedQuery = t.procedure.use(requireAuth);
 export const adminQuery = authedQuery.use(requireRole("admin"));
+
+// AP1: a setup-scoped session (admin who must still enroll in 2FA
+// because admin_2fa_required is on) may authenticate and use the
+// enrollment endpoints, but must not reach any admin procedure.
+const requireFullScope = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+  if ((ctx.user as { authScope?: string } | undefined)?.authScope === "setup") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Admin two-factor setup is required before using the admin panel",
+    });
+  }
+  return next({ ctx });
+});
+
+export const adminFullQuery = adminQuery.use(requireFullScope);

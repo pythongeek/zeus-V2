@@ -13,6 +13,7 @@ import {
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
 } from "lucide-react";
 import { toast } from "sonner";
+import { TotpSetup } from "@/components/TotpSetup";
 
 // B3: Admin Game Config — every admin-controllable setting (B1/B2) edited
 // in one card, grouped, with EN/BN labels from the API definitions, typed
@@ -21,7 +22,7 @@ import { toast } from "sonner";
 // P0.2 (admin-panel programme): the card is now section-aware — each
 // admin section renders only its own setting groups, and the audit
 // trail can stand alone in the System section.
-const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math"];
+const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math", "security"];
 
 function GameConfigCard({
   enabled,
@@ -244,6 +245,13 @@ export default function Admin() {
   });
   const role = (user as any)?.role as string | undefined;
   const isAdmin = role === "admin" || role === "super_admin";
+
+  // AP1: a setup-scoped admin session must complete 2FA enrollment first.
+  useEffect(() => {
+    if ((user as any)?.authScope === "setup") {
+      navigate("/security");
+    }
+  }, [user, navigate]);
 
   const [section, setSection] = useState<SectionId>(() => sectionFromHash());
   useEffect(() => {
@@ -682,7 +690,18 @@ export default function Admin() {
           {section === "promotions" && placeholder}
 
           {section === "system" && (
-            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={[]} showAudit titleKey="recentChanges" />
+            <>
+              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["security"]} titleKey="cfgGroup_security" />
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader>
+                  <CardTitle className="text-amber-400">{t("totpCardTitle")}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <TotpSetup />
+                </CardContent>
+              </Card>
+              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={[]} showAudit titleKey="recentChanges" />
+            </>
           )}
         </main>
       </div>
