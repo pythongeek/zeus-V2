@@ -84,6 +84,41 @@ function SymbolTile({ symbol, spinning, win }: { symbol: string; spinning: boole
   );
 }
 
+// U4: lightweight symbol for the Lite scroll strips (no tile chrome —
+// the strip is decoration while a reel is still spinning).
+function ScrollSymbol({ symbol }: { symbol: string }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="relative w-full h-full">
+      <span
+        className="absolute inset-0 flex items-center justify-center font-bold text-[#D4AF37]/70"
+        style={{ fontFamily: "Cinzel, serif", fontSize: "1.4rem" }}
+      >
+        {SYMBOL_MARKS[symbol] ?? "?"}
+      </span>
+      {!failed && (
+        <img
+          src={`/assets/symbol-${symbol}.webp`}
+          alt=""
+          onError={() => setFailed(true)}
+          className="absolute inset-0 w-full h-full object-contain blur-[1px]"
+          draggable={false}
+        />
+      )}
+    </div>
+  );
+}
+
+const SCROLL_KEYS = ["ace", "zeus", "helmet", "queen", "thunderbolt", "harp", "king", "shield", "pegasus", "amphora", "temple"];
+
+// Deterministic per-reel scroll sequence (duplicated for a seamless
+// -50% loop). Pure decoration: the server decides the final symbols.
+function liteScrollSymbols(reel: number): string[] {
+  const seq: string[] = [];
+  for (let i = 0; i < 9; i++) seq.push(SCROLL_KEYS[(i * 3 + reel * 4) % SCROLL_KEYS.length]);
+  return [...seq, ...seq];
+}
+
 // F3: Responsible-gaming settings — limits + self-exclusion (server-enforced
 // by api/lib/limits.ts; this is only the player's control surface).
 function RgSettings() {
@@ -240,9 +275,13 @@ export default function Game() {
     ["ace", "king", "queen"],
   ]);
   const [displayedWin, setDisplayedWin] = useState(0);
+  // U4: last completed round, for the always-on result strip
+  const [lastResult, setLastResult] = useState<{ win: number; bet: number; currency: string } | null>(null);
   const [showBigWin, setShowBigWin] = useState(false);
   // D2: winning cells for the CSS/lite reels + free-spin session win total
   const [winCells, setWinCells] = useState<Set<string>>(new Set());
+  // U4: Lite-board stop progress — reels below this count show finals
+  const [liteStopped, setLiteStopped] = useState(5);
   const fsWinTotalRef = useRef(0);
   const [bigWinText, setBigWinText] = useState("");
   const [lightningFlash, setLightningFlash] = useState(false);
@@ -519,6 +558,8 @@ export default function Game() {
 
     store.setGameState("spinning");
     store.setLastWin(0);
+    setLiteStopped(0);
+    setLastResult(null);
     audio.unlock();
     audio.play("ui-click");
     audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
@@ -571,6 +612,7 @@ export default function Game() {
           at += store.turboMode ? 400 : 700;
         }
         setTimeout(() => {
+          setLiteStopped(i + 1);
           if (anticipate && i === 3) {
             engine?.setAnticipation(4);
             audio.startLoop("anticipation", "anticipation-loop.wav", "sfx", 0.9);
@@ -599,6 +641,11 @@ export default function Game() {
     store.setLastSpin(result);
     const winAmount = parseFloat(result.winAmount);
     store.setLastWin(winAmount);
+    setLastResult({
+      win: winAmount,
+      bet: typeof result.betAmount === "string" ? parseFloat(result.betAmount) : store.betAmount,
+      currency: store.activeCurrency,
+    });
 
     // Sync active currency balance with result.newBalance
     const updatedNewBal = parseFloat(result.newBalance);
@@ -976,13 +1023,25 @@ export default function Game() {
               <div className="grid grid-cols-5 gap-1">
                 {reelSymbols.map((reel, reelIndex) => (
                   <div key={reelIndex} className="relative overflow-hidden bg-[#0D0D14] rounded-lg">
-                    <div className={`flex flex-col ${store.gameState === "spinning" ? "animate-spin-reel" : ""}`}>
-                      {reel.map((symbol, rowIndex) => (
-                        <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
-                          <SymbolTile symbol={symbol} spinning={store.gameState === "spinning"} win={winCells.has(`${reelIndex}:${rowIndex}`)} />
+                    {store.gameState === "spinning" && reelIndex >= liteStopped ? (
+                      <div className="relative w-full aspect-[1/3] overflow-hidden">
+                        <div className="animate-reel-scroll flex flex-col">
+                          {liteScrollSymbols(reelIndex).map((sym, i) => (
+                            <div key={i} className="relative w-full aspect-square flex items-center justify-center p-1">
+                              <ScrollSymbol symbol={sym} />
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className={`flex flex-col ${store.gameState === "spinning" && reelIndex === liteStopped - 1 ? "animate-reel-land" : ""}`}>
+                        {reel.map((symbol, rowIndex) => (
+                          <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
+                            <SymbolTile symbol={symbol} spinning={false} win={winCells.has(`${reelIndex}:${rowIndex}`)} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1007,17 +1066,30 @@ export default function Game() {
           </div>
         </div>
 
-        {/* Win Display */}
-        {displayedWin > 0 && (
-          <div className="mt-4 text-center animate-bounce-in">
-            <div className="text-[#00E676] font-mono text-2xl font-bold">
-              +{CURRENCY_SYMBOLS[store.activeCurrency]}{displayedWin.toFixed(4)}
-            </div>
-            <div className="text-sm text-[#5E5E6E]">
-              ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
-            </div>
-          </div>
-        )}
+        {/* Round result — U4: EVERY spin gets visible feedback. Before,
+            only a win showed anything here; a losing spin changed nothing
+            on screen but a small history pill, so the game felt dead. */}
+        <div className="mt-4 min-h-[54px] text-center">
+          {lastResult && store.gameState !== "spinning" && (
+            lastResult.win > 0 ? (
+              <div className="animate-bounce-in">
+                <div className="text-[#00E676] font-mono text-2xl font-bold">
+                  +{num(displayedWin.toFixed(2))} {lastResult.currency}
+                </div>
+                <div className="text-sm text-[#9E9EAC]">
+                  ≈ ৳{fmtBdt(displayedWin * (BDT_RATES[lastResult.currency] || 1))}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="text-sm font-bold tracking-[0.25em] text-[#9E9EAC]">{t("noWin")}</div>
+                <div className="text-xs text-[#5E5E6E] mt-1">
+                  −{num(lastResult.bet.toFixed(2))} {lastResult.currency}
+                </div>
+              </div>
+            )
+          )}
+        </div>
 
         {/* Control Panel */}
         <div className="mt-6 bg-[#12121A]/95 border border-[#2A2A35] rounded-xl p-4 max-w-[900px] w-full">

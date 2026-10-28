@@ -137,6 +137,27 @@
   animation: spin-reel 0.15s linear infinite;
 }
 
+/* U4: Lite-board reel scroll (seamless -50% loop of a duplicated strip)
+   and the settle bounce when a Lite reel lands. */
+@keyframes reel-scroll {
+  from { transform: translateY(0); }
+  to { transform: translateY(-50%); }
+}
+
+.animate-reel-scroll {
+  animation: reel-scroll 0.55s linear infinite;
+}
+
+@keyframes reel-land {
+  0% { transform: translateY(-14px); }
+  55% { transform: translateY(3px); }
+  100% { transform: translateY(0); }
+}
+
+.animate-reel-land {
+  animation: reel-land 0.28s ease-out;
+}
+
 .animate-shimmer {
   animation: shimmer 1s linear infinite;
 }

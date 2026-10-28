@@ -44,6 +44,7 @@ export const strings = {
     liteMode: "Lite",
     liteModeAuto: "Lite mode turned on automatically — your device was struggling with the full graphics.",
     spinAlt: "Spin",
+    noWin: "NO WIN — TRY AGAIN",
     paylinesLabel: "PAYLINES",
     recentSpins: "Recent Spins",
 
@@ -271,6 +272,7 @@ export const strings = {
     liteMode: "লাইট",
     liteModeAuto: "লাইট মোড স্বয়ংক্রিয়ভাবে চালু হয়েছে — আপনার ডিভাইসে পূর্ণ গ্রাফিক্স ধীর ছিল।",
     spinAlt: "স্পিন",
+    noWin: "জিত হয়নি — আবার চেষ্টা করুন",
     paylinesLabel: "পেলাইন",
     recentSpins: "সাম্প্রতিক স্পিন",
 
