@@ -124,6 +124,16 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: ["USDT", "BDT"],
     labelEn: "Enabled currencies for play, deposits and withdrawals", labelBn: "সক্রিয় মুদ্রা (খেলা, জমা ও উত্তোলনের জন্য)",
   },
+  binance_pay_id: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "Binance PayID for deposits (shown to players)", labelBn: "ডিপোজিটের জন্য Binance PayID (খেলোয়াড়দের দেখানো হয়)",
+  },
+  binance_pay_name: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "Binance account name shown with the PayID", labelBn: "PayID-এর সঙ্গে দেখানো Binance অ্যাকাউন্টের নাম",
+  },
   fx_rates: {
     type: "json", scope: "public", group: "currencies",
     def: { "BTC": 11000000, "ETH": 380000, "USDT": 110, "BDT": 1 },

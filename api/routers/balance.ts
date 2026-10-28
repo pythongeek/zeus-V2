@@ -5,7 +5,6 @@ import { balances, transactions } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getSetting } from "../lib/settings";
 import { eq, and, desc } from "drizzle-orm";
-import crypto from "crypto";
 
 // BDT conversion rates (mock - in production, fetch from CoinGecko)
 const BDT_RATES: Record<string, number> = {
@@ -105,10 +104,17 @@ export const balanceRouter = createRouter({
       return setLimits(ctx.user.id, patch as any);
     }),
 
+  // F4: deposits run on the Binance PayID rail (owner decision,
+  // same rail as Golden Toss). The player sends to the operator's
+  // PayID and submits the Binance reference; an admin verifies it in
+  // Binance and approves, which credits the balance. The previous
+  // flow generated a random mock address — funds sent there would
+  // have been lost; it is removed entirely.
   deposit: authedQuery
     .input(z.object({
       currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
       amount: z.string().regex(/^\d+\.?\d*$/),
+      reference: z.string().min(4).max(64),
     }))
     .mutation(async ({ ctx, input }) => {
       assertCurrencyEnabled(input.currency);
@@ -121,26 +127,32 @@ export const balanceRouter = createRouter({
       const { assertDepositAllowed } = await import("../lib/limits");
       assertDepositAllowed(ctx.user.id, input.currency, amount);
 
-      // Generate deposit address (mock - in production, derive from HD wallet)
-      const address = `0x${crypto.randomBytes(20).toString("hex")}`;
+      if (input.currency !== "USDT" && input.currency !== "BDT") {
+        throw new Error("Deposits are via Binance PayID only (USDT or BDT)");
+      }
+      const payId = getSetting<string>("binance_pay_id");
+      if (!payId) {
+        throw new Error("Deposits are not available yet — please contact support");
+      }
+      const payName = getSetting<string>("binance_pay_name");
 
-      // Create pending transaction
       const [tx] = await db.insert(transactions).values({
         userId: ctx.user.id,
         type: "deposit",
         currency: input.currency,
         amount: canonicalMoney(input.amount),
-        toAddress: address,
+        toAddress: payId,
+        txHash: input.reference,
         status: "pending",
       }).returning();
 
       return {
         txId: tx.id,
-        depositAddress: address,
+        payId,
+        payName: payName || null,
         amount: input.amount,
         currency: input.currency,
         status: "pending",
-        minConfirmations: input.currency === "BTC" ? 3 : 12,
       };
     }),
 

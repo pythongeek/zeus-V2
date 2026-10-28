@@ -301,9 +301,10 @@ export default function Game() {
 
   // Wallet flows
   const [walletMode, setWalletMode] = useState<"deposit" | "withdraw" | null>(null);
-  const [depCurrency, setDepCurrency] = useState<"BTC" | "ETH" | "USDT">("USDT");
+  const [depCurrency, setDepCurrency] = useState<"USDT" | "BDT">("USDT");
   const [depAmount, setDepAmount] = useState("");
-  const [depositResult, setDepositResult] = useState<{ amount: string; currency: string; depositAddress: string } | null>(null);
+  const [depReference, setDepReference] = useState("");
+  const [depositResult, setDepositResult] = useState<{ amount: string; currency: string; payId: string; payName: string | null } | null>(null);
   const [wdCurrency, setWdCurrency] = useState<"BTC" | "ETH" | "USDT">("USDT");
   const [wdAmount, setWdAmount] = useState("");
   const [wdAddress, setWdAddress] = useState("");
@@ -316,11 +317,16 @@ export default function Game() {
       toast.error(t("errInvalidDeposit"));
       return;
     }
+    if (depReference.trim().length < 4) {
+      toast.error(t("errDepositReference"));
+      return;
+    }
     try {
-      const res = await depositMutation.mutateAsync({ currency: depCurrency, amount: depAmount });
+      const res = await depositMutation.mutateAsync({ currency: depCurrency, amount: depAmount, reference: depReference.trim() });
       setDepositResult(res);
       toast.success(t("depositPending"));
       setDepAmount("");
+      setDepReference("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t("depositFailed"));
     }
@@ -1317,41 +1323,61 @@ for (let i = 0; i < 5; i++) {
             {walletMode === "deposit" && (
               <div className="bg-[#1A1A25] rounded-lg p-4 space-y-3">
                 <div className="text-sm font-semibold text-[#D4AF37]">{t("requestDepositTitle")}</div>
-                <div className="flex gap-2">
-                  <select
-                    value={depCurrency}
-                    onChange={(e) => setDepCurrency(e.target.value as "BTC" | "ETH" | "USDT")}
-                    className="bg-[#12121A] border border-[#2A2A35] rounded px-2 text-sm text-white"
-                  >
-                    <option value="BTC">BTC</option>
-                    <option value="ETH">ETH</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                  <Input
-                    type="number"
-                    step="any"
-                    min="0"
-                    placeholder={t("amountPlaceholder")}
-                    value={depAmount}
-                    onChange={(e) => setDepAmount(e.target.value)}
-                    className="flex-1 bg-[#12121A] border-[#2A2A35]"
-                  />
-                  <Button
-                    size="sm"
-                    className="bg-[#00E676] text-black hover:bg-[#00E676]/80"
-                    disabled={depositMutation.isPending || !depAmount}
-                    onClick={handleDeposit}
-                  >
-                    {depositMutation.isPending ? "..." : t("requestDeposit")}
-                  </Button>
-                </div>
+                {!store.config?.binance_pay_id ? (
+                  <div className="text-xs text-[#9E9EAC]">{t("depositsUnavailable")}</div>
+                ) : (
+                  <>
+                    <div className="text-xs bg-[#12121A] border border-[#2A2A35] rounded p-3 space-y-1">
+                      <div className="text-[#5E5E6E]">{t("depositSendTo")}</div>
+                      <div className="font-mono text-[#D4AF37] break-all text-sm">
+                        {t("depositPayIdLabel")}: {store.config.binance_pay_id}
+                      </div>
+                      {store.config.binance_pay_name ? (
+                        <div className="text-[#9E9EAC]">{t("depositPayName")}: {store.config.binance_pay_name}</div>
+                      ) : null}
+                      <div className="text-[#5E5E6E]">{t("depositVerifyNote")}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      <select
+                        value={depCurrency}
+                        onChange={(e) => setDepCurrency(e.target.value as "USDT" | "BDT")}
+                        className="bg-[#12121A] border border-[#2A2A35] rounded px-2 text-sm text-white"
+                      >
+                        {((store.config?.currencies_enabled as string[] | undefined) ?? ["USDT", "BDT"])
+                          .filter((c) => c === "USDT" || c === "BDT")
+                          .map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                      </select>
+                      <Input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder={t("amountPlaceholder")}
+                        value={depAmount}
+                        onChange={(e) => setDepAmount(e.target.value)}
+                        className="flex-1 bg-[#12121A] border-[#2A2A35]"
+                      />
+                    </div>
+                    <Input
+                      placeholder={t("depositReferencePlaceholder")}
+                      value={depReference}
+                      onChange={(e) => setDepReference(e.target.value)}
+                      className="bg-[#12121A] border-[#2A2A35]"
+                    />
+                    <Button
+                      size="sm"
+                      className="w-full bg-[#00E676] text-black hover:bg-[#00E676]/80"
+                      disabled={depositMutation.isPending || !depAmount}
+                      onClick={handleDeposit}
+                    >
+                      {depositMutation.isPending ? "..." : t("requestDeposit")}
+                    </Button>
+                  </>
+                )}
                 {depositResult && (
                   <div className="text-xs bg-[#12121A] border border-[#2A2A35] rounded p-3 space-y-1">
                     <div className="text-[#00E676]">{t("depositPending")}</div>
-                    <div className="text-[#5E5E6E] break-all">
-                      Send <span className="text-white">{depositResult.amount} {depositResult.currency}</span> to:
-                    </div>
-                    <div className="font-mono text-[#D4AF37] break-all">{depositResult.depositAddress}</div>
                     <div className="text-[#5E5E6E]">{t("depositSendNote")}</div>
                   </div>
                 )}

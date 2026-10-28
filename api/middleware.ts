@@ -30,6 +30,8 @@ const USER_FACING_EXACT = new Set([
   "Too many attempts — please wait a few minutes and try again",
   "You are spinning too fast — please slow down",
   "Daily deposit limit reached",
+  "Deposits are not available yet — please contact support",
+  "Deposits are via Binance PayID only (USDT or BDT)",
   "Daily loss limit reached — spinning is paused until tomorrow",
   "Session limit reached — please take a break",
   "Self-exclusion cannot be shortened or cancelled early",

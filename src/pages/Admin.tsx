@@ -529,7 +529,7 @@ export default function Admin() {
                       {tx.amount} {tx.currency}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-slate-500 max-w-[140px] truncate">
-                      {tx.toAddress ?? "—"}
+                      {tx.type === "deposit" && tx.txHash ? tx.txHash : tx.toAddress ?? "—"}
                     </TableCell>
                     <TableCell className="text-right space-x-2">
                       {tx.type === "deposit" ? (
