@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw,
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
+  FlaskConical,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { toast } from "sonner";
@@ -24,6 +25,362 @@ import { TotpSetup } from "@/components/TotpSetup";
 // admin section renders only its own setting groups, and the audit
 // trail can stand alone in the System section.
 const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math", "security"];
+
+const LAB_SYM_KEYS = [
+  "sym_zeus", "sym_thunderbolt", "sym_pegasus", "sym_temple", "sym_harp",
+  "sym_amphora", "sym_helmet", "sym_shield", "sym_ace", "sym_king", "sym_queen",
+] as const;
+
+/** Section E: RTP Lab — draft -> certify -> publish -> rollback. */
+function RtpLabCard({ enabled }: { enabled: boolean }) {
+  const { t } = useLang();
+  const labQ = trpc.admin.getMathLab.useQuery(undefined, { enabled, retry: false });
+  const [bundle, setBundle] = useState<any>(null);
+  const [reelText, setReelText] = useState<string[]>([]);
+  const [reelError, setReelError] = useState("");
+  const [cert, setCert] = useState<any>(null);
+  const [certFor, setCertFor] = useState("");
+  const [note, setNote] = useState("");
+  const [confirmPublish, setConfirmPublish] = useState(false);
+  const [confirmRollback, setConfirmRollback] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (labQ.data && bundle === null) {
+      const initial = structuredClone(labQ.data.draft ?? labQ.data.live);
+      setBundle(initial);
+      setReelText(initial.reels.map((r: number[]) => r.join(",")));
+    }
+  }, [labQ.data, bundle]);
+
+  const edit = (next: any) => {
+    setBundle(next);
+    setCert(null);
+    setCertFor("");
+    setConfirmPublish(false);
+  };
+
+  const loadBundle = (b: any) => {
+    const copy = structuredClone(b);
+    setBundle(copy);
+    setReelText(copy.reels.map((r: number[]) => r.join(",")));
+    setCert(null);
+    setCertFor("");
+    setConfirmPublish(false);
+    setReelError("");
+  };
+
+  const saveDraftM = trpc.admin.saveMathDraft.useMutation({
+    onSuccess: async () => {
+      toast.success(t("draftSaved"));
+      await labQ.refetch();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const certifyM = trpc.admin.certifyMath.useMutation({
+    onSuccess: (data: any) => {
+      setCert(data);
+      setCertFor(JSON.stringify(bundle));
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const publishM = trpc.admin.publishMath.useMutation({
+    onSuccess: async () => {
+      toast.success(t("publishedMsg"));
+      setNote("");
+      setConfirmPublish(false);
+      await labQ.refetch();
+      setBundle(null);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const rollbackM = trpc.admin.rollbackMath.useMutation({
+    onSuccess: async () => {
+      toast.success(t("rolledBackMsg"));
+      setConfirmRollback(null);
+      await labQ.refetch();
+      setBundle(null);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  if (!enabled) return null;
+  if (labQ.isLoading || !bundle) {
+    return (
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardContent className="pt-6 text-sm text-slate-500">{t("loading")}</CardContent>
+      </Card>
+    );
+  }
+  const data = labQ.data!;
+  const certCurrent = cert && certFor === JSON.stringify(bundle);
+
+  const setPay = (id: number, k: string, v: string) => {
+    const next = structuredClone(bundle);
+    next.paytable[String(id)][k] = v === "" ? 0 : Number(v);
+    edit(next);
+  };
+  const setFs = (k: string, v: string) => {
+    const next = structuredClone(bundle);
+    next.freeSpins[k] = v === "" ? 0 : parseInt(v, 10) || 0;
+    edit(next);
+  };
+  const setThunder = (field: string, v: string, isInt: boolean) => {
+    const next = structuredClone(bundle);
+    next.thunder[field] = v === "" ? 0 : isInt ? parseInt(v, 10) || 0 : Number(v);
+    edit(next);
+  };
+  const commitReel = (idx: number) => {
+    const parts = reelText[idx].split(/[,\s]+/).filter((x) => x !== "").map((x) => Number(x));
+    if (parts.length < 10 || parts.length > 200 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 10)) {
+      setReelError(t("reelInvalid"));
+      return;
+    }
+    setReelError("");
+    const next = structuredClone(bundle);
+    next.reels[idx] = parts;
+    edit(next);
+  };
+
+  return (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FlaskConical className="h-4 w-4 text-amber-400" /> {t("rtpLab")}
+        </CardTitle>
+        <CardDescription className="text-slate-400">{t("rtpLabDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <Badge variant="secondary" className="bg-slate-800 text-slate-300 border-slate-700">
+            {t("declaredRtp")}: {data.declaredRtp}%
+          </Badge>
+          <Badge variant="secondary" className="bg-slate-800 text-slate-300 border-slate-700">
+            {t("publishBounds")}: {data.bounds.min}–{data.bounds.max}%
+          </Badge>
+          <Badge variant="secondary" className="bg-slate-800 text-slate-300 border-slate-700">
+            {t("maxWinCapLbl")}: {data.maxWinX > 0 ? `${data.maxWinX}×` : t("capOff")}
+          </Badge>
+          <span className="flex-1" />
+          <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700" onClick={() => loadBundle(data.live)}>
+            {t("loadLive")}
+          </Button>
+          {data.draft && (
+            <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700" onClick={() => loadBundle(data.draft)}>
+              {t("loadDraft")}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs border-slate-700"
+            disabled={saveDraftM.isPending}
+            onClick={() => saveDraftM.mutate({ bundle })}
+          >
+            {t("saveDraft")}
+          </Button>
+        </div>
+
+        {/* Paytable editor */}
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">{t("labPaytable")}</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500">
+                  <th className="py-1 pr-2">{t("symbolCol")}</th>
+                  <th className="py-1 pr-2">×3</th>
+                  <th className="py-1 pr-2">×4</th>
+                  <th className="py-1">×5</th>
+                </tr>
+              </thead>
+              <tbody>
+                {LAB_SYM_KEYS.map((key, id) => (
+                  <tr key={key} className="border-t border-slate-800/60">
+                    <td className="py-1 pr-2 text-slate-300 whitespace-nowrap">{t(key as any)}</td>
+                    {(["3", "4", "5"] as const).map((k) => (
+                      <td key={k} className="py-1 pr-2">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={bundle.paytable[String(id)][k]}
+                          onChange={(e) => setPay(id, k, e.target.value)}
+                          className="h-7 w-24 text-xs bg-slate-950 border-slate-700 font-mono"
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Reels editor */}
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">{t("labReels")}</div>
+          <div className="space-y-2">
+            {bundle.reels.map((reel: number[], idx: number) => (
+              <div key={idx} className="flex items-start gap-2">
+                <span className="text-xs text-slate-400 pt-2 w-12 shrink-0">{t("reelN")} {idx + 1}</span>
+                <Input
+                  value={reelText[idx] ?? ""}
+                  onChange={(e) => {
+                    const next = [...reelText];
+                    next[idx] = e.target.value;
+                    setReelText(next);
+                  }}
+                  onBlur={() => commitReel(idx)}
+                  className="text-[11px] bg-slate-950 border-slate-700 font-mono"
+                />
+                <span className="text-[11px] text-slate-500 pt-2 w-16 shrink-0">{reel.length} {t("stopsWord")}</span>
+              </div>
+            ))}
+          </div>
+          {reelError && <p className="text-xs text-red-400 mt-1">{reelError}</p>}
+          <p className="text-[11px] text-slate-600 mt-1">{t("reelHint")}</p>
+        </div>
+
+        {/* Free spins + thunder */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {(["3", "4", "5"] as const).map((k) => (
+            <div key={k}>
+              <div className="text-[11px] text-slate-500 mb-1">{t("labFsAward")} ×{k}</div>
+              <Input
+                type="number"
+                min={0}
+                value={bundle.freeSpins[k]}
+                onChange={(e) => setFs(k, e.target.value)}
+                className="h-8 text-xs bg-slate-950 border-slate-700 font-mono"
+              />
+            </div>
+          ))}
+          <div>
+            <div className="text-[11px] text-slate-500 mb-1">{t("labThunderDenom")}</div>
+            <Input
+              type="number"
+              min={1}
+              value={bundle.thunder.chanceDenominator}
+              onChange={(e) => setThunder("chanceDenominator", e.target.value, true)}
+              className="h-8 text-xs bg-slate-950 border-slate-700 font-mono"
+            />
+          </div>
+          <div>
+            <div className="text-[11px] text-slate-500 mb-1">{t("labThunderFloor")}</div>
+            <Input
+              type="number"
+              min={0}
+              step="0.5"
+              value={bundle.thunder.floorX}
+              onChange={(e) => setThunder("floorX", e.target.value, false)}
+              className="h-8 text-xs bg-slate-950 border-slate-700 font-mono"
+            />
+          </div>
+        </div>
+
+        {/* Certify + results */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            className="h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+            disabled={certifyM.isPending}
+            onClick={() => certifyM.mutate({ bundle })}
+          >
+            {certifyM.isPending ? t("certifying") : t("certifyBtn")}
+          </Button>
+          {cert && !certCurrent && <span className="text-xs text-amber-400">{t("certStale")}</span>}
+          {certCurrent && (
+            <Badge
+              variant="secondary"
+              className={cert.withinBounds ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" : "bg-red-500/15 text-red-400 border-red-500/30"}
+            >
+              {cert.withinBounds ? t("withinBounds") : t("outOfBounds")}
+            </Badge>
+          )}
+        </div>
+        {certCurrent && (
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div><div className="text-[11px] text-slate-500">{t("certLines")}</div><div className="font-mono">{cert.linesPct}%</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("certScatter")}</div><div className="font-mono">{cert.scatterPct}%</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("certThunder")}</div><div className="font-mono">{cert.thunderPct}%</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("certJackpot")}</div><div className="font-mono">{cert.jackpotPct}%</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("fsPerSpinLbl")}</div><div className="font-mono">{cert.fsPerSpin}</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("hitRate")}</div><div className="font-mono">{cert.hitRatePct}%</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("maxWinObs")}</div><div className="font-mono">{cert.maxWinObservedX}×</div></div>
+              <div><div className="text-[11px] text-slate-500">{t("certTotal")}</div><div className="font-mono text-lg text-amber-400">{cert.totalPct}%</div></div>
+            </div>
+            <p className="text-[11px] text-slate-600 mt-2">{t("certFormula")}</p>
+          </div>
+        )}
+
+        {/* Publish */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 pt-4">
+          <Input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={t("publishNotePh")}
+            className="h-8 text-xs bg-slate-950 border-slate-700 max-w-xs"
+          />
+          {!confirmPublish ? (
+            <Button
+              size="sm"
+              className="h-8 text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold"
+              disabled={!certCurrent || !cert.withinBounds || publishM.isPending}
+              onClick={() => setConfirmPublish(true)}
+            >
+              {t("publishMathBtn")}
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                className="h-8 text-xs bg-red-600 hover:bg-red-500 text-white font-semibold"
+                disabled={publishM.isPending}
+                onClick={() => publishM.mutate({ bundle, note: note || undefined })}
+              >
+                {t("confirmPublish")}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setConfirmPublish(false)}>
+                {t("cancel")}
+              </Button>
+            </>
+          )}
+          <span className="text-[11px] text-slate-600">{t("publishWarn")}</span>
+        </div>
+
+        {/* Versions */}
+        {data.versions.length > 0 && (
+          <div className="border-t border-slate-800 pt-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">{t("versionsTitle")}</div>
+            <div className="space-y-1.5">
+              {data.versions.map((v: any) => (
+                <div key={v.id} className="flex flex-wrap items-center gap-2 text-xs border border-slate-800/70 rounded-lg px-3 py-2 bg-slate-950/40">
+                  <span className="font-mono text-slate-300">#{v.id}</span>
+                  <Badge variant="secondary" className="bg-slate-800 text-amber-300 border-slate-700 font-mono">{v.totalRtp}%</Badge>
+                  <span className="text-slate-400 truncate max-w-[220px]">{v.note ?? "—"}</span>
+                  <span className="text-slate-600">{new Date(v.createdAt * 1000).toLocaleString()}</span>
+                  <span className="flex-1" />
+                  {confirmRollback === v.id ? (
+                    <>
+                      <Button size="sm" className="h-6 text-[11px] bg-red-600 hover:bg-red-500 text-white" disabled={rollbackM.isPending} onClick={() => rollbackM.mutate({ versionId: v.id })}>
+                        {t("confirmRollback")}
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => setConfirmRollback(null)}>{t("cancel")}</Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="outline" className="h-6 text-[11px] border-slate-700" onClick={() => setConfirmRollback(v.id)}>
+                      {t("rollbackBtn")}
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function GameConfigCard({
   enabled,
@@ -1584,7 +1941,10 @@ export default function Admin() {
           )}
 
           {section === "engine" && (
-            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["bets", "features", "presentation", "math"]} titleKey="navEngine" canEdit={isSuper} />
+            <div className="space-y-5">
+              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["bets", "features", "presentation", "math"]} titleKey="navEngine" canEdit={isSuper} />
+              {isSuper && <RtpLabCard enabled={isAuthenticated && isAdmin} />}
+            </div>
           )}
 
           {section === "jackpots" && (
