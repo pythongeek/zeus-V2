@@ -12,6 +12,7 @@ import {
   Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw,
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
 } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { toast } from "sonner";
 import { TotpSetup } from "@/components/TotpSetup";
 
@@ -369,6 +370,31 @@ export default function Admin() {
     setSection(id);
   };
 
+  // Section B: dashboard analytics state + queries.
+  const [analyticsRange, setAnalyticsRange] = useState<"today" | "7d" | "30d" | "all" | "custom">("30d");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const { data: analytics } = trpc.admin.getAnalytics.useQuery(
+    {
+      range: analyticsRange,
+      from: analyticsRange === "custom" && customFrom ? customFrom : undefined,
+      to: analyticsRange === "custom" && customTo ? customTo : undefined,
+    },
+    { enabled: isAuthenticated && isAdmin && section === "dashboard", retry: false },
+  );
+  const { data: cashflow } = trpc.admin.getCashflowSeries.useQuery(
+    { days: 30 },
+    { enabled: isAuthenticated && isAdmin && section === "dashboard", retry: false },
+  );
+  const { data: topPlayers } = trpc.admin.getTopPlayers.useQuery(
+    { range: analyticsRange === "7d" ? "7d" : analyticsRange === "all" ? "all" : "30d" },
+    { enabled: isAuthenticated && isAdmin && section === "dashboard", retry: false },
+  );
+  const { data: moneyPos } = trpc.admin.getMoneyPosition.useQuery(undefined, {
+    enabled: isAuthenticated && isAdmin && section === "dashboard",
+    retry: false,
+  });
+
   const { data: stats, isLoading: statsLoading } = trpc.admin.getStats.useQuery(undefined, {
     enabled: isAuthenticated && isAdmin,
     retry: false,
@@ -688,6 +714,7 @@ export default function Admin() {
 
         <main className="flex-1 min-w-0 space-y-8">
           {section === "dashboard" && (
+            <div className="space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               <Card className="bg-slate-900/80 border-slate-800">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -732,6 +759,185 @@ export default function Admin() {
                   <p className="text-xs text-slate-500 mt-1">{t("targetRtp")}</p>
                 </CardContent>
               </Card>
+            </div>
+
+            {/* Section B: range analytics */}
+            <div className="flex flex-wrap items-center gap-2">
+              {(["today", "7d", "30d", "all", "custom"] as const).map((r) => (
+                <Button
+                  key={r}
+                  size="sm"
+                  variant={analyticsRange === r ? "default" : "outline"}
+                  className={analyticsRange === r ? "bg-amber-500 text-slate-950 hover:bg-amber-400 h-7 text-xs" : "border-slate-700 text-slate-300 h-7 text-xs"}
+                  onClick={() => setAnalyticsRange(r)}
+                >
+                  {r === "today" ? t("rangeToday") : r === "7d" ? t("range7d") : r === "30d" ? t("range30d") : r === "all" ? t("rangeAll") : t("rangeCustom")}
+                </Button>
+              ))}
+              {analyticsRange === "custom" && (
+                <>
+                  <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="bg-slate-950 border-slate-700 text-slate-200 h-7 text-xs w-36" />
+                  <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="bg-slate-950 border-slate-700 text-slate-200 h-7 text-xs w-36" />
+                </>
+              )}
+            </div>
+
+            {analytics && (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                {[
+                  { label: t("signupsLabel"), value: String(analytics.signups) },
+                  { label: t("depositsLabel"), value: `$${analytics.depositsUsdt.toLocaleString()}` },
+                  { label: t("withdrawalsLabel"), value: `$${analytics.withdrawalsUsdt.toLocaleString()}` },
+                  { label: t("netCashflow"), value: `$${analytics.netCashflowUsdt.toLocaleString()}` },
+                  { label: t("wageredRange"), value: `$${analytics.wageredUsdt.toLocaleString()}` },
+                  { label: t("ggrLabel"), value: `$${analytics.ggrUsdt.toLocaleString()}` },
+                ].map((c) => (
+                  <Card key={c.label} className="bg-slate-900/80 border-slate-800">
+                    <CardContent className="pt-4">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-500">{c.label}</div>
+                      <div className="text-xl font-bold mt-1">{c.value}</div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader>
+                  <CardTitle className="text-base">{t("rtpMonitor")}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {analytics ? (
+                    <>
+                      <div className="flex items-baseline gap-6">
+                        <div>
+                          <div className="text-[11px] uppercase text-slate-500">{t("actualRtp")}</div>
+                          <div className="text-3xl font-bold text-blue-400">
+                            {analytics.actualRtp !== null ? `${analytics.actualRtp.toFixed(2)}%` : "—"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] uppercase text-slate-500">{t("theoreticalRtp")}</div>
+                          <div className="text-3xl font-bold text-slate-300">{analytics.theoreticalRtp.toFixed(1)}%</div>
+                        </div>
+                        {analytics.actualRtp !== null && (
+                          <Badge
+                            variant="secondary"
+                            className={
+                              Math.abs(analytics.actualRtp - analytics.theoreticalRtp) <= 2
+                                ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                                : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                            }
+                          >
+                            Δ {(analytics.actualRtp - analytics.theoreticalRtp).toFixed(2)}%
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500">{t("rtpDriftNote")}</p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-slate-500">{t("loading")}</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader>
+                  <CardTitle className="text-base">{t("moneyPosition")}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {moneyPos ? (
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div><div className="text-slate-500 text-xs">{t("liabilities")}</div><div className="font-mono text-lg">${moneyPos.liabilitiesUsdt.toLocaleString()}</div></div>
+                      <div><div className="text-slate-500 text-xs">{t("lockedLabel")}</div><div className="font-mono text-lg">${moneyPos.lockedUsdt.toLocaleString()}</div></div>
+                      <div><div className="text-slate-500 text-xs">{t("poolsLabel")}</div><div className="font-mono text-lg">${moneyPos.poolsUsdt.toLocaleString()}</div></div>
+                      <div><div className="text-slate-500 text-xs">{t("pendingOut")}</div><div className="font-mono text-lg">${moneyPos.pendingWithdrawalsUsdt.toLocaleString()} <span className="text-xs text-slate-500">({moneyPos.pendingWithdrawalsCount})</span></div></div>
+                      <div className="col-span-2 flex flex-wrap gap-2">
+                        {moneyPos.pools.map((pl: any) => (
+                          <span key={pl.tier} className="text-xs font-mono bg-slate-800/80 border border-slate-700 rounded px-2 py-1 uppercase">
+                            {pl.tier}: {pl.currentAmount} USDT
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">{t("loading")}</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className="bg-slate-900/80 border-slate-800">
+              <CardHeader>
+                <CardTitle className="text-base">{t("cashflowTitle")}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {cashflow ? (
+                  <div className="h-56">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={cashflow} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} minTickGap={40} />
+                        <YAxis tick={{ fill: "#64748b", fontSize: 10 }} width={48} />
+                        <Tooltip
+                          contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }}
+                          labelStyle={{ color: "#e2e8f0" }}
+                        />
+                        <Bar dataKey="deposits" name={t("depositsLabel")} fill="#10b981" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="withdrawals" name={t("withdrawalsLabel")} fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">{t("loading")}</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-900/80 border-slate-800">
+              <CardHeader>
+                <CardTitle className="text-base">{t("topPlayersTitle")}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {topPlayers ? (
+                  <div className="grid md:grid-cols-3 gap-5 text-sm">
+                    <div>
+                      <div className="text-xs uppercase text-slate-500 mb-2">{t("topWagered")}</div>
+                      {topPlayers.byWagered.length === 0 ? <p className="text-slate-500 text-xs">{t("noResults")}</p> : topPlayers.byWagered.map((pl: any, i: number) => (
+                        <div key={pl.userId} className="flex justify-between border-b border-slate-800/60 py-1">
+                          <span className="text-slate-300 truncate mr-2">{i + 1}. {pl.name ?? pl.email}</span>
+                          <span className="font-mono">${pl.wagered.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase text-slate-500 mb-2">{t("topNetLoss")}</div>
+                      {topPlayers.byNetLoss.length === 0 ? <p className="text-slate-500 text-xs">{t("noResults")}</p> : topPlayers.byNetLoss.map((pl: any, i: number) => (
+                        <div key={pl.userId} className="flex justify-between border-b border-slate-800/60 py-1">
+                          <span className="text-slate-300 truncate mr-2">{i + 1}. {pl.name ?? pl.email}</span>
+                          <span className="font-mono">${pl.net.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase text-slate-500 mb-2">{t("biggestWin")}</div>
+                      {topPlayers.biggestWin ? (
+                        <div className="space-y-1">
+                          <div className="font-mono text-2xl text-amber-400">{topPlayers.biggestWin.win.toLocaleString()} {topPlayers.biggestWin.currency}</div>
+                          <div className="text-slate-400 text-xs">{topPlayers.biggestWin.name ?? topPlayers.biggestWin.email}</div>
+                          <div className="text-slate-500 text-xs">{t("betAmount")}: {topPlayers.biggestWin.bet} {topPlayers.biggestWin.currency}</div>
+                        </div>
+                      ) : (
+                        <p className="text-slate-500 text-xs">{t("noResults")}</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">{t("loading")}</p>
+                )}
+              </CardContent>
+            </Card>
             </div>
           )}
 
