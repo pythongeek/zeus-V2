@@ -13,7 +13,7 @@ import {
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
   FlaskConical,
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { toast } from "sonner";
 import { TotpSetup } from "@/components/TotpSetup";
 
@@ -25,6 +25,234 @@ import { TotpSetup } from "@/components/TotpSetup";
 // admin section renders only its own setting groups, and the audit
 // trail can stand alone in the System section.
 const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math", "security"];
+
+/** Section F1: jackpot centre — pools, seeds, shares, history. */
+function JackpotCentreCard({ enabled, canEdit }: { enabled: boolean; canEdit: boolean }) {
+  const { t } = useLang();
+  const centreQ = trpc.admin.getJackpotCentre.useQuery(undefined, { enabled, retry: false });
+  const historyQ = trpc.admin.getJackpotHistory.useQuery({ days: 7 }, { enabled, retry: false });
+  const [seeds, setSeeds] = useState<Record<string, string> | null>(null);
+  const [shares, setShares] = useState<Record<string, string> | null>(null);
+  const [adjust, setAdjust] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (centreQ.data && seeds === null) {
+      const s: Record<string, string> = {};
+      const sh: Record<string, string> = {};
+      for (const tier of centreQ.data.tiers) {
+        s[tier.tier] = String(tier.seed);
+        sh[tier.tier] = String(tier.sharePerMille);
+      }
+      setSeeds(s);
+      setShares(sh);
+    }
+  }, [centreQ.data, seeds]);
+
+  const cfgM = trpc.admin.updateJackpotConfig.useMutation({
+    onSuccess: async () => {
+      toast.success(t("jackpotCfgSaved"));
+      await centreQ.refetch();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const adjustM = trpc.admin.updateJackpot.useMutation({
+    onSuccess: async () => {
+      toast.success(t("jackpotUpdated"));
+      setAdjust({});
+      await centreQ.refetch();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const settingsM = trpc.admin.updateSettings.useMutation({
+    onSuccess: async () => {
+      await centreQ.refetch();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  if (centreQ.isLoading || !centreQ.data || !seeds || !shares) {
+    return (
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardContent className="pt-6 text-sm text-slate-500">{t("loading")}</CardContent>
+      </Card>
+    );
+  }
+  const centre = centreQ.data;
+
+  // Merge per-tier hourly series into chart rows by hour bucket.
+  const hourOf = (ts: number) => Math.floor(ts / 3600) * 3600;
+  const rowMap = new Map<number, any>();
+  for (const [tier, points] of Object.entries(historyQ.data ?? {})) {
+    for (const pt of points as Array<{ ts: number; amount: number }>) {
+      const h = hourOf(pt.ts);
+      if (!rowMap.has(h)) rowMap.set(h, { ts: h });
+      rowMap.get(h)[tier] = pt.amount;
+    }
+  }
+  const chartRows = [...rowMap.values()].sort((a, b) => a.ts - b.ts);
+
+  return (
+    <div className="space-y-5">
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Trophy className="h-4 w-4 text-amber-400" /> {t("jackpotCentre")}
+          </CardTitle>
+          <CardDescription className="text-slate-400">{t("jackpotCentreDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge variant="secondary" className="bg-slate-800 text-slate-300 border-slate-700">
+              {t("totalPools")}: {centre.totalCurrent.toLocaleString()} USDT
+            </Badge>
+            <Badge variant="secondary" className="bg-slate-800 text-slate-300 border-slate-700">
+              {t("totalContrib")}: {(centre.totalSharePerMille / 10).toFixed(1)}%
+            </Badge>
+            <label className="flex items-center gap-2 text-slate-400 ml-1">
+              <input
+                type="checkbox"
+                checked={centre.lowPoolAlert}
+                disabled={!canEdit}
+                onChange={(e) => settingsM.mutate({ entries: { jackpot_low_pool_alert: e.target.checked } })}
+                className="accent-amber-500"
+              />
+              {t("lowPoolAlertLbl")}
+            </label>
+          </div>
+
+          {centre.tiers.map((pool: any) => (
+            <div key={pool.tier} className="p-3 rounded-lg border border-slate-800 bg-slate-950/50 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} {t("jackpotWord")}</span>
+                <span className="text-lg font-mono text-slate-100">{pool.current.toLocaleString()} USDT</span>
+                {pool.belowSeed && centre.lowPoolAlert && (
+                  <Badge variant="secondary" className="bg-red-500/15 text-red-400 border-red-500/30">{t("belowSeed")}</Badge>
+                )}
+                <span className="flex-1" />
+                <span className="text-[11px] text-slate-500">
+                  {t("hitsLbl")}: {pool.hitCount}
+                  {pool.lastWonAt ? ` · ${t("lastWonLbl")}: ${new Date(pool.lastWonAt).toLocaleDateString()}` : ` · ${t("neverWon")}`}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
+                <div>
+                  <div className="text-[11px] text-slate-500 mb-1">{t("seedLbl")} (USDT)</div>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={seeds[pool.tier]}
+                    disabled={!canEdit}
+                    onChange={(e) => setSeeds({ ...seeds, [pool.tier]: e.target.value })}
+                    className="h-8 text-xs bg-slate-950 border-slate-700 font-mono"
+                  />
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 mb-1">{t("shareLbl")}</div>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={shares[pool.tier]}
+                    disabled={!canEdit}
+                    onChange={(e) => setShares({ ...shares, [pool.tier]: e.target.value })}
+                    className="h-8 text-xs bg-slate-950 border-slate-700 font-mono"
+                  />
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 mb-1">{t("adjustLbl")}</div>
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder={t("amountPlaceholder")}
+                    value={adjust[pool.tier] || ""}
+                    disabled={!canEdit}
+                    onChange={(e) => setAdjust({ ...adjust, [pool.tier]: e.target.value })}
+                    className="h-8 text-xs bg-slate-950 border-slate-700 font-mono"
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs border-slate-700"
+                  disabled={!canEdit || !adjust[pool.tier] || adjustM.isPending}
+                  onClick={() => {
+                    const val = parseFloat(adjust[pool.tier]);
+                    if (Number.isFinite(val) && val > 0) {
+                      adjustM.mutate({ tier: pool.tier as "mini" | "major" | "mega", amount: val });
+                    }
+                  }}
+                >
+                  {t("setPoolBtn")}
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {canEdit && (
+            <div className="flex items-center gap-3">
+              <Button
+                size="sm"
+                className="h-8 text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold"
+                disabled={cfgM.isPending}
+                onClick={() =>
+                  cfgM.mutate({
+                    seeds: {
+                      mini: parseFloat(seeds.mini) || 0,
+                      major: parseFloat(seeds.major) || 0,
+                      mega: parseFloat(seeds.mega) || 0,
+                    },
+                    shares: {
+                      mini: parseInt(shares.mini, 10) || 0,
+                      major: parseInt(shares.major, 10) || 0,
+                      mega: parseInt(shares.mega, 10) || 0,
+                    },
+                  })
+                }
+              >
+                {t("saveJackpotCfg")}
+              </Button>
+              <span className="text-[11px] text-slate-600">{t("jackpotCfgNote")}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-base">{t("poolHistory")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {chartRows.length > 1 ? (
+            <div className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartRows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis
+                    dataKey="ts"
+                    tick={{ fill: "#64748b", fontSize: 10 }}
+                    tickFormatter={(ts: number) => new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    minTickGap={60}
+                  />
+                  <YAxis tick={{ fill: "#64748b", fontSize: 10 }} width={48} domain={["auto", "auto"]} />
+                  <Tooltip
+                    contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ color: "#e2e8f0" }}
+                    labelFormatter={(ts: any) => new Date(Number(ts) * 1000).toLocaleString()}
+                  />
+                  <Line type="monotone" dataKey="mega" name="Mega" stroke="#f59e0b" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="major" name="Major" stroke="#94a3b8" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="mini" name="Mini" stroke="#d97706" dot={false} strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">{t("poolHistoryEmpty")}</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 const LAB_SYM_KEYS = [
   "sym_zeus", "sym_thunderbolt", "sym_pegasus", "sym_temple", "sym_harp",
@@ -828,7 +1056,6 @@ export default function Admin() {
     },
     onError: (err) => toast.error(err.message),
   });
-  const { data: jackpotPools, refetch: refetchJackpots } = trpc.jackpot.getPools.useQuery();
   const { data: pendingTxs, isLoading: txsLoading } = trpc.admin.listPendingTransactions.useQuery(undefined, {
     enabled: isAuthenticated && isAdmin,
     refetchInterval: 15000,
@@ -862,12 +1089,6 @@ export default function Admin() {
     { enabled: isAuthenticated && isAdmin && section === "payments", retry: false },
   );
 
-  const [jackpotAmount, setJackpotAmount] = useState<Record<string, string>>({
-    mini: "",
-    major: "",
-    mega: "",
-  });
-
   const updateRoleMutation = trpc.admin.updateUserRole.useMutation({
     onSuccess: async () => {
       toast.success(t("roleUpdated"));
@@ -875,16 +1096,6 @@ export default function Admin() {
     },
     onError: (err) => {
       toast.error(`${t("roleUpdateFailed")}: ${err.message}`);
-    },
-  });
-
-  const updateJackpotMutation = trpc.admin.updateJackpot.useMutation({
-    onSuccess: async () => {
-      toast.success(t("jackpotUpdated"));
-      await refetchJackpots();
-    },
-    onError: (err) => {
-      toast.error(`${t("jackpotUpdateFailed")}: ${err.message}`);
     },
   });
 
@@ -1948,46 +2159,11 @@ export default function Admin() {
           )}
 
           {section === "jackpots" && (
-            <Card className="bg-slate-900/80 border-slate-800">
-              <CardHeader>
-                <CardTitle>{t("jackpotControls")}</CardTitle>
-                <CardDescription className="text-slate-400">{t("jackpotControlsDesc")}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {jackpotPools?.map((pool) => (
-                  <div key={pool.tier} className="space-y-2 p-3 rounded-lg border border-slate-800 bg-slate-950/50">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} {t("jackpotWord")}</span>
-                      <span className="text-sm font-mono text-slate-300">{pool.amount} {(pool as any).currency ?? "USDT"}</span>
-                    </div>
-                    {isSuper && (<div className="flex gap-2">
-                      <Input
-                        type="number"
-                        placeholder={t("amountPlaceholder")}
-                        value={jackpotAmount[pool.tier] || ""}
-                        onChange={(e) => setJackpotAmount({ ...jackpotAmount, [pool.tier]: e.target.value })}
-                        className="h-8 text-xs bg-slate-900 border-slate-800"
-                      />
-                      <Button
-                        size="sm"
-                        className="h-8 text-xs bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold"
-                        onClick={() => {
-                          const val = parseFloat(jackpotAmount[pool.tier]);
-                          if (!val || val <= 0) return toast.error(t("errEnterPositive"));
-                          updateJackpotMutation.mutate({ tier: pool.tier as "mini" | "major" | "mega", amount: val });
-                        }}
-                      >
-                        {t("save")}
-                      </Button>
-                    </div>)}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+            <JackpotCentreCard enabled={isAuthenticated && isAdmin} canEdit={isSuper} />
           )}
 
           {section === "site" && (
-            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["site"]} titleKey="cfgGroup_site" canEdit={isSuper} />
+            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["site", "presentation"]} titleKey="cfgGroup_site" canEdit={isSuper} />
           )}
 
           {section === "risk" && placeholder}
