@@ -68,6 +68,10 @@ export const authLocalRouter = createRouter({
           .string()
           .regex(/^\+?\d{10,15}$/, "Phone must be 10-15 digits, optionally with +")
           .optional(),
+        // F3: 18+ confirmation is mandatory at registration.
+        ageConfirmed: z.literal(true, {
+          message: "You must confirm you are 18 or older to register",
+        }),
         password: z.string().min(8).max(128),
       }),
     )

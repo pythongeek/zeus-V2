@@ -77,6 +77,34 @@ export const balanceRouter = createRouter({
     }
   }),
 
+  // ===== F3: responsible-gaming limits =====
+
+  getLimits: authedQuery.query(async ({ ctx }) => {
+    const { getLimits, getUsage } = await import("../lib/limits");
+    return { limits: getLimits(ctx.user.id), usage: getUsage(ctx.user.id) };
+  }),
+
+  updateLimits: authedQuery
+    .input(
+      z.object({
+        depositLimitDaily: z.string().regex(/^\d+\.?\d*$/).nullable().optional(),
+        lossLimitDaily: z.string().regex(/^\d+\.?\d*$/).nullable().optional(),
+        sessionLimitMinutes: z.number().int().min(5).max(1440).nullable().optional(),
+        selfExcludeDays: z.number().int().min(1).max(3650).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { setLimits } = await import("../lib/limits");
+      const patch: Record<string, unknown> = {};
+      if (input.depositLimitDaily !== undefined) patch.depositLimitDaily = input.depositLimitDaily;
+      if (input.lossLimitDaily !== undefined) patch.lossLimitDaily = input.lossLimitDaily;
+      if (input.sessionLimitMinutes !== undefined) patch.sessionLimitMinutes = input.sessionLimitMinutes;
+      if (input.selfExcludeDays !== undefined) {
+        patch.selfExcludedUntil = Math.floor(Date.now() / 1000) + input.selfExcludeDays * 86400;
+      }
+      return setLimits(ctx.user.id, patch as any);
+    }),
+
   deposit: authedQuery
     .input(z.object({
       currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
@@ -88,6 +116,10 @@ export const balanceRouter = createRouter({
       const amount = parseFloat(input.amount);
 
       if (amount <= 0) throw new Error("Invalid amount");
+
+      // F3: self-exclusion + daily deposit limit gate every deposit.
+      const { assertDepositAllowed } = await import("../lib/limits");
+      assertDepositAllowed(ctx.user.id, input.currency, amount);
 
       // Generate deposit address (mock - in production, derive from HD wallet)
       const address = `0x${crypto.randomBytes(20).toString("hex")}`;

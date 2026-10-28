@@ -41,10 +41,15 @@ function AuthForm() {
       return;
     }
 
+    // F3: 18+ confirmation is required (server enforces it too).
+    if (fd.get("ageConfirmed") !== "on") {
+      toast.error(t("ageConfirmRequired"));
+      return;
+    }
     const isEmail = identifier.includes("@");
     const payload = isEmail
-      ? { name, email: identifier, password }
-      : { name, phone: identifier, password };
+      ? { name, email: identifier, password, ageConfirmed: true as const }
+      : { name, phone: identifier, password, ageConfirmed: true as const };
 
     try {
       await register.mutateAsync(payload);
@@ -163,6 +168,15 @@ function AuthForm() {
             </div>
             <p className="text-xs text-[#8A8AA0]">{t("secretHint")}</p>
           </div>
+          <label className="flex items-start gap-2 text-xs text-[#8A8AA0] cursor-pointer">
+            <input
+              type="checkbox"
+              name="ageConfirmed"
+              required
+              className="mt-0.5 accent-[#D4AF37]"
+            />
+            <span>{t("ageConfirmLabel")}</span>
+          </label>
           <Button
             type="submit"
             className="w-full bg-[#D4AF37] text-black hover:bg-[#F4D03F] font-semibold"
@@ -181,6 +195,11 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0A0A0F] px-4 relative">
       <div className="absolute top-4 right-4 z-10">
+        <div className="flex gap-4 text-xs text-[#8A8AA0]">
+          <a href="/terms" className="hover:text-[#D4AF37]">{t("termsTitle")}</a>
+          <a href="/privacy" className="hover:text-[#D4AF37]">{t("privacyTitle")}</a>
+          <a href="/responsible-gaming" className="hover:text-[#D4AF37]">{t("rgTitle")}</a>
+        </div>
         <LanguageToggle className="border-[#3A3A4A] bg-[#12121C] text-[#D4AF37] hover:bg-[#D4AF37]/10" />
       </div>
       <Card className="w-full max-w-md border-[#D4AF37]/30 bg-[#12121A]">

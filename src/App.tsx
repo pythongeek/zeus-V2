@@ -8,6 +8,10 @@ import { lazy, Suspense } from "react";
 const Login = lazy(() => import("./pages/Login"));
 const Admin = lazy(() => import("./pages/Admin"));
 const NotFound = lazy(() => import("./pages/NotFound"));
+// F3: legal pages (Terms / Privacy / Responsible Gaming).
+const TermsPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.TermsPage })));
+const PrivacyPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.PrivacyPage })));
+const ResponsibleGamingPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.ResponsibleGamingPage })));
 
 function App() {
   return (
@@ -17,6 +21,9 @@ function App() {
         <Route path="/" element={<Game />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/responsible-gaming" element={<ResponsibleGamingPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>

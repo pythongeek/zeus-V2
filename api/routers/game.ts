@@ -339,6 +339,9 @@ export const gameRouter = createRouter({
       if (!checkSpinPace(ctx.user.id)) {
         throw new Error("You are spinning too fast — please slow down");
       }
+      // F3: responsible-gaming gate (self-exclusion, loss cap, session).
+      const { assertSpinAllowed } = await import("../lib/limits");
+      assertSpinAllowed(ctx.user.id);
       const enabledCurrencies = getSetting<string[]>("currencies_enabled");
       if (
         Array.isArray(enabledCurrencies) &&

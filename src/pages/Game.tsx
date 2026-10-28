@@ -43,6 +43,147 @@ const BDT_RATES: Record<string, number> = {
   BDT: 1,
 };
 
+// F3: Responsible-gaming settings — limits + self-exclusion (server-enforced
+// by api/lib/limits.ts; this is only the player's control surface).
+function RgSettings() {
+  const { t } = useLang();
+  const utils = trpc.useUtils();
+  const limitsQuery = trpc.balance.getLimits.useQuery(undefined, {
+    staleTime: 30000,
+  });
+  const [dep, setDep] = useState("");
+  const [loss, setLoss] = useState("");
+  const [sess, setSess] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const data = limitsQuery.data;
+    if (data && !hydrated) {
+      setDep(data.limits.depositLimitDaily ?? "");
+      setLoss(data.limits.lossLimitDaily ?? "");
+      setSess(
+        data.limits.sessionLimitMinutes != null
+          ? String(data.limits.sessionLimitMinutes)
+          : "",
+      );
+      setHydrated(true);
+    }
+  }, [limitsQuery.data, hydrated]);
+
+  const update = trpc.balance.updateLimits.useMutation({
+    onSuccess: async () => {
+      toast.success(t("rgSaved"));
+      await utils.balance.getLimits.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const numOrNull = (v: string): string | null => {
+    const n = parseFloat(v);
+    return v.trim() !== "" && Number.isFinite(n) && n > 0 ? String(n) : null;
+  };
+
+  const handleSave = () => {
+    const sessNum = parseInt(sess, 10);
+    update.mutate({
+      depositLimitDaily: numOrNull(dep),
+      lossLimitDaily: numOrNull(loss),
+      sessionLimitMinutes:
+        sess.trim() !== "" && Number.isFinite(sessNum) ? sessNum : null,
+    });
+  };
+
+  const handleExclude = (days: number) => {
+    if (!window.confirm(t("rgSelfExcludeConfirm", { d: days }))) return;
+    update.mutate({ selfExcludeDays: days });
+  };
+
+  const data = limitsQuery.data;
+  const excludedUntil = data?.limits.selfExcludedUntil ?? 0;
+  const isExcluded = excludedUntil * 1000 > Date.now();
+
+  return (
+    <div className="bg-[#1A1A25] rounded-lg p-3 space-y-3">
+      <div className="text-sm font-semibold text-[#D4AF37]">{t("rgTitle")}</div>
+      {isExcluded ? (
+        <div className="text-xs text-red-400">
+          {t("rgExcludedUntil", {
+            date: new Date(excludedUntil * 1000).toLocaleDateString(),
+          })}
+        </div>
+      ) : (
+        <>
+          <label className="block">
+            <span className="text-xs text-[#9E9EAC]">{t("rgDepositLimit")}</span>
+            <Input
+              value={dep}
+              onChange={(e) => setDep(e.target.value)}
+              inputMode="decimal"
+              placeholder={t("rgNoLimit")}
+              className="bg-[#0A0A0F] border-[#2A2A35] text-white mt-1 h-8 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-[#9E9EAC]">{t("rgLossLimit")}</span>
+            <Input
+              value={loss}
+              onChange={(e) => setLoss(e.target.value)}
+              inputMode="decimal"
+              placeholder={t("rgNoLimit")}
+              className="bg-[#0A0A0F] border-[#2A2A35] text-white mt-1 h-8 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-[#9E9EAC]">{t("rgSessionLimit")}</span>
+            <Input
+              value={sess}
+              onChange={(e) => setSess(e.target.value)}
+              inputMode="numeric"
+              placeholder={t("rgNoLimit")}
+              className="bg-[#0A0A0F] border-[#2A2A35] text-white mt-1 h-8 text-sm"
+            />
+          </label>
+          {data && (
+            <div className="text-xs text-[#5E5E6E]">
+              {t("rgUsageToday", {
+                dep: data.usage.depositsTodayUsdt.toFixed(2),
+                loss: Math.max(0, data.usage.netLossTodayUsdt).toFixed(2),
+              })}
+            </div>
+          )}
+          <p className="text-xs text-[#5E5E6E]">{t("rgLimitsNote")}</p>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={update.isPending}
+            className="bg-[#D4AF37] text-black hover:bg-[#F4D03F] font-semibold w-full"
+          >
+            {t("rgSave")}
+          </Button>
+          <div className="border-t border-[#2A2A35] pt-3">
+            <div className="text-xs text-[#9E9EAC] mb-1">{t("rgSelfExclude")}</div>
+            <p className="text-xs text-[#5E5E6E] mb-2">{t("rgSelfExcludeDesc")}</p>
+            <div className="flex gap-2">
+              {[7, 30, 180].map((d) => (
+                <Button
+                  key={d}
+                  size="sm"
+                  variant="outline"
+                  disabled={update.isPending}
+                  onClick={() => handleExclude(d)}
+                  className="border-red-500/40 text-red-400 hover:bg-red-500/10 text-xs"
+                >
+                  {t("rgDays", { d })}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Game() {
   const store = useGameStore();
   const { t, num } = useLang();
@@ -1321,6 +1462,7 @@ for (let i = 0; i < 5; i++) {
                 Primary: {store.activeCurrency} | BDT shown as equivalent
               </div>
             </div>
+            <RgSettings />
           </div>
         </DialogContent>
       </Dialog>

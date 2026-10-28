@@ -29,6 +29,11 @@ const USER_FACING_EXACT = new Set([
   "Currency not enabled",
   "Too many attempts — please wait a few minutes and try again",
   "You are spinning too fast — please slow down",
+  "Daily deposit limit reached",
+  "Daily loss limit reached — spinning is paused until tomorrow",
+  "Session limit reached — please take a break",
+  "Self-exclusion cannot be shortened or cancelled early",
+  "You must confirm you are 18 or older to register",
   "Unable to register from this client — please use a regular browser",
   "Withdrawal below minimum",
   "Withdrawal above maximum",
@@ -38,6 +43,7 @@ const USER_FACING_EXACT = new Set([
   "User balance row missing",
 ]);
 const USER_FACING_PREFIXES = [
+  "Your account is self-excluded until",
   "Bet must be between ",
   "Transaction is ",
   "Locked balance ",
