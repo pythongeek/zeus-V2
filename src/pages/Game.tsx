@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router";
 import { useGameStore } from "@/stores/gameStore";
 import { useAuth } from "@/hooks/useAuth";
 import { trpc } from "@/providers/trpc";
@@ -26,6 +27,7 @@ import {
   TrendingUp,
   Gift,
   Sparkles,
+  LogOut,
 } from "lucide-react";
 
 
@@ -263,10 +265,11 @@ function RgSettings() {
 export default function Game() {
   const store = useGameStore();
   const { t, num, lang } = useLang();
-  const { isAuthenticated } = useAuth({
+  const { isAuthenticated, user, logout } = useAuth({
     redirectOnUnauthenticated: true,
     redirectPath: "/login",
   });
+  const navigate = useNavigate();
   const [reelSymbols, setReelSymbols] = useState<string[][]>([
     ["ace", "king", "queen"],
     ["shield", "helmet", "amphora"],
@@ -1670,6 +1673,40 @@ for (let i = 0; i < 5; i++) {
               </div>
             </div>
             <RgSettings />
+            {/* P0.1: account actions — until now a signed-in player had
+                NO way to sign out of the game at all. */}
+            {user && (
+              <div className="bg-[#1A1A25] rounded-lg p-3 space-y-3">
+                <div>
+                  <div className="text-xs text-[#5E5E6E]">{t("signedInAs")}</div>
+                  <div className="text-sm text-white mt-0.5 truncate">
+                    {user.name} <span className="text-[#9E9EAC]">· {user.email}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  {(user.role === "admin" || user.role === "super_admin") && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 border-[#D4AF37]/50 text-[#D4AF37] hover:bg-[#D4AF37]/10"
+                      onClick={() => { store.setShowSettings(false); navigate("/admin"); }}
+                    >
+                      <Shield className="w-4 h-4 mr-2" />
+                      {t("adminPanel")}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 border-[#2A2A35] text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                    onClick={() => logout()}
+                  >
+                    <LogOut className="w-4 h-4 mr-2" />
+                    {t("signOut")}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
