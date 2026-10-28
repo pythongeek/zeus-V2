@@ -29,6 +29,13 @@ import {
 } from "lucide-react";
 
 
+const CURRENCY_NAMES: Record<string, string> = {
+  BTC: "Bitcoin (BTC)",
+  ETH: "Ethereum (ETH)",
+  USDT: "Tether (USDT)",
+  BDT: "Bangladesh Taka (BDT)",
+};
+
 const CURRENCY_SYMBOLS: Record<string, string> = {
   BTC: "\u20BF",
   ETH: "\u039E",
@@ -220,7 +227,7 @@ function RgSettings() {
 
 export default function Game() {
   const store = useGameStore();
-  const { t, num } = useLang();
+  const { t, num, lang } = useLang();
   const { isAuthenticated } = useAuth({
     redirectOnUnauthenticated: true,
     redirectPath: "/login",
@@ -438,6 +445,10 @@ export default function Game() {
     const cfg = configQuery.data as Record<string, any> | undefined;
     if (!cfg) return;
     store.setConfig(cfg);
+    const enabledList = cfg.currencies_enabled as string[] | undefined;
+    if (Array.isArray(enabledList) && enabledList.length > 0 && !enabledList.includes(store.activeCurrency)) {
+      store.setActiveCurrency(enabledList[0] as any);
+    }
     const patch: Record<string, number> = {};
     if (typeof cfg.min_bet === "string") patch.minBet = parseFloat(cfg.min_bet);
     if (typeof cfg.max_bet === "string") patch.maxBet = parseFloat(cfg.max_bet);
@@ -652,7 +663,7 @@ export default function Game() {
       const cur = store.activeCurrency;
       const rate = BDT_RATES[cur] || 1;
       const amountText = (n: number) => `${CURRENCY_SYMBOLS[cur]}${n.toFixed(4)}`;
-      const bdtText = (n: number) => `৳${(n * rate).toLocaleString("bn-BD")}`;
+      const bdtText = (n: number) => `৳${(n * rate).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}`;
       const ratio = store.betAmount > 0 ? winAmount / store.betAmount : 0;
       // D3: celebration thresholds + the on/off switch come from admin
       // config (B2). Defaults (50x big / 100x mega) match the shipped
@@ -780,6 +791,14 @@ export default function Game() {
   const activeBalance = store.balances.find(b => b.currency === store.activeCurrency);
   const bdtEquivalent = activeBalance ? activeBalance.available * (BDT_RATES[store.activeCurrency] || 1) : 0;
 
+  // U2: only currencies the admin actually enabled may be offered (BTC/ETH
+  // were hardcoded in the selector while the server rejects them), and BDT
+  // amounts are grouped for the active language with digits converted by
+  // num() — previously the jackpot sub-line divided by 1e6 ("0.0M") and
+  // BDT lines ignored the UI language.
+  const enabledCurrencies = ((store.config?.currencies_enabled as string[] | undefined) ?? ["USDT", "BDT"]).filter((c) => c in CURRENCY_NAMES);
+  const fmtBdt = (n: number) => num(n.toLocaleString(lang === "bn" ? "bn-BD" : "en-US", { maximumFractionDigits: 0 }));
+
   return (
     <div className="min-h-screen bg-[#0A0A0F] text-white overflow-hidden relative">
       {/* Lightning flash overlay */}
@@ -810,54 +829,58 @@ export default function Game() {
         ))}
       </div>
 
-      {/* Header */}
-      <header className="relative z-40 flex items-center justify-between px-4 py-3 bg-[#0A0A0F]/90 backdrop-blur-xl border-b border-[#2A2A35]">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Zap className="w-7 h-7 text-[#D4AF37]" />
-            <span className="text-xl font-bold tracking-wider text-[#D4AF37]" style={{ fontFamily: "Cinzel, serif" }}>
-              THUNDER
-            </span>
+      {/* Header — U2: sticky and responsive. On phones it wraps into
+          two tidy rows so the balance and wallet are ALWAYS visible and
+          reachable (previously one rigid desktop row pushed them
+          off-screen); on desktop it stays a single polished bar. */}
+      <header className="sticky top-0 z-40 bg-[#0A0A0F]/95 backdrop-blur-xl border-b border-[#2A2A35]">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5">
+        <div className="flex items-center gap-2.5 mr-auto">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#F4D03F] via-[#D4AF37] to-[#996E20] flex items-center justify-center shadow-[0_0_18px_rgba(212,175,55,0.35)] shrink-0">
+            <Zap className="w-5 h-5 text-black" fill="currentColor" />
           </div>
-          <Badge variant="outline" className="bg-green-500/10 border-green-500/30 text-green-400 text-xs">
+          <span className="text-lg sm:text-xl font-bold tracking-wider text-white whitespace-nowrap" style={{ fontFamily: "Cinzel, serif" }}>
+            ZEUS <span className="text-[#D4AF37]">THUNDER</span>
+          </span>
+          <Badge variant="outline" className="hidden md:inline-flex bg-green-500/10 border-green-500/30 text-green-400 text-xs">
             <Shield className="w-3 h-3 mr-1" />
             {t("fairBadge")}
           </Badge>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <LanguageToggle className="border-[#2A2A35] bg-[#1A1A25] text-[#D4AF37] hover:bg-[#D4AF37]/10" />
           {/* Currency selector */}
           <select
             value={store.activeCurrency}
             onChange={(e) => store.setActiveCurrency(e.target.value as any)}
-            className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#D4AF37]"
+            className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-[#D4AF37] max-w-[148px] sm:max-w-none"
           >
-            <option value="BTC">Bitcoin (BTC)</option>
-            <option value="ETH">Ethereum (ETH)</option>
-            <option value="USDT">Tether (USDT)</option>
-            <option value="BDT">Bangladesh Taka (BDT)</option>
+            {enabledCurrencies.map((c) => (
+              <option key={c} value={c}>{CURRENCY_NAMES[c]}</option>
+            ))}
           </select>
 
-          {/* Balance */}
-          <div className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-4 py-2 text-right">
-            <div className="text-sm font-mono font-semibold text-white">
-              {CURRENCY_SYMBOLS[store.activeCurrency]}{num(activeBalance?.available.toFixed(4) || "0.0000")}
+          {/* Balance pill — amount first, BDT equivalent under it, and
+              the wallet action as the gold button inside the pill so it
+              can never be pushed off-screen on a phone. */}
+          <div className="flex items-center gap-2.5 bg-gradient-to-b from-[#1E1E2A] to-[#14141E] border border-[#D4AF37]/35 rounded-xl pl-3 pr-1.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+            <div className="text-right leading-tight">
+              <div className="text-sm font-mono font-bold text-white whitespace-nowrap">
+                <span className="text-[#D4AF37] text-[11px] font-sans font-bold mr-1">{store.activeCurrency}</span>{num(activeBalance?.available.toFixed(2) || "0.00")}
+              </div>
+              <div className="text-[11px] text-[#9E9EAC] whitespace-nowrap">≈ ৳{fmtBdt(bdtEquivalent)}</div>
             </div>
-            <div className="text-xs text-[#5E5E6E]">
-              ৳{bdtEquivalent.toLocaleString("bn-BD")}
-            </div>
+            <button
+              onClick={() => store.setShowWallet(true)}
+              aria-label={t("wallet")}
+              className="w-8 h-8 rounded-lg bg-[#D4AF37] text-black flex items-center justify-center hover:bg-[#F4D03F] shrink-0"
+            >
+              <Wallet className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Buttons */}
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => store.setShowWallet(true)}
-            className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 hover:border-[#D4AF37]"
-          >
-            <Wallet className="w-4 h-4 text-[#D4AF37]" />
-          </Button>
           <Button
             variant="outline"
             size="icon"
@@ -874,6 +897,7 @@ export default function Game() {
           >
             <Settings className="w-4 h-4" />
           </Button>
+        </div>
         </div>
       </header>
 
@@ -893,30 +917,30 @@ export default function Game() {
       {/* Main Game Area */}
       <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">
         {/* Jackpot Meters */}
-        <div className="flex gap-6 mb-6">
+        <div className="flex gap-2 sm:gap-4 mb-4 sm:mb-6 w-full max-w-[900px]">
           {((store.config?.features?.jackpots ?? true) ? store.jackpots : []).map((jp) => (
             <div
               key={jp.tier}
-              className={`px-5 py-2 rounded-lg border bg-[#1A1A25]/80 backdrop-blur ${
-                jp.tier === "mega" ? "border-[#D4AF37]" :
+              className={`flex-1 px-2 sm:px-5 py-2 rounded-xl border bg-[#1A1A25]/80 backdrop-blur text-center ${
+                jp.tier === "mega" ? "border-[#D4AF37] shadow-[0_0_24px_rgba(212,175,55,0.15)]" :
                 jp.tier === "major" ? "border-[#C0C0C0]" : "border-[#CD7F32]"
               }`}
             >
-              <div className="text-xs uppercase tracking-wider text-[#5E5E6E]">{jp.tier}</div>
-              <div className="text-lg font-mono font-bold text-[#D4AF37]">
+              <div className="text-[10px] sm:text-xs uppercase tracking-wider text-[#9E9EAC]">{jp.tier}</div>
+              <div className="text-sm sm:text-lg font-mono font-bold text-[#D4AF37] whitespace-nowrap">
                 {num(jp.amount.toFixed(2))} {jp.currency ?? "USDT"}
               </div>
-              <div className="text-xs text-[#5E5E6E]">৳{(jp.bdtEquivalent / 1000000).toFixed(1)}M</div>
+              <div className="text-[11px] sm:text-xs text-[#9E9EAC] whitespace-nowrap">৳{fmtBdt(jp.bdtEquivalent)}</div>
             </div>
           ))}
         </div>
 
         {/* Game Title */}
         <div className="text-center mb-4">
-          <h1 className="text-3xl font-bold text-[#D4AF37] tracking-widest" style={{ fontFamily: "Cinzel, serif" }}>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#D4AF37] tracking-widest" style={{ fontFamily: "Cinzel, serif" }}>
             ZEUS THUNDER
           </h1>
-          <p className="text-xs text-[#5E5E6E] tracking-widest mt-1">{t("tagline")}</p>
+          <p className="text-xs text-[#B8B8C8] tracking-widest mt-1">{t("tagline")}</p>
         </div>
 
         {/* Zeus Character (decorative) */}
@@ -977,7 +1001,7 @@ export default function Game() {
               +{CURRENCY_SYMBOLS[store.activeCurrency]}{displayedWin.toFixed(4)}
             </div>
             <div className="text-sm text-[#5E5E6E]">
-              ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString("bn-BD")}
+              ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
             </div>
           </div>
         )}
@@ -998,9 +1022,10 @@ export default function Game() {
                   >
                     ½
                   </Button>
-                  <div className="bg-[#0A0A0F] border border-[#2A2A35] rounded-lg px-4 py-2 min-w-[120px] text-center">
-                    <span className="font-mono font-semibold text-white">
-                      {CURRENCY_SYMBOLS[store.activeCurrency]}{num(store.betAmount.toFixed(2))}
+                  <div className="flex items-baseline justify-center gap-1.5 bg-[#0A0A0F] border border-[#2A2A35] rounded-lg px-3 py-2 min-w-[128px]">
+                    <span className="text-[10px] font-bold tracking-wider text-[#D4AF37]">{store.activeCurrency}</span>
+                    <span className="font-mono font-semibold text-white whitespace-nowrap">
+                      {num(store.betAmount.toFixed(2))}
                     </span>
                   </div>
                   <Button
@@ -1077,11 +1102,12 @@ export default function Game() {
               </div>
 
               {/* Main Spin Button */}
+              <div className="flex flex-col items-center gap-1">
               <button
                 id="spin-btn"
                 onClick={handleSpin}
                 disabled={store.gameState === "spinning"}
-                className={`relative w-20 h-20 rounded-full transition-all duration-200 ${
+                className={`relative w-[84px] h-[84px] sm:w-24 sm:h-24 rounded-full transition-all duration-200 ${
                   store.gameState === "spinning"
                     ? "opacity-70 scale-95 cursor-not-allowed"
                     : "hover:scale-105 hover:shadow-[0_0_30px_rgba(212,175,55,0.5)] active:scale-95"
@@ -1096,6 +1122,8 @@ export default function Game() {
                   draggable={false}
                 />
               </button>
+              <span className="text-[10px] font-bold tracking-[0.3em] text-[#D4AF37]">{t("spinAlt")}</span>
+              </div>
             </div>
 
             {/* Info Buttons */}
@@ -1126,7 +1154,7 @@ export default function Game() {
       {new URLSearchParams(window.location.search).has("debug") && (
         <div className="fixed bottom-2 left-2 z-[70] flex gap-1">
           {(["big", "mega", "jackpot"] as const).map((tier) => (
-            <button key={tier} onClick={() => setCelebration({ tier, title: tier === "big" ? t("bigWin") : tier === "mega" ? t("megaWin") : t("jackpotWin"), amount: 123.4567, amountText: (n: number) => `USDT${n.toFixed(2)}`, bdtText: (n: number) => `৳${n.toLocaleString("bn-BD")}` })} className="px-2 py-1 text-[10px] rounded bg-slate-800 text-slate-300 border border-slate-600">
+            <button key={tier} onClick={() => setCelebration({ tier, title: tier === "big" ? t("bigWin") : tier === "mega" ? t("megaWin") : t("jackpotWin"), amount: 123.4567, amountText: (n: number) => `USDT${n.toFixed(2)}`, bdtText: (n: number) => `৳${n.toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}` })} className="px-2 py-1 text-[10px] rounded bg-slate-800 text-slate-300 border border-slate-600">
               {tier}
             </button>
           ))}
@@ -1177,7 +1205,7 @@ export default function Game() {
               {CURRENCY_SYMBOLS[store.activeCurrency]}{displayedWin.toFixed(4)}
             </div>
             <div className="text-lg text-[#5E5E6E]">
-              ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString("bn-BD")}
+              ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
             </div>
             <Button
               onClick={closeBigWin}
@@ -1343,7 +1371,7 @@ for (let i = 0; i < 5; i++) {
                 <div>
                   <div className="text-sm font-semibold text-white">{balance.currency}</div>
                   <div className="text-xs text-[#5E5E6E]">
-                    ৳{(balance.available * (BDT_RATES[balance.currency] || 1)).toLocaleString("bn-BD")}
+                    ৳{(balance.available * (BDT_RATES[balance.currency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
                   </div>
                 </div>
                 <div className="text-right">
