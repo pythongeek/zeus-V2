@@ -117,13 +117,27 @@ export function toUsdt(amount: number, currency: string): number {
   return (amount * bdtPerUnit) / usdtRate;
 }
 
+/**
+ * Epoch-seconds SQL expression for a timestamp column whose storage
+ * shape varies by era: newer drizzle writes are integer epochs,
+ * while the original tables store 'YYYY-MM-DD HH:MM:SS' text
+ * (CURRENT_TIMESTAMP defaults). A bare `created_at >= ?` comparison
+ * against a TEXT column applies TEXT affinity to the bound integer
+ * and degenerates into a lexicographic compare that matches every
+ * row — the daily tallies below silently counted all-time rows
+ * until this normalizer was added (found in Section B, 2026-10-29).
+ */
+export function tsSec(col: string): string {
+  return `CASE WHEN typeof(${col}) IN ('integer', 'real') THEN ${col} WHEN strftime('%s', ${col}) IS NOT NULL THEN CAST(strftime('%s', ${col}) AS INTEGER) ELSE CAST(${col} AS REAL) END`;
+}
+
 export function todaysDepositsUsdt(userId: number): number {
   const db = getSqliteClient();
   const rows = db
     .prepare(
       `SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
        WHERE user_id = ? AND type = 'deposit' AND status IN ('pending', 'confirmed')
-         AND created_at >= ?
+         AND ${tsSec("created_at")} >= ?
        GROUP BY currency`,
     )
     .all(userId, dhakaDayStartSec()) as any[];
@@ -138,7 +152,7 @@ export function todaysNetLossUsdt(userId: number): number {
               SUM(CAST(bet_amount AS REAL)) AS wagered,
               SUM(CAST(win_amount AS REAL)) AS won
        FROM spins
-       WHERE user_id = ? AND is_free_spin = 0 AND created_at >= ?
+       WHERE user_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} >= ?
        GROUP BY currency`,
     )
     .all(userId, dhakaDayStartSec()) as any[];

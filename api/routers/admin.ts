@@ -4,7 +4,7 @@ import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances, playerNotes } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getAllSettings, getSetting, setSetting } from "../lib/settings";
-import { toUsdt, getLimits, getUsage } from "../lib/limits";
+import { toUsdt, getLimits, getUsage, dhakaDayStartSec, tsSec } from "../lib/limits";
 import { hashPassword } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
@@ -84,6 +84,218 @@ export const adminRouter = createRouter({
       lastSignInAt: u.lastSignInAt,
       createdAt: u.createdAt,
     }));
+  }),
+
+  // ===== Section B: dashboard & analytics =====
+
+  // B1: range-aware business analytics. Ranges are Dhaka calendar
+  // days (today / last 7 / last 30 / all time / custom dates).
+  // Timestamp columns have mixed storage history (integer epochs
+  // from drizzle, text CURRENT_TIMESTAMP defaults on some tables),
+  // so every comparison goes through a normalizing expression.
+  getAnalytics: adminQuery
+    .input(z.object({
+      range: z.enum(["today", "7d", "30d", "all", "custom"]).default("30d"),
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }))
+    .query(async ({ input }) => {
+      const sqlite = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
+      let fromSec = 0;
+      let toSec = nowSec + 1;
+      if (input.range === "today") {
+        fromSec = dhakaDayStartSec(nowSec);
+      } else if (input.range === "7d") {
+        fromSec = dhakaDayStartSec(nowSec) - 6 * 86400;
+      } else if (input.range === "30d") {
+        fromSec = dhakaDayStartSec(nowSec) - 29 * 86400;
+      } else if (input.range === "custom" && input.from && input.to) {
+        fromSec = Math.floor(Date.parse(`${input.from}T00:00:00Z`) / 1000) - 6 * 3600;
+        toSec = Math.floor(Date.parse(`${input.to}T00:00:00Z`) / 1000) - 6 * 3600 + 86400;
+      }
+      const TS = (col: string) => tsSec(col);
+
+      const signups = sqlite
+        .prepare(`SELECT COUNT(*) AS n FROM users WHERE ${TS('"createdAt"')} >= ? AND ${TS('"createdAt"')} < ?`)
+        .get(fromSec, toSec) as any;
+
+      const spinRows = sqlite
+        .prepare(
+          `SELECT currency, SUM(CAST(bet_amount AS REAL)) AS wagered, SUM(CAST(win_amount AS REAL)) AS won, COUNT(*) AS n
+           FROM spins WHERE ${TS("created_at")} >= ? AND ${TS("created_at")} < ? GROUP BY currency`,
+        )
+        .all(fromSec, toSec) as any[];
+      let wageredUsdt = 0;
+      let wonUsdt = 0;
+      let spinsCount = 0;
+      for (const r of spinRows) {
+        wageredUsdt += toUsdt(r.wagered || 0, r.currency);
+        wonUsdt += toUsdt(r.won || 0, r.currency);
+        spinsCount += r.n || 0;
+      }
+
+      const txRows = sqlite
+        .prepare(
+          `SELECT type, currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
+           WHERE status = 'confirmed' AND ${TS("created_at")} >= ? AND ${TS("created_at")} < ?
+           GROUP BY type, currency`,
+        )
+        .all(fromSec, toSec) as any[];
+      let depositsUsdt = 0;
+      let withdrawalsUsdt = 0;
+      for (const r of txRows) {
+        if (r.type === "deposit") depositsUsdt += toUsdt(r.total || 0, r.currency);
+        else withdrawalsUsdt += toUsdt(r.total || 0, r.currency);
+      }
+
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      return {
+        fromSec,
+        toSec,
+        signups: signups?.n ?? 0,
+        spinsCount,
+        wageredUsdt: round2(wageredUsdt),
+        wonUsdt: round2(wonUsdt),
+        ggrUsdt: round2(wageredUsdt - wonUsdt),
+        actualRtp: wageredUsdt > 0 ? Math.round((wonUsdt / wageredUsdt) * 10000) / 100 : null,
+        theoreticalRtp: getSetting<number>("rtp_declared") ?? 96,
+        depositsUsdt: round2(depositsUsdt),
+        withdrawalsUsdt: round2(withdrawalsUsdt),
+        netCashflowUsdt: round2(depositsUsdt - withdrawalsUsdt),
+      };
+    }),
+
+  // B2: daily cashflow for the last N Dhaka days (zero-filled).
+  getCashflowSeries: adminQuery
+    .input(z.object({ days: z.number().min(7).max(90).default(30) }))
+    .query(async ({ input }) => {
+      const sqlite = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
+      const todayStart = dhakaDayStartSec(nowSec);
+      const startSec = todayStart - (input.days - 1) * 86400;
+      const TS = tsSec("created_at");
+      const rows = sqlite
+        .prepare(
+          `SELECT CAST((${TS} + 21600) / 86400 AS INTEGER) AS bucket, type, currency,
+                  SUM(CAST(amount AS REAL)) AS total
+           FROM transactions
+           WHERE status = 'confirmed' AND ${TS} >= ?
+           GROUP BY bucket, type, currency`,
+        )
+        .all(startSec) as any[];
+      const byBucket = new Map<number, { deposits: number; withdrawals: number }>();
+      for (const r of rows) {
+        const cur = byBucket.get(r.bucket) ?? { deposits: 0, withdrawals: 0 };
+        const v = toUsdt(r.total || 0, r.currency);
+        if (r.type === "deposit") cur.deposits += v;
+        else cur.withdrawals += v;
+        byBucket.set(r.bucket, cur);
+      }
+      const series = [];
+      for (let i = 0; i < input.days; i++) {
+        const dayStart = startSec + i * 86400;
+        const bucket = Math.floor((dayStart + 21600) / 86400);
+        const v = byBucket.get(bucket) ?? { deposits: 0, withdrawals: 0 };
+        series.push({
+          date: new Date((dayStart + 21600) * 1000).toISOString().slice(0, 10),
+          deposits: Math.round(v.deposits * 100) / 100,
+          withdrawals: Math.round(v.withdrawals * 100) / 100,
+        });
+      }
+      return series;
+    }),
+
+  // B3: top players for the range — most wagered, biggest net
+  // losses, and the single biggest win.
+  getTopPlayers: adminQuery
+    .input(z.object({ range: z.enum(["7d", "30d", "all"]).default("30d") }))
+    .query(async ({ input }) => {
+      const sqlite = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
+      const fromSec =
+        input.range === "all" ? 0 : dhakaDayStartSec(nowSec) - (input.range === "7d" ? 6 : 29) * 86400;
+      const TS = tsSec("s.created_at");
+      const rows = sqlite
+        .prepare(
+          `SELECT s.user_id AS userId, u.name, u.email, s.currency,
+                  SUM(CAST(s.bet_amount AS REAL)) AS wagered, SUM(CAST(s.win_amount AS REAL)) AS won
+           FROM spins s JOIN users u ON u.id = s.user_id
+           WHERE u.role = 'user' AND ${TS} >= ?
+           GROUP BY s.user_id, s.currency`,
+        )
+        .all(fromSec) as any[];
+      const byUser = new Map<number, { userId: number; name: string; email: string; wagered: number; won: number }>();
+      for (const r of rows) {
+        const cur = byUser.get(r.userId) ?? { userId: r.userId, name: r.name, email: r.email, wagered: 0, won: 0 };
+        cur.wagered += toUsdt(r.wagered || 0, r.currency);
+        cur.won += toUsdt(r.won || 0, r.currency);
+        byUser.set(r.userId, cur);
+      }
+      const players = [...byUser.values()].map((p) => ({
+        ...p,
+        wagered: Math.round(p.wagered * 100) / 100,
+        won: Math.round(p.won * 100) / 100,
+        net: Math.round((p.wagered - p.won) * 100) / 100,
+      }));
+      const biggestWinRow = sqlite
+        .prepare(
+          `SELECT s.id, s.user_id AS userId, u.name, u.email, s.currency,
+                  CAST(s.win_amount AS REAL) AS win, CAST(s.bet_amount AS REAL) AS bet, s.created_at AS createdAt
+           FROM spins s JOIN users u ON u.id = s.user_id
+           WHERE u.role = 'user' AND ${TS} >= ?
+           ORDER BY CAST(s.win_amount AS REAL) DESC LIMIT 1`,
+        )
+        .get(fromSec) as any;
+      return {
+        byWagered: [...players].sort((a, b) => b.wagered - a.wagered).slice(0, 10),
+        byNetLoss: [...players].sort((a, b) => b.net - a.net).slice(0, 10),
+        biggestWin: biggestWinRow
+          ? {
+              spinId: biggestWinRow.id, userId: biggestWinRow.userId, name: biggestWinRow.name,
+              email: biggestWinRow.email, currency: biggestWinRow.currency,
+              win: biggestWinRow.win, bet: biggestWinRow.bet, createdAt: biggestWinRow.createdAt,
+            }
+          : null,
+      };
+    }),
+
+  // B4: money position right now — what the house owes, what is
+  // locked for payouts, and what sits in the jackpot pools.
+  getMoneyPosition: adminQuery.query(async () => {
+    const db = getDb();
+    const bals = await db.select().from(balances);
+    let availableUsdt = 0;
+    let lockedUsdt = 0;
+    const byCurrency: Record<string, { available: string; locked: string }> = {};
+    for (const b of bals) {
+      availableUsdt += toUsdt(parseFloat(b.available || "0"), b.currency);
+      lockedUsdt += toUsdt(parseFloat(b.locked || "0"), b.currency);
+      byCurrency[b.currency] = { available: b.available, locked: b.locked };
+    }
+    const pools = await db.select().from(jackpotPool);
+    let poolsUsdt = 0;
+    for (const p of pools) poolsUsdt += parseFloat(p.currentAmount || "0");
+    const pendingRows = await db
+      .select()
+      .from(transactions)
+      .where(and(
+        eq(transactions.type, "withdrawal"),
+        inArray(transactions.status, ["pending", "confirming"]),
+      ));
+    let pendingOutUsdt = 0;
+    for (const t of pendingRows) pendingOutUsdt += toUsdt(parseFloat(t.amount || "0"), t.currency);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    return {
+      availableUsdt: round2(availableUsdt),
+      lockedUsdt: round2(lockedUsdt),
+      liabilitiesUsdt: round2(availableUsdt + lockedUsdt),
+      poolsUsdt: round2(poolsUsdt),
+      pools: pools.map((p) => ({ tier: p.tier, currentAmount: p.currentAmount })),
+      pendingWithdrawalsCount: pendingRows.length,
+      pendingWithdrawalsUsdt: round2(pendingOutUsdt),
+      byCurrency,
+    };
   }),
 
   // ===== Section C: player management 360 =====

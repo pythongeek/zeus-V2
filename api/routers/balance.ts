@@ -199,7 +199,7 @@ export const balanceRouter = createRouter({
 
       // D4: operator daily withdrawal cap + auto-hold when a
       // withdrawal dwarfs the player's lifetime deposits.
-      const { toUsdt, dhakaDayStartSec } = await import("../lib/limits");
+      const { toUsdt, dhakaDayStartSec, tsSec } = await import("../lib/limits");
       const { getSqliteClient } = await import("../queries/connection");
       const sqlite = getSqliteClient();
       const amountUsdt = toUsdt(parseFloat(input.amount), input.currency);
@@ -209,7 +209,7 @@ export const balanceRouter = createRouter({
           .prepare(
             `SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
              WHERE user_id = ? AND type = 'withdrawal' AND status IN ('pending', 'confirming', 'confirmed')
-               AND created_at >= ?
+               AND ${tsSec("created_at")} >= ?
              GROUP BY currency`,
           )
           .all(ctx.user.id, dhakaDayStartSec()) as any[];
