@@ -990,10 +990,15 @@ export default function Game() {
           {store.config.announcement}
         </div>
       ) : null}
+      {store.config?.promo_text ? (
+        <div className="relative z-20 bg-[#14141D] text-[#D4AF37] text-center text-sm font-medium px-4 py-2 border-b border-[#D4AF37]/30">
+          {store.config.promo_text}
+        </div>
+      ) : null}
       {store.config?.maintenance_mode ? (
         <div className="fixed inset-0 z-50 bg-[#0A0A0F]/95 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-3xl font-bold text-[#D4AF37]">{t("maintenanceTitle")}</div>
-          <p className="text-[#B8B8C8] max-w-md">{t("maintenanceBody")}</p>
+          <p className="text-[#B8B8C8] max-w-md">{store.config?.maintenance_message ? store.config.maintenance_message : t("maintenanceBody")}</p>
         </div>
       ) : null}
 

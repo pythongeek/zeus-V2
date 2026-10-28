@@ -1313,6 +1313,101 @@ export const adminRouter = createRouter({
       return publishMathBundle(ctx, bundle, `Rollback to version #${row.id}`);
     }),
 
+  /* ================= Section F1: jackpot centre ================= */
+  getJackpotCentre: adminQuery.query(async () => {
+    const db = getDb();
+    const pools = await db.select().from(jackpotPool);
+    const seeds = getSetting<Record<string, string>>("jackpot_seeds") ?? {};
+    const shares = getSetting<Record<string, number>>("jackpot_shares") ?? {};
+    const tiers = pools.map((p) => {
+      const seed = parseFloat(seeds[p.tier] ?? p.seedAmount);
+      const current = parseFloat(p.currentAmount);
+      return {
+        tier: p.tier,
+        current,
+        seed,
+        sharePerMille: shares[p.tier] ?? 0,
+        hitCount: p.hitCount,
+        lastWonAt: (p as any).lastWonAt ?? null,
+        lastWonBy: (p as any).lastWonBy ?? null,
+        belowSeed: current < seed,
+      };
+    });
+    // Stable display order: mini, major, mega.
+    const order = ["mini", "major", "mega"];
+    tiers.sort((a, b) => order.indexOf(a.tier) - order.indexOf(b.tier));
+    return {
+      tiers,
+      totalCurrent: tiers.reduce((s, t) => s + t.current, 0),
+      totalSharePerMille: tiers.reduce((s, t) => s + t.sharePerMille, 0),
+      lowPoolAlert: getSetting<boolean>("jackpot_low_pool_alert"),
+    };
+  }),
+
+  getJackpotHistory: adminQuery
+    .input(z.object({ days: z.number().int().min(1).max(30).default(7) }))
+    .query(async ({ input }) => {
+      const since = Math.floor(Date.now() / 1000) - input.days * 86400;
+      const rows = getSqliteClient()
+        .prepare(
+          "SELECT tier, amount, created_at FROM jackpot_pool_snapshots WHERE created_at >= ? ORDER BY created_at ASC",
+        )
+        .all(since) as any[];
+      // Downsample to the last value per hour per tier.
+      const byTier = new Map<string, Map<number, { ts: number; amount: number }>>();
+      for (const r of rows) {
+        const hour = Math.floor(r.created_at / 3600) * 3600;
+        if (!byTier.has(r.tier)) byTier.set(r.tier, new Map());
+        byTier.get(r.tier)!.set(hour, { ts: r.created_at, amount: parseFloat(r.amount) });
+      }
+      const out: Record<string, Array<{ ts: number; amount: number }>> = {};
+      for (const [tier, buckets] of byTier) {
+        out[tier] = [...buckets.values()].sort((a, b) => a.ts - b.ts);
+      }
+      return out;
+    }),
+
+  // AP2/F1: seeds + contribution shares are owner-tier control.
+  // Changing seeds also syncs jackpot_pool.seed_amount so the
+  // public payload and the reseed target never disagree.
+  updateJackpotConfig: superAdminQuery
+    .input(
+      z.object({
+        seeds: z.object({
+          mini: z.number().positive().max(100000),
+          major: z.number().positive().max(100000),
+          mega: z.number().positive().max(100000),
+        }),
+        shares: z.object({
+          mini: z.number().int().min(0).max(100),
+          major: z.number().int().min(0).max(100),
+          mega: z.number().int().min(0).max(100),
+        }),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const totalShare = input.shares.mini + input.shares.major + input.shares.mega;
+      if (totalShare > 100) {
+        throw new Error("Total contribution cannot exceed 100 per 1000 (10%)");
+      }
+      const seedsSetting: Record<string, string> = {
+        mini: String(input.seeds.mini),
+        major: String(input.seeds.major),
+        mega: String(input.seeds.mega),
+      };
+      setSetting("jackpot_seeds", seedsSetting, ctx.user!.id);
+      setSetting("jackpot_shares", { ...input.shares }, ctx.user!.id);
+      const db = getDb();
+      for (const tier of ["mini", "major", "mega"] as const) {
+        await db
+          .update(jackpotPool)
+          .set({ seedAmount: canonicalMoney(input.seeds[tier]) })
+          .where(eq(jackpotPool.tier, tier));
+      }
+      await writeAudit(ctx, "admin.updateJackpotConfig", { ...input });
+      return { success: true };
+    }),
+
   getAuditLog: adminQuery
     .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())
     .query(async ({ input }) => {

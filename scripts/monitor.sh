@@ -21,6 +21,20 @@ curl -sf --max-time 10 https://mighty-zeus.megaslot.online/api/health >/dev/null
 DISK_PCT=$(df / --output=pcent | tail -1 | tr -dc '0-9')
 [ "${DISK_PCT:-0}" -lt 85 ] || { fail=1; reasons="$reasons disk-${DISK_PCT}%"; }
 
+# F1: jackpot pool snapshots for the admin history chart (best-effort;
+# 5-min cadence from this cron, 30-day retention).
+/opt/zeus-slot/runtime/bin/node -e "
+try {
+  const Database = require('/opt/zeus-slot/node_modules/better-sqlite3');
+  const db = new Database('/opt/zeus-slot/data/zeus.sqlite');
+  const pools = db.prepare('SELECT tier, current_amount FROM jackpot_pool').all();
+  const ins = db.prepare('INSERT INTO jackpot_pool_snapshots (tier, amount) VALUES (?, ?)');
+  for (const p of pools) ins.run(p.tier, p.current_amount);
+  db.prepare('DELETE FROM jackpot_pool_snapshots WHERE created_at < unixepoch() - 30*86400').run();
+  db.close();
+} catch (e) { /* snapshots are best-effort */ }
+" >/dev/null 2>&1 || true
+
 COUNT=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
 if [ "$fail" -eq 0 ]; then
   if [ "$COUNT" != "0" ]; then

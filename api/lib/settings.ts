@@ -44,6 +44,14 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "string", scope: "public", def: "", group: "site",
     labelEn: "Support Telegram URL", labelBn: "সাপোর্ট টেলিগ্রাম লিংক",
   },
+  maintenance_message: {
+    type: "string", scope: "public", def: "", group: "site",
+    labelEn: "Maintenance message (shown on the maintenance screen; empty = default text)", labelBn: "রক্ষণাবেক্ষণের বার্তা (রক্ষণাবেক্ষণ স্ক্রিনে দেখানো হয়; খালি = ডিফল্ট লেখা)",
+  },
+  promo_text: {
+    type: "string", scope: "public", def: "", group: "site",
+    labelEn: "Promo banner text (empty = hidden)", labelBn: "প্রমো ব্যানারের লেখা (খালি = লুকানো)",
+  },
   support_hours: {
     type: "string", scope: "public", def: "18:00–02:00 (Dhaka)", group: "site",
     labelEn: "Support hours (display text)", labelBn: "সাপোর্টের সময় (প্রদর্শিত লেখা)",
@@ -103,6 +111,10 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "json", scope: "admin", group: "math",
     def: { "mini": 5, "major": 3, "mega": 2 },
     labelEn: "Jackpot contribution per 1000 of bet (total 10 = 1%)", labelBn: "জ্যাকপট অবদান (প্রতি ১০০০ বেটে)",
+  },
+  jackpot_low_pool_alert: {
+    type: "boolean", scope: "admin", def: true, group: "math",
+    labelEn: "Alert in the Jackpot Centre when a pool sits below its seed", labelBn: "পুল সিডের নিচে থাকলে জ্যাকপট সেন্টারে সতর্কতা",
   },
   jackpot_seeds: {
     type: "json", scope: "admin", group: "math",
