@@ -6,6 +6,7 @@ import { createRouter, publicQuery } from "./middleware";
 import { signSessionToken } from "./kimi/session";
 import { hashPassword, verifyPassword } from "./lib/password";
 import { getDb } from "./queries/connection";
+import { clientIp, looksLikeBot, rateLimit } from "./lib/rate-limit";
 import { users } from "@db/schema";
 import { eq, or } from "drizzle-orm";
 import type { TrpcContext } from "./context";
@@ -71,6 +72,13 @@ export const authLocalRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // F1: bot shield + per-IP registration brake.
+      if (looksLikeBot(ctx.req)) {
+        throw new Error("Unable to register from this client — please use a regular browser");
+      }
+      if (!rateLimit(`register:${clientIp(ctx.req)}`, 5, 60 * 60 * 1000)) {
+        throw new Error("Too many attempts — please wait a few minutes and try again");
+      }
       const email = normalizeEmail(input.email);
       const phone = normalizePhone(input.phone);
 
@@ -131,6 +139,11 @@ export const authLocalRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // F1: per IP+identifier login brake (counted before the credential
+      // check so credential stuffing stalls at the door).
+      if (!rateLimit(`login:${clientIp(ctx.req)}:${input.identifier.toLowerCase()}`, 10, 5 * 60 * 1000)) {
+        throw new Error("Too many attempts — please wait a few minutes and try again");
+      }
       const db = getDb();
       const email = normalizeEmail(input.identifier);
       const phone = normalizePhone(input.identifier);

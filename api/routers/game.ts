@@ -3,6 +3,7 @@ import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { getSetting, getPublicConfig } from "../lib/settings";
+import { checkSpinPace } from "../lib/rate-limit";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
@@ -333,6 +334,10 @@ export const gameRouter = createRouter({
       }
       if (getSetting<boolean>("maintenance_mode")) {
         throw new Error("Game is under maintenance");
+      }
+      // F1: per-user spin pacing (300ms floor, 90/min burst cap).
+      if (!checkSpinPace(ctx.user.id)) {
+        throw new Error("You are spinning too fast — please slow down");
       }
       const enabledCurrencies = getSetting<string[]>("currencies_enabled");
       if (
