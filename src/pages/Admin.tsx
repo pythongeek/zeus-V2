@@ -26,6 +26,253 @@ import { TotpSetup } from "@/components/TotpSetup";
 // trail can stand alone in the System section.
 const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math", "security"];
 
+/** Section G: risk, reconciliation & alerts. */
+function RiskSection({
+  enabled,
+  onFocusPlayer,
+}: {
+  enabled: boolean;
+  onFocusPlayer: (userId: number) => void;
+}) {
+  const { t } = useLang();
+  const [alertFilter, setAlertFilter] = useState<"open" | "acknowledged" | "all">("open");
+  const alertsQ = trpc.admin.getAlerts.useQuery(
+    { status: alertFilter, limit: 50 },
+    { enabled, retry: false },
+  );
+  const reconQ = trpc.admin.getReconciliation.useQuery(undefined, { enabled, retry: false });
+  const signalsQ = trpc.admin.getRiskSignals.useQuery(undefined, { enabled, retry: false });
+
+  const runM = trpc.admin.runReconciliation.useMutation({
+    onSuccess: async (r: any) => {
+      toast.success(`${t("reconDone")}: ${r.mismatchCount}`);
+      await reconQ.refetch();
+      await alertsQ.refetch();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const ackM = trpc.admin.ackAlert.useMutation({
+    onSuccess: async () => { await alertsQ.refetch(); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const resolveM = trpc.admin.resolveAlert.useMutation({
+    onSuccess: async () => { await alertsQ.refetch(); },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const userChip = (u: any) => (
+    <button
+      key={u.id}
+      className="text-amber-300 hover:text-amber-200 underline decoration-dotted underline-offset-2"
+      onClick={() => onFocusPlayer(u.id)}
+    >
+      {u.name ?? u.email}
+    </button>
+  );
+
+  const sevClass = (sev: string) =>
+    sev === "critical"
+      ? "bg-red-500/15 text-red-400 border-red-500/30"
+      : "bg-amber-500/15 text-amber-400 border-amber-500/30";
+
+  return (
+    <div className="space-y-5">
+      {/* Alerts inbox */}
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldAlert className="h-4 w-4 text-amber-400" /> {t("alertsInbox")}
+            {alertsQ.data && alertsQ.data.openCount > 0 && (
+              <Badge variant="secondary" className="bg-red-500/15 text-red-400 border-red-500/30">
+                {alertsQ.data.openCount} {t("openWord")}
+              </Badge>
+            )}
+          </CardTitle>
+          <CardDescription className="text-slate-400">{t("alertsInboxDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            {(["open", "acknowledged", "all"] as const).map((f) => (
+              <Button
+                key={f}
+                size="sm"
+                variant={alertFilter === f ? "default" : "outline"}
+                className={alertFilter === f ? "bg-amber-500 text-slate-950 hover:bg-amber-400 h-7 text-xs" : "border-slate-700 text-slate-300 h-7 text-xs"}
+                onClick={() => setAlertFilter(f)}
+              >
+                {f === "open" ? t("filterOpen") : f === "acknowledged" ? t("filterAcked") : t("rangeAll")}
+              </Button>
+            ))}
+          </div>
+          {alertsQ.isLoading ? (
+            <p className="text-sm text-slate-500">{t("loading")}</p>
+          ) : !alertsQ.data || alertsQ.data.alerts.length === 0 ? (
+            <p className="text-sm text-slate-500">{t("noAlerts")}</p>
+          ) : (
+            alertsQ.data.alerts.map((a: any) => (
+              <div key={a.id} className="flex flex-wrap items-center gap-2 border border-slate-800/70 rounded-lg px-3 py-2 bg-slate-950/40 text-sm">
+                <Badge variant="secondary" className={sevClass(a.severity)}>{a.kind}</Badge>
+                <span className="text-slate-200">{a.title}</span>
+                {a.ref_user_id && (
+                  <button className="text-amber-300 text-xs underline decoration-dotted underline-offset-2" onClick={() => onFocusPlayer(a.ref_user_id)}>
+                    #{a.ref_user_id}
+                  </button>
+                )}
+                <span className="text-[11px] text-slate-600">{new Date(a.created_at * 1000).toLocaleString()}</span>
+                <span className="flex-1" />
+                {a.status === "open" && (
+                  <Button size="sm" variant="outline" className="h-6 text-[11px] border-slate-700" onClick={() => ackM.mutate({ alertId: a.id })}>
+                    {t("ackBtn")}
+                  </Button>
+                )}
+                {a.status !== "resolved" && (
+                  <Button size="sm" variant="outline" className="h-6 text-[11px] border-slate-700" onClick={() => resolveM.mutate({ alertId: a.id })}>
+                    {t("resolveBtn")}
+                  </Button>
+                )}
+                {a.status === "resolved" && <span className="text-[11px] text-emerald-400">{t("resolvedWord")}</span>}
+                {a.status === "acknowledged" && <span className="text-[11px] text-slate-500">{t("filterAcked")}</span>}
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Reconciliation */}
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-base">{t("reconTitle")}</CardTitle>
+          <CardDescription className="text-slate-400">{t("reconDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <Button
+              size="sm"
+              className="h-8 text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold"
+              disabled={runM.isPending}
+              onClick={() => runM.mutate()}
+            >
+              {runM.isPending ? t("reconRunning") : t("runReconBtn")}
+            </Button>
+            {reconQ.data?.lastRun ? (
+              <span className="text-xs text-slate-400">
+                {t("lastRunLbl")}: {new Date(reconQ.data.lastRun.started_at * 1000).toLocaleString()} ·{" "}
+                {reconQ.data.lastRun.accounts_checked} {t("accountsWord")} ·{" "}
+                {reconQ.data.lastRun.mismatch_count} {t("mismatchesWord")}
+                {reconQ.data.lastRun.ran_by ? "" : ` · ${t("nightlyWord")}`}
+              </span>
+            ) : (
+              <span className="text-xs text-slate-500">{t("noReconYet")}</span>
+            )}
+          </div>
+          {reconQ.data && reconQ.data.mismatches.length > 0 ? (
+            <div className="space-y-1.5">
+              {reconQ.data.mismatches.map((m: any) => (
+                <div key={m.id} className="flex flex-wrap items-center gap-2 border border-red-500/20 rounded-lg px-3 py-2 bg-red-500/5 text-sm">
+                  <Badge variant="secondary" className="bg-red-500/15 text-red-400 border-red-500/30">{m.kind}</Badge>
+                  <button className="text-amber-300 underline decoration-dotted underline-offset-2" onClick={() => onFocusPlayer(m.user_id)}>
+                    {m.name ?? m.email ?? `#${m.user_id}`}
+                  </button>
+                  <span className="font-mono text-xs text-slate-300">{m.currency}</span>
+                  <span className="text-xs text-slate-400">
+                    {t("expectedLbl")}: <span className="font-mono">{m.expected}</span> · {t("actualLbl")}: <span className="font-mono">{m.actual}</span>
+                  </span>
+                  <span className="flex-1" />
+                  <span className="text-[11px] text-slate-600">{t("firstSeenLbl")}: {new Date(m.first_seen_at * 1000).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          ) : reconQ.data ? (
+            <p className="text-sm text-emerald-400">{t("reconClean")}</p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Risk signals */}
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-base">{t("riskSignals")}</CardTitle>
+          <CardDescription className="text-slate-400">{t("riskSignalsDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {signalsQ.isLoading || !signalsQ.data ? (
+            <p className="text-sm text-slate-500">{t("loading")}</p>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-5 text-sm">
+              <div>
+                <div className="text-xs uppercase text-slate-500 mb-2">{t("sigSharedAddress")}</div>
+                {signalsQ.data.sharedAddresses.length === 0 ? <p className="text-xs text-slate-600">{t("noSignals")}</p> :
+                  signalsQ.data.sharedAddresses.map((r: any) => (
+                    <div key={r.address} className="border-b border-slate-800/60 py-1.5">
+                      <div className="font-mono text-xs text-slate-300 break-all">{r.address}</div>
+                      <div className="text-xs text-slate-400 flex flex-wrap gap-1 mt-0.5">{r.users.map(userChip)}</div>
+                    </div>
+                  ))}
+              </div>
+              <div>
+                <div className="text-xs uppercase text-slate-500 mb-2">{t("sigSharedIp")}</div>
+                {signalsQ.data.sharedIps.length === 0 ? <p className="text-xs text-slate-600">{t("noSignals")}</p> :
+                  signalsQ.data.sharedIps.map((r: any) => (
+                    <div key={r.ip} className="border-b border-slate-800/60 py-1.5">
+                      <div className="font-mono text-xs text-slate-300">{r.ip}</div>
+                      <div className="text-xs text-slate-400 flex flex-wrap gap-1 mt-0.5">{r.users.map(userChip)}</div>
+                    </div>
+                  ))}
+              </div>
+              <div>
+                <div className="text-xs uppercase text-slate-500 mb-2">{t("sigSpinRate")}</div>
+                {signalsQ.data.spinOutliers.length === 0 ? <p className="text-xs text-slate-600">{t("noSignals")}</p> :
+                  signalsQ.data.spinOutliers.map((r: any) => (
+                    <div key={r.userId} className="border-b border-slate-800/60 py-1.5 flex items-center gap-2">
+                      <span className="text-slate-300">{r.users.map(userChip)}</span>
+                      <span className="flex-1" />
+                      <span className="font-mono text-xs">{r.spins24h} / 24h</span>
+                    </div>
+                  ))}
+              </div>
+              <div>
+                <div className="text-xs uppercase text-slate-500 mb-2">{t("sigWinRate")}</div>
+                {signalsQ.data.winOutliers.length === 0 ? <p className="text-xs text-slate-600">{t("noSignals")}</p> :
+                  signalsQ.data.winOutliers.map((r: any) => (
+                    <div key={r.userId} className="border-b border-slate-800/60 py-1.5 flex items-center gap-2">
+                      <span className="text-slate-300">{r.users.map(userChip)}</span>
+                      <span className="flex-1" />
+                      <span className="font-mono text-xs text-red-300">RTP {r.rtpPct}%</span>
+                      <span className="font-mono text-xs text-slate-500">{r.spins} spins</span>
+                    </div>
+                  ))}
+              </div>
+              <div>
+                <div className="text-xs uppercase text-slate-500 mb-2">{t("sigDepositNoPlay")}</div>
+                {signalsQ.data.depositNoPlay.length === 0 ? <p className="text-xs text-slate-600">{t("noSignals")}</p> :
+                  signalsQ.data.depositNoPlay.map((r: any) => (
+                    <div key={r.userId} className="border-b border-slate-800/60 py-1.5">
+                      <span className="text-slate-300">{r.users.map(userChip)}</span>
+                      <div className="font-mono text-xs text-slate-400 mt-0.5">
+                        in ${r.depositsUsdt} · out ${r.withdrawalsUsdt} · wagered ${r.wageredUsdt}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              <div>
+                <div className="text-xs uppercase text-slate-500 mb-2">{t("sigLoginBursts")}</div>
+                {signalsQ.data.failedLoginBursts.length === 0 ? <p className="text-xs text-slate-600">{t("noSignals")}</p> :
+                  signalsQ.data.failedLoginBursts.map((r: any) => (
+                    <div key={r.identifier} className="border-b border-slate-800/60 py-1.5 flex items-center gap-2">
+                      <span className="font-mono text-xs text-slate-300">{r.identifier ?? "—"}</span>
+                      <span className="flex-1" />
+                      <span className="font-mono text-xs text-red-300">{r.failures}×</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 /** Section F1: jackpot centre — pools, seeds, shares, history. */
 function JackpotCentreCard({ enabled, canEdit }: { enabled: boolean; canEdit: boolean }) {
   const { t } = useLang();
@@ -1056,6 +1303,10 @@ export default function Admin() {
     },
     onError: (err) => toast.error(err.message),
   });
+  const { data: riskSummary } = trpc.admin.getRiskSummary.useQuery(undefined, {
+    enabled: isAuthenticated && isAdmin,
+    retry: false,
+  });
   const { data: pendingTxs, isLoading: txsLoading } = trpc.admin.listPendingTransactions.useQuery(undefined, {
     enabled: isAuthenticated && isAdmin,
     refetchInterval: 15000,
@@ -1272,6 +1523,11 @@ export default function Admin() {
                   {s.id === "payments" && !!pendingTxs?.length && (
                     <span className="ml-auto rounded-full bg-red-500/20 text-red-300 text-[11px] px-1.5 py-0.5 font-mono">
                       {pendingTxs.length}
+                    </span>
+                  )}
+                  {s.id === "risk" && !!riskSummary && riskSummary.openAlerts + riskSummary.openMismatches > 0 && (
+                    <span className="ml-auto rounded-full bg-red-500/20 text-red-300 text-[11px] px-1.5 py-0.5 font-mono">
+                      {riskSummary.openAlerts + riskSummary.openMismatches}
                     </span>
                   )}
                 </button>
@@ -2166,7 +2422,12 @@ export default function Admin() {
             <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["site", "presentation"]} titleKey="cfgGroup_site" canEdit={isSuper} />
           )}
 
-          {section === "risk" && placeholder}
+          {section === "risk" && (
+            <RiskSection
+              enabled={isAuthenticated && isAdmin}
+              onFocusPlayer={(id) => { setSelectedPlayerId(id); goSection("players"); }}
+            />
+          )}
           {section === "promotions" && placeholder}
 
           {section === "system" && (
