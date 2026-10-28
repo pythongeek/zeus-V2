@@ -5,17 +5,35 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
-import { Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw } from "lucide-react";
+import {
+  Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw,
+  LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
+} from "lucide-react";
 import { toast } from "sonner";
 
 // B3: Admin Game Config — every admin-controllable setting (B1/B2) edited
 // in one card, grouped, with EN/BN labels from the API definitions, typed
 // inputs (toggle / number / money / text / JSON), an RTP warning when math
 // keys are dirty, and the recent-change audit trail underneath.
-function GameConfigCard({ enabled }: { enabled: boolean }) {
+// P0.2 (admin-panel programme): the card is now section-aware — each
+// admin section renders only its own setting groups, and the audit
+// trail can stand alone in the System section.
+const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math"];
+
+function GameConfigCard({
+  enabled,
+  groups,
+  showAudit = false,
+  titleKey,
+}: {
+  enabled: boolean;
+  groups?: string[];
+  showAudit?: boolean;
+  titleKey?: string;
+}) {
   const { t, lang } = useLang();
   const utils = trpc.useUtils();
   const { data: settingsList, isLoading } = trpc.admin.getSettings.useQuery(
@@ -24,7 +42,7 @@ function GameConfigCard({ enabled }: { enabled: boolean }) {
   );
   const { data: auditRows } = trpc.admin.getAuditLog.useQuery(
     { limit: 8 },
-    { enabled, retry: false },
+    { enabled: enabled && showAudit, retry: false },
   );
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [dirtyKeys, setDirtyKeys] = useState<string[]>([]);
@@ -43,7 +61,7 @@ function GameConfigCard({ enabled }: { enabled: boolean }) {
 
   if (!enabled) return null;
 
-  const groups = ["site", "bets", "features", "currencies", "presentation", "math"];
+  const visibleGroups = groups ?? ALL_GROUPS;
   const mathDirty = (settingsList ?? []).some(
     (s) => s.group === "math" && dirtyKeys.includes(s.key),
   );
@@ -88,59 +106,61 @@ function GameConfigCard({ enabled }: { enabled: boolean }) {
   };
 
   return (
-    <Card className="bg-slate-900/80 border-slate-800 mt-6">
+    <Card className="bg-slate-900/80 border-slate-800">
       <CardHeader>
-        <CardTitle className="text-amber-400">{t("gameConfig")}</CardTitle>
+        <CardTitle className="text-amber-400">{t((titleKey ?? "gameConfig") as any)}</CardTitle>
         <CardDescription className="text-slate-400">{t("gameConfigDesc")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {isLoading || !settingsList ? (
-          <div className="text-slate-400 text-sm">…</div>
-        ) : (
-          groups.map((group) => {
-            const items = settingsList.filter((s) => s.group === group);
-            if (!items.length) return null;
-            return (
-              <div key={group}>
-                <h3 className="text-sm font-semibold text-slate-300 mb-3">
-                  {t(`cfgGroup_${group}` as any)}
-                </h3>
-                <div className="grid gap-4 md:grid-cols-2">
-                  {items.map((s) => (
-                    <label key={s.key} className="block">
-                      <span className="block text-xs text-slate-400 mb-1">
-                        {lang === "bn" ? s.labelBn : s.labelEn}
-                        <span className="text-slate-600"> · {s.key}</span>
-                      </span>
-                      {s.type === "boolean" ? (
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-amber-500"
-                          checked={draftFor(s) === "true"}
-                          onChange={(e) =>
-                            setDraft(s.key, e.target.checked ? "true" : "false")
-                          }
-                        />
-                      ) : s.type === "json" ? (
-                        <textarea
-                          className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200 min-h-[72px]"
-                          value={draftFor(s)}
-                          onChange={(e) => setDraft(s.key, e.target.value)}
-                        />
-                      ) : (
-                        <Input
-                          className="bg-slate-950 border-slate-700 text-slate-200"
-                          value={draftFor(s)}
-                          inputMode={s.type === "string" ? "text" : "decimal"}
-                          onChange={(e) => setDraft(s.key, e.target.value)}
-                        />
-                      )}
-                    </label>
-                  ))}
+        {visibleGroups.length > 0 && (
+          isLoading || !settingsList ? (
+            <div className="text-slate-400 text-sm">…</div>
+          ) : (
+            visibleGroups.map((group) => {
+              const items = settingsList.filter((s) => s.group === group);
+              if (!items.length) return null;
+              return (
+                <div key={group}>
+                  <h3 className="text-sm font-semibold text-slate-300 mb-3">
+                    {t(`cfgGroup_${group}` as any)}
+                  </h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {items.map((s) => (
+                      <label key={s.key} className="block">
+                        <span className="block text-xs text-slate-400 mb-1">
+                          {lang === "bn" ? s.labelBn : s.labelEn}
+                          <span className="text-slate-600"> · {s.key}</span>
+                        </span>
+                        {s.type === "boolean" ? (
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-amber-500"
+                            checked={draftFor(s) === "true"}
+                            onChange={(e) =>
+                              setDraft(s.key, e.target.checked ? "true" : "false")
+                            }
+                          />
+                        ) : s.type === "json" ? (
+                          <textarea
+                            className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200 min-h-[72px]"
+                            value={draftFor(s)}
+                            onChange={(e) => setDraft(s.key, e.target.value)}
+                          />
+                        ) : (
+                          <Input
+                            className="bg-slate-950 border-slate-700 text-slate-200"
+                            value={draftFor(s)}
+                            inputMode={s.type === "string" ? "text" : "decimal"}
+                            onChange={(e) => setDraft(s.key, e.target.value)}
+                          />
+                        )}
+                      </label>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            );
-          })
+              );
+            })
+          )
         )}
 
         {mathDirty && (
@@ -149,18 +169,20 @@ function GameConfigCard({ enabled }: { enabled: boolean }) {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
-          <Button
-            className="bg-amber-500 hover:bg-amber-400 text-black font-semibold"
-            disabled={!dirtyKeys.length || updateMutation.isPending}
-            onClick={handleSave}
-          >
-            {t("saveChanges")}
-            {dirtyKeys.length ? ` (${dirtyKeys.length})` : ""}
-          </Button>
-        </div>
+        {visibleGroups.length > 0 && (
+          <div className="flex items-center gap-3">
+            <Button
+              className="bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+              disabled={!dirtyKeys.length || updateMutation.isPending}
+              onClick={handleSave}
+            >
+              {t("saveChanges")}
+              {dirtyKeys.length ? ` (${dirtyKeys.length})` : ""}
+            </Button>
+          </div>
+        )}
 
-        {!!auditRows?.length && (
+        {showAudit && !!auditRows?.length && (
           <div>
             <h3 className="text-sm font-semibold text-slate-300 mb-2">
               {t("recentChanges")}
@@ -187,6 +209,28 @@ function GameConfigCard({ enabled }: { enabled: boolean }) {
   );
 }
 
+// P0.2: admin sections (sidebar). Sections with no content yet in the
+// approved programme (Risk = Section G, Promotions = Section H) render
+// an honest placeholder instead of pretending to work.
+const SECTIONS = [
+  { id: "dashboard", icon: LayoutDashboard, labelKey: "navDashboard" },
+  { id: "players", icon: Users, labelKey: "navPlayers" },
+  { id: "payments", icon: CreditCard, labelKey: "navPayments" },
+  { id: "engine", icon: Cog, labelKey: "navEngine" },
+  { id: "jackpots", icon: Trophy, labelKey: "navJackpots" },
+  { id: "site", icon: Globe, labelKey: "navSite" },
+  { id: "risk", icon: ShieldAlert, labelKey: "navRisk" },
+  { id: "promotions", icon: Gift, labelKey: "navPromotions" },
+  { id: "system", icon: ServerCog, labelKey: "navSystem" },
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]["id"];
+
+function sectionFromHash(): SectionId {
+  const h = window.location.hash.replace("#", "");
+  return (SECTIONS.some((s) => s.id === h) ? h : "dashboard") as SectionId;
+}
+
 export default function Admin() {
   const { t } = useLang();
   const navigate = useNavigate();
@@ -198,7 +242,19 @@ export default function Admin() {
     redirectOnUnauthenticated: true,
     redirectPath: "/login",
   });
-  const isAdmin = user?.role === "admin";
+  const role = (user as any)?.role as string | undefined;
+  const isAdmin = role === "admin" || role === "super_admin";
+
+  const [section, setSection] = useState<SectionId>(() => sectionFromHash());
+  useEffect(() => {
+    const onHash = () => setSection(sectionFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const goSection = (id: SectionId) => {
+    window.location.hash = id;
+    setSection(id);
+  };
 
   const { data: stats, isLoading: statsLoading } = trpc.admin.getStats.useQuery(undefined, {
     enabled: isAuthenticated && isAdmin,
@@ -302,8 +358,16 @@ export default function Admin() {
     );
   }
 
+  const placeholder = (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardContent className="py-10 text-center text-sm text-slate-400">
+        {t("sectionComingSoon")}
+      </CardContent>
+    </Card>
+  );
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10 space-y-8">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10">
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-6">
         <div>
@@ -339,238 +403,289 @@ export default function Admin() {
         </div>
       </div>
 
-      {/* Analytics KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <Card className="bg-slate-900/80 border-slate-800">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">{t("totalPlayers")}</CardTitle>
-            <Users className="h-4 w-4 text-amber-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{statsLoading ? "..." : stats?.totalUsers}</div>
-            <p className="text-xs text-slate-500 mt-1">{t("registeredAccounts")}</p>
-          </CardContent>
-        </Card>
+      <div className="flex flex-col lg:flex-row gap-6 mt-6">
+        {/* Sidebar nav — horizontal scroll row on small screens */}
+        <nav className="lg:w-52 shrink-0">
+          <div className="flex lg:flex-col gap-1 overflow-x-auto lg:overflow-visible pb-2 lg:pb-0 lg:sticky lg:top-6">
+            {SECTIONS.map((s) => {
+              const Icon = s.icon;
+              const active = section === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => goSection(s.id)}
+                  className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors ${
+                    active
+                      ? "bg-amber-500/15 text-amber-300 font-semibold"
+                      : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {t(s.labelKey as any)}
+                  {s.id === "payments" && !!pendingTxs?.length && (
+                    <span className="ml-auto rounded-full bg-red-500/20 text-red-300 text-[11px] px-1.5 py-0.5 font-mono">
+                      {pendingTxs.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
 
-        <Card className="bg-slate-900/80 border-slate-800">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">{t("totalWagered")}</CardTitle>
-            <DollarSign className="h-4 w-4 text-emerald-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${statsLoading ? "..." : stats?.totalWagered.toLocaleString()}</div>
-            <p className="text-xs text-slate-500 mt-1">{t("fromSpins", { n: stats?.totalSpins ?? 0 })}</p>
-          </CardContent>
-        </Card>
+        <main className="flex-1 min-w-0 space-y-8">
+          {section === "dashboard" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-400">{t("totalPlayers")}</CardTitle>
+                  <Users className="h-4 w-4 text-amber-500" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{statsLoading ? "..." : stats?.totalUsers}</div>
+                  <p className="text-xs text-slate-500 mt-1">{t("registeredAccounts")}</p>
+                </CardContent>
+              </Card>
 
-        <Card className="bg-slate-900/80 border-slate-800">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">{t("houseProfit")}</CardTitle>
-            <Trophy className="h-4 w-4 text-amber-400" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-emerald-400">${statsLoading ? "..." : stats?.houseProfit.toLocaleString()}</div>
-            <p className="text-xs text-slate-500 mt-1">{t("netRevenue")}</p>
-          </CardContent>
-        </Card>
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-400">{t("totalWagered")}</CardTitle>
+                  <DollarSign className="h-4 w-4 text-emerald-500" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">${statsLoading ? "..." : stats?.totalWagered.toLocaleString()}</div>
+                  <p className="text-xs text-slate-500 mt-1">{t("fromSpins", { n: stats?.totalSpins ?? 0 })}</p>
+                </CardContent>
+              </Card>
 
-        <Card className="bg-slate-900/80 border-slate-800">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">{t("houseRtp")}</CardTitle>
-            <Percent className="h-4 w-4 text-blue-400" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-400">{statsLoading ? "..." : stats?.houseRtp}</div>
-            <p className="text-xs text-slate-500 mt-1">{t("targetRtp")}</p>
-          </CardContent>
-        </Card>
-      </div>
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-400">{t("houseProfit")}</CardTitle>
+                  <Trophy className="h-4 w-4 text-amber-400" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-emerald-400">${statsLoading ? "..." : stats?.houseProfit.toLocaleString()}</div>
+                  <p className="text-xs text-slate-500 mt-1">{t("netRevenue")}</p>
+                </CardContent>
+              </Card>
 
-      {/* Main Grid: User Management & Jackpot Controls */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* User Management (2 Columns) */}
-        <Card className="lg:col-span-2 bg-slate-900/80 border-slate-800">
-          <CardHeader>
-            <CardTitle>{t("userManagement")}</CardTitle>
-            <CardDescription className="text-slate-400">{t("userManagementDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {usersLoading ? (
-              <p className="text-sm text-slate-500 py-4">{t("loading")}</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-slate-800 hover:bg-transparent">
-                    <TableHead className="text-slate-400">{t("userId")}</TableHead>
-                    <TableHead className="text-slate-400">{t("playerName")}</TableHead>
-                    <TableHead className="text-slate-400">{t("role")}</TableHead>
-                    <TableHead className="text-right text-slate-400">{t("actions")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {users?.map((u) => (
-                    <TableRow key={u.id} className="border-slate-800/60">
-                      <TableCell className="font-mono text-xs">{u.unionId}</TableCell>
-                      <TableCell className="font-medium">{u.name}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={u.role === "admin" ? "default" : "secondary"}
-                          className={u.role === "admin" ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-slate-800 text-slate-300"}
-                        >
-                          {u.role.toUpperCase()}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => updateRoleMutation.mutate({
-                            userId: u.id,
-                            role: u.role === "admin" ? "user" : "admin",
-                          })}
-                          className="text-xs text-slate-400 hover:text-white"
-                        >
-                          {t("toggleRole")}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Jackpot Pool Controls (1 Column) */}
-        <Card className="bg-slate-900/80 border-slate-800">
-          <CardHeader>
-            <CardTitle>{t("jackpotControls")}</CardTitle>
-            <CardDescription className="text-slate-400">{t("jackpotControlsDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {jackpotPools?.map((pool) => (
-              <div key={pool.tier} className="space-y-2 p-3 rounded-lg border border-slate-800 bg-slate-950/50">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} {t("jackpotWord")}</span>
-                  <span className="text-sm font-mono text-slate-300">{pool.amount} {(pool as any).currency ?? "USDT"}</span>
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    type="number"
-                    placeholder={t("amountPlaceholder")}
-                    value={jackpotAmount[pool.tier] || ""}
-                    onChange={(e) => setJackpotAmount({ ...jackpotAmount, [pool.tier]: e.target.value })}
-                    className="h-8 text-xs bg-slate-900 border-slate-800"
-                  />
-                  <Button
-                    size="sm"
-                    className="h-8 text-xs bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold"
-                    onClick={() => {
-                      const val = parseFloat(jackpotAmount[pool.tier]);
-                      if (!val || val <= 0) return toast.error(t("errEnterPositive"));
-                      updateJackpotMutation.mutate({ tier: pool.tier as "mini" | "major" | "mega", amount: val });
-                    }}
-                  >
-                    {t("save")}
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Pending Transactions Queue */}
-      <Card className="bg-slate-900/80 border-slate-800">
-        <CardHeader>
-          <CardTitle>{t("pendingTransactions")}</CardTitle>
-          <CardDescription className="text-slate-400">
-            {t("pendingDesc")}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {txsLoading ? (
-            <p className="text-sm text-slate-500 py-4">{t("queueLoading")}</p>
-          ) : !pendingTxs || pendingTxs.length === 0 ? (
-            <p className="text-sm text-slate-500 py-4">{t("queueEmpty")}</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-slate-800 hover:bg-transparent">
-                  <TableHead className="text-slate-400">ID</TableHead>
-                  <TableHead className="text-slate-400">{t("playerName")}</TableHead>
-                  <TableHead className="text-slate-400">{t("type")}</TableHead>
-                  <TableHead className="text-slate-400">{t("amountPlaceholder")}</TableHead>
-                  <TableHead className="text-slate-400">{t("address")}</TableHead>
-                  <TableHead className="text-right text-slate-400">{t("actions")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pendingTxs.map((tx) => (
-                  <TableRow key={tx.id} className="border-slate-800/60">
-                    <TableCell className="font-mono text-xs">#{tx.id}</TableCell>
-                    <TableCell>
-                      <div className="font-medium">{tx.userName ?? `User ${tx.userId}`}</div>
-                      <div className="text-xs text-slate-500">{tx.userEmail ?? tx.userPhone ?? "—"}</div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="secondary"
-                        className={
-                          tx.type === "deposit"
-                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                            : "bg-orange-500/15 text-orange-400 border-orange-500/30"
-                        }
-                      >
-                        {tx.type.toUpperCase()}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {tx.amount} {tx.currency}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-slate-500 max-w-[140px] truncate">
-                      {tx.type === "deposit" && tx.txHash ? tx.txHash : tx.toAddress ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-right space-x-2">
-                      {tx.type === "deposit" ? (
-                        <Button
-                          size="sm"
-                          className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
-                          disabled={approveDepositMutation.isPending}
-                          onClick={() => approveDepositMutation.mutate({ txId: tx.id })}
-                        >
-                          {t("approveDeposit")}
-                        </Button>
-                      ) : (
-                        <>
-                          <Button
-                            size="sm"
-                            className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
-                            disabled={approveWithdrawMutation.isPending}
-                            onClick={() => approveWithdrawMutation.mutate({ txId: tx.id })}
-                          >
-                            {t("approvePayout")}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10"
-                            disabled={rejectWithdrawMutation.isPending}
-                            onClick={() => rejectWithdrawMutation.mutate({ txId: tx.id })}
-                          >
-                            {t("reject")}
-                          </Button>
-                        </>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-400">{t("houseRtp")}</CardTitle>
+                  <Percent className="h-4 w-4 text-blue-400" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-blue-400">{statsLoading ? "..." : stats?.houseRtp}</div>
+                  <p className="text-xs text-slate-500 mt-1">{t("targetRtp")}</p>
+                </CardContent>
+              </Card>
+            </div>
           )}
-        </CardContent>
-      </Card>
-      <GameConfigCard enabled={isAuthenticated && isAdmin} />
+
+          {section === "players" && (
+            <Card className="bg-slate-900/80 border-slate-800">
+              <CardHeader>
+                <CardTitle>{t("userManagement")}</CardTitle>
+                <CardDescription className="text-slate-400">{t("userManagementDesc")}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {usersLoading ? (
+                  <p className="text-sm text-slate-500 py-4">{t("loading")}</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-slate-800 hover:bg-transparent">
+                        <TableHead className="text-slate-400">{t("userId")}</TableHead>
+                        <TableHead className="text-slate-400">{t("playerName")}</TableHead>
+                        <TableHead className="text-slate-400">{t("role")}</TableHead>
+                        <TableHead className="text-right text-slate-400">{t("actions")}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {users?.map((u) => (
+                        <TableRow key={u.id} className="border-slate-800/60">
+                          <TableCell className="font-mono text-xs">{u.unionId}</TableCell>
+                          <TableCell className="font-medium">{u.name}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={u.role === "admin" ? "default" : "secondary"}
+                              className={u.role === "admin" ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-slate-800 text-slate-300"}
+                            >
+                              {u.role.toUpperCase()}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => updateRoleMutation.mutate({
+                                userId: u.id,
+                                role: u.role === "admin" ? "user" : "admin",
+                              })}
+                              className="text-xs text-slate-400 hover:text-white"
+                            >
+                              {t("toggleRole")}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {section === "payments" && (
+            <>
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader>
+                  <CardTitle>{t("pendingTransactions")}</CardTitle>
+                  <CardDescription className="text-slate-400">
+                    {t("pendingDesc")}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {txsLoading ? (
+                    <p className="text-sm text-slate-500 py-4">{t("queueLoading")}</p>
+                  ) : !pendingTxs || pendingTxs.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-4">{t("queueEmpty")}</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-slate-800 hover:bg-transparent">
+                          <TableHead className="text-slate-400">ID</TableHead>
+                          <TableHead className="text-slate-400">{t("playerName")}</TableHead>
+                          <TableHead className="text-slate-400">{t("type")}</TableHead>
+                          <TableHead className="text-slate-400">{t("amountPlaceholder")}</TableHead>
+                          <TableHead className="text-slate-400">{t("address")}</TableHead>
+                          <TableHead className="text-right text-slate-400">{t("actions")}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {pendingTxs.map((tx) => (
+                          <TableRow key={tx.id} className="border-slate-800/60">
+                            <TableCell className="font-mono text-xs">#{tx.id}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{tx.userName ?? `User ${tx.userId}`}</div>
+                              <div className="text-xs text-slate-500">{tx.userEmail ?? tx.userPhone ?? "—"}</div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="secondary"
+                                className={
+                                  tx.type === "deposit"
+                                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                                    : "bg-orange-500/15 text-orange-400 border-orange-500/30"
+                                }
+                              >
+                                {tx.type.toUpperCase()}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">
+                              {tx.amount} {tx.currency}
+                            </TableCell>
+                            <TableCell className="font-mono text-xs text-slate-500 max-w-[140px] truncate">
+                              {tx.type === "deposit" && tx.txHash ? tx.txHash : tx.toAddress ?? "—"}
+                            </TableCell>
+                            <TableCell className="text-right space-x-2">
+                              {tx.type === "deposit" ? (
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+                                  disabled={approveDepositMutation.isPending}
+                                  onClick={() => approveDepositMutation.mutate({ txId: tx.id })}
+                                >
+                                  {t("approveDeposit")}
+                                </Button>
+                              ) : (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+                                    disabled={approveWithdrawMutation.isPending}
+                                    onClick={() => approveWithdrawMutation.mutate({ txId: tx.id })}
+                                  >
+                                    {t("approvePayout")}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10"
+                                    disabled={rejectWithdrawMutation.isPending}
+                                    onClick={() => rejectWithdrawMutation.mutate({ txId: tx.id })}
+                                  >
+                                    {t("reject")}
+                                  </Button>
+                                </>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["currencies"]} titleKey="cfgGroup_currencies" />
+            </>
+          )}
+
+          {section === "engine" && (
+            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["bets", "features", "presentation", "math"]} titleKey="navEngine" />
+          )}
+
+          {section === "jackpots" && (
+            <Card className="bg-slate-900/80 border-slate-800">
+              <CardHeader>
+                <CardTitle>{t("jackpotControls")}</CardTitle>
+                <CardDescription className="text-slate-400">{t("jackpotControlsDesc")}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {jackpotPools?.map((pool) => (
+                  <div key={pool.tier} className="space-y-2 p-3 rounded-lg border border-slate-800 bg-slate-950/50">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} {t("jackpotWord")}</span>
+                      <span className="text-sm font-mono text-slate-300">{pool.amount} {(pool as any).currency ?? "USDT"}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="number"
+                        placeholder={t("amountPlaceholder")}
+                        value={jackpotAmount[pool.tier] || ""}
+                        onChange={(e) => setJackpotAmount({ ...jackpotAmount, [pool.tier]: e.target.value })}
+                        className="h-8 text-xs bg-slate-900 border-slate-800"
+                      />
+                      <Button
+                        size="sm"
+                        className="h-8 text-xs bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold"
+                        onClick={() => {
+                          const val = parseFloat(jackpotAmount[pool.tier]);
+                          if (!val || val <= 0) return toast.error(t("errEnterPositive"));
+                          updateJackpotMutation.mutate({ tier: pool.tier as "mini" | "major" | "mega", amount: val });
+                        }}
+                      >
+                        {t("save")}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {section === "site" && (
+            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["site"]} titleKey="cfgGroup_site" />
+          )}
+
+          {section === "risk" && placeholder}
+          {section === "promotions" && placeholder}
+
+          {section === "system" && (
+            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={[]} showAudit titleKey="recentChanges" />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
