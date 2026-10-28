@@ -22,6 +22,8 @@ export const users = sqliteTable("users", {
   // minted at; bumping it (force sign-out) revokes every existing
   // session for the account without touching the password.
   sessionEpoch: integer("session_epoch").default(0).notNull(),
+  // Section C: admin tags (JSON array of short labels, migration 0015).
+  tags: text("tags"),
   avatar: text("avatar"),
   // AP2: super_admin is the owner tier (settings, roles, math);
   // admin is the day-to-day operations tier.
@@ -191,6 +193,19 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
 }));
 
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
+
+// Section C: internal admin notes about a player (migration 0015).
+export const playerNotes = sqliteTable("player_notes", {
+  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+  userId: integer("user_id", { mode: "number" }).notNull(),
+  adminId: integer("admin_id", { mode: "number" }),
+  note: text("note").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`).notNull(),
+}, (table) => ({
+  idxPlayerNotesUser: index("idx_player_notes_user").on(table.userId, table.createdAt),
+}));
+
+export type PlayerNote = typeof playerNotes.$inferSelect;
 
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),

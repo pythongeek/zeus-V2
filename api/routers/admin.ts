@@ -1,16 +1,29 @@
 import { z } from "zod";
 import { createRouter, adminFullQuery as adminQuery, superAdminQuery } from "../middleware";
 import { getDb } from "../queries/connection";
-import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
+import { users, spins, jackpotPool, auditLog, transactions, balances, playerNotes } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getAllSettings, getSetting, setSetting } from "../lib/settings";
-import { toUsdt } from "../lib/limits";
+import { toUsdt, getLimits, getUsage } from "../lib/limits";
+import { hashPassword } from "../lib/password";
+import { getSqliteClient } from "../queries/connection";
+import crypto from "crypto";
 import { decryptSecret, verifyTotp } from "../lib/totp";
-import { count, sum, desc, eq, and, or, inArray, like } from "drizzle-orm";
+import { count, sum, desc, eq, and, or, inArray, like, max as sqlMax } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
 // Record every admin mutation for accountability. Failures to log are
 // reported but never silently swallowed.
+function parseTags(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 async function writeAudit(
   ctx: TrpcContext,
   action: string,
@@ -72,6 +85,313 @@ export const adminRouter = createRouter({
       createdAt: u.createdAt,
     }));
   }),
+
+  // ===== Section C: player management 360 =====
+
+  // C1: player list with search (email/name/phone), status filter,
+  // sorting, pagination, and USDT-equivalent balance totals.
+  listPlayers: adminQuery
+    .input(z.object({
+      search: z.string().max(120).optional(),
+      status: z.enum(["active", "frozen"]).optional(),
+      sort: z.enum(["newest", "balance", "activity"]).default("newest"),
+      limit: z.number().min(1).max(100).default(25),
+      offset: z.number().min(0).default(0),
+    }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const conds = [];
+      if (input.search) {
+        const pattern = `%${input.search}%`;
+        conds.push(or(like(users.email, pattern), like(users.name, pattern), like(users.phone, pattern)));
+      }
+      if (input.status === "active") conds.push(eq(users.isActive, true));
+      if (input.status === "frozen") conds.push(eq(users.isActive, false));
+      const where = conds.length ? and(...conds) : undefined;
+
+      const totalRows = await db.select({ n: count() }).from(users).where(where);
+      const total = totalRows[0]?.n ?? 0;
+
+      // Balance/activity sorts need aggregates, so they page in JS
+      // over a bounded candidate set (fine at current scale).
+      const fetchLimit = input.sort === "newest" ? input.limit : 500;
+      const fetchOffset = input.sort === "newest" ? input.offset : 0;
+      const rows = await db
+        .select()
+        .from(users)
+        .where(where)
+        .orderBy(desc(users.createdAt))
+        .limit(fetchLimit)
+        .offset(fetchOffset);
+      const ids = rows.map((u) => u.id);
+      const bals = ids.length
+        ? await db.select().from(balances).where(inArray(balances.userId, ids))
+        : [];
+      const lastSpins = ids.length
+        ? await db
+            .select({ userId: spins.userId, last: sqlMax(spins.createdAt) })
+            .from(spins)
+            .where(inArray(spins.userId, ids))
+            .groupBy(spins.userId)
+        : [];
+      const balByUser = new Map<number, number>();
+      for (const b of bals) {
+        const v = toUsdt(parseFloat(b.available || "0") + parseFloat(b.locked || "0"), b.currency);
+        balByUser.set(b.userId, (balByUser.get(b.userId) ?? 0) + v);
+      }
+      const spinByUser = new Map<number, any>();
+      for (const r of lastSpins) spinByUser.set(r.userId, r.last);
+
+      let enriched = rows.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        phone: u.phone,
+        role: u.role,
+        isActive: u.isActive,
+        tags: parseTags(u.tags),
+        createdAt: u.createdAt,
+        lastSignInAt: u.lastSignInAt,
+        balanceUsdt: Math.round((balByUser.get(u.id) ?? 0) * 100) / 100,
+        lastSpinAt: spinByUser.get(u.id) ?? null,
+      }));
+      if (input.sort === "balance") {
+        enriched = enriched.sort((a, b) => b.balanceUsdt - a.balanceUsdt).slice(input.offset, input.offset + input.limit);
+      } else if (input.sort === "activity") {
+        enriched = enriched
+          .sort((a, b) => new Date(b.lastSpinAt ?? 0).getTime() - new Date(a.lastSpinAt ?? 0).getTime())
+          .slice(input.offset, input.offset + input.limit);
+      }
+      return { rows: enriched, total };
+    }),
+
+  // C2: everything about one player in a single payload.
+  getPlayerDetail: adminQuery
+    .input(z.object({ userId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const user = await db.select().from(users).where(eq(users.id, input.userId)).then((r) => r[0]);
+      if (!user) throw new Error("User not found");
+      const bals = await db.select().from(balances).where(eq(balances.userId, input.userId));
+      let depositedUsdt = 0;
+      let withdrawnUsdt = 0;
+      for (const b of bals) {
+        depositedUsdt += toUsdt(parseFloat(b.totalDeposited || "0"), b.currency);
+        withdrawnUsdt += toUsdt(parseFloat(b.totalWithdrawn || "0"), b.currency);
+      }
+      const spinAgg = await db
+        .select({ currency: spins.currency, wagered: sum(spins.betAmount), won: sum(spins.winAmount), n: count() })
+        .from(spins)
+        .where(eq(spins.userId, input.userId))
+        .groupBy(spins.currency);
+      let wageredUsdt = 0;
+      let wonUsdt = 0;
+      let spinsCount = 0;
+      for (const a of spinAgg) {
+        wageredUsdt += toUsdt(parseFloat(a.wagered || "0"), a.currency);
+        wonUsdt += toUsdt(parseFloat(a.won || "0"), a.currency);
+        spinsCount += a.n || 0;
+      }
+      const recentSpins = await db
+        .select({
+          id: spins.id, betAmount: spins.betAmount, winAmount: spins.winAmount,
+          currency: spins.currency, isFreeSpin: spins.isFreeSpin,
+          featureTriggered: spins.featureTriggered, createdAt: spins.createdAt,
+        })
+        .from(spins)
+        .where(eq(spins.userId, input.userId))
+        .orderBy(desc(spins.createdAt))
+        .limit(20);
+      const recentTxs = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.userId, input.userId))
+        .orderBy(desc(transactions.createdAt))
+        .limit(20);
+      const notes = getSqliteClient()
+        .prepare(
+          `SELECT n.id, n.note, n.created_at AS createdAt, u.email AS adminEmail
+           FROM player_notes n LEFT JOIN users u ON u.id = n.admin_id
+           WHERE n.user_id = ? ORDER BY n.id DESC LIMIT 50`,
+        )
+        .all(input.userId);
+      const auditRows = await db
+        .select()
+        .from(auditLog)
+        .orderBy(desc(auditLog.createdAt))
+        .limit(300);
+      const trail = auditRows
+        .filter((r) => {
+          // audit_log.details is a json-mode column: drizzle hands it
+          // back already parsed (a string only in older rows).
+          try {
+            const d = typeof r.details === "string" ? JSON.parse(r.details) : (r.details ?? {});
+            return (d as any).userId === input.userId;
+          } catch {
+            return false;
+          }
+        })
+        .slice(0, 20)
+        .map((r) => ({ id: r.id, action: r.action, details: r.details, createdAt: r.createdAt }));
+      let rg: any = null;
+      try {
+        rg = { limits: getLimits(input.userId), usage: getUsage(input.userId) };
+      } catch {
+        rg = null;
+      }
+      return {
+        profile: {
+          id: user.id, name: user.name, email: user.email, phone: user.phone,
+          username: user.username, role: user.role, isActive: user.isActive,
+          tags: parseTags(user.tags), createdAt: user.createdAt, lastSignInAt: user.lastSignInAt,
+          totpEnabled: user.role !== "user" ? user.totpEnabled : undefined,
+        },
+        balances: bals.map((b) => ({
+          currency: b.currency, available: b.available, locked: b.locked,
+          totalDeposited: b.totalDeposited, totalWithdrawn: b.totalWithdrawn,
+        })),
+        stats: {
+          depositedUsdt: Math.round(depositedUsdt * 100) / 100,
+          withdrawnUsdt: Math.round(withdrawnUsdt * 100) / 100,
+          wageredUsdt: Math.round(wageredUsdt * 100) / 100,
+          wonUsdt: Math.round(wonUsdt * 100) / 100,
+          spinsCount,
+        },
+        recentSpins,
+        recentTxs,
+        notes,
+        auditTrail: trail,
+        rg,
+      };
+    }),
+
+  // C3: manual balance adjustment — capped per action, reason
+  // mandatory, written to the ledger as an admin_adjust leg so the
+  // balance stays reproducible from the ledger chain.
+  adjustPlayerBalance: adminQuery
+    .input(z.object({
+      userId: z.number(),
+      currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
+      amount: z.string().regex(/^-?\d+(\.\d{1,8})?$/),
+      reason: z.string().min(3).max(200),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const target = await db.select().from(users).where(eq(users.id, input.userId)).then((r) => r[0]);
+      if (!target) throw new Error("User not found");
+      if (target.role !== "user") throw new Error("Balance adjustments apply to player accounts");
+
+      const negative = input.amount.startsWith("-");
+      const absMicro = parseMoney(negative ? input.amount.slice(1) : input.amount);
+      if (absMicro === 0n) throw new Error("Adjustment amount must be non-zero");
+      const cap = getSetting<number>("player_adjust_max_usdt") ?? 500;
+      const usdtEq = toUsdt(parseFloat(negative ? input.amount.slice(1) : input.amount), input.currency);
+      if (cap > 0 && usdtEq > cap) {
+        throw new Error(`Adjustment exceeds the per-action cap of $${cap}`);
+      }
+      const signedMicro = negative ? -absMicro : absMicro;
+
+      const sqlite = getSqliteClient();
+      let balanceAfter = "";
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        const row = sqlite
+          .prepare("SELECT id, available FROM balances WHERE user_id = ? AND currency = ?")
+          .get(input.userId, input.currency) as any;
+        const oldAvail = row ? parseMoney(row.available || "0") : 0n;
+        const newAvail = oldAvail + signedMicro;
+        if (newAvail < 0n) throw new Error("Adjustment would make the balance negative");
+        balanceAfter = fmtMoney(newAvail);
+        if (row) {
+          sqlite.prepare("UPDATE balances SET available = ? WHERE id = ?").run(balanceAfter, row.id);
+        } else {
+          sqlite
+            .prepare("INSERT INTO balances (user_id, currency, available, locked) VALUES (?, ?, ?, '0')")
+            .run(input.userId, input.currency, balanceAfter);
+        }
+        sqlite
+          .prepare("INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'admin_adjust', ?, ?, ?)")
+          .run(input.userId, input.currency, fmtMoney(signedMicro), balanceAfter);
+        sqlite.exec("COMMIT");
+      } catch (e) {
+        sqlite.exec("ROLLBACK");
+        throw e;
+      }
+
+      await writeAudit(ctx, "admin.adjustBalance", {
+        userId: input.userId, currency: input.currency, amount: input.amount,
+        reason: input.reason, balanceAfter, usdtEq: Math.round(usdtEq * 100) / 100,
+      });
+      return { success: true, balanceAfter };
+    }),
+
+  // C4: freeze/unfreeze with a mandatory reason. Enforcement already
+  // exists (login + every authenticated request reject disabled
+  // accounts); this adds the guard rails and the audit reason.
+  setPlayerFrozen: adminQuery
+    .input(z.object({ userId: z.number(), frozen: z.boolean(), reason: z.string().min(3).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      if (ctx.user?.id === input.userId) throw new Error("You cannot freeze your own account");
+      const target = await db.select().from(users).where(eq(users.id, input.userId)).then((r) => r[0]);
+      if (!target) throw new Error("User not found");
+      if (target.role !== "user") throw new Error("Admin accounts cannot be frozen");
+      await db.update(users).set({ isActive: !input.frozen }).where(eq(users.id, input.userId));
+      await writeAudit(ctx, input.frozen ? "admin.freezePlayer" : "admin.unfreezePlayer", {
+        userId: input.userId, reason: input.reason,
+      });
+      return { success: true, userId: input.userId, frozen: input.frozen };
+    }),
+
+  // C5: internal notes + tags.
+  addPlayerNote: adminQuery
+    .input(z.object({ userId: z.number(), note: z.string().min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const target = await db.select({ id: users.id }).from(users).where(eq(users.id, input.userId)).then((r) => r[0]);
+      if (!target) throw new Error("User not found");
+      const [row] = await db
+        .insert(playerNotes)
+        .values({ userId: input.userId, adminId: ctx.user?.id ?? null, note: input.note })
+        .returning();
+      await writeAudit(ctx, "admin.addPlayerNote", { userId: input.userId, noteId: row.id });
+      return { success: true, noteId: row.id };
+    }),
+
+  setPlayerTags: adminQuery
+    .input(z.object({ userId: z.number(), tags: z.array(z.string().min(1).max(24)).max(8) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const target = await db.select({ id: users.id }).from(users).where(eq(users.id, input.userId)).then((r) => r[0]);
+      if (!target) throw new Error("User not found");
+      const clean = [...new Set(input.tags.map((t) => t.trim()).filter(Boolean))];
+      await db.update(users).set({ tags: JSON.stringify(clean) }).where(eq(users.id, input.userId));
+      await writeAudit(ctx, "admin.setPlayerTags", { userId: input.userId, tags: clean });
+      return { success: true, tags: clean };
+    }),
+
+  // C6: admin-initiated password reset. Generates a one-time
+  // temporary password (returned once, never stored in the audit
+  // log) and bumps the session epoch so every existing session dies.
+  resetPlayerPassword: superAdminQuery
+    .input(z.object({ userId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      if (ctx.user?.id === input.userId) throw new Error("Use the normal password change for your own account");
+      const target = await db.select().from(users).where(eq(users.id, input.userId)).then((r) => r[0]);
+      if (!target) throw new Error("User not found");
+      if (target.role === "super_admin") throw new Error("Super admin passwords cannot be reset here");
+      if (!target.passwordHash) throw new Error("Account has no password login");
+      const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+      let temp = "";
+      for (let i = 0; i < 14; i++) temp += alphabet[crypto.randomInt(alphabet.length)];
+      await db
+        .update(users)
+        .set({ passwordHash: hashPassword(temp), sessionEpoch: (target.sessionEpoch ?? 0) + 1 })
+        .where(eq(users.id, input.userId));
+      await writeAudit(ctx, "admin.resetPlayerPassword", { userId: input.userId });
+      return { success: true, tempPassword: temp };
+    }),
 
   // AP2: role management is a super-admin power, and the panel must
   // never be left without at least one super admin.

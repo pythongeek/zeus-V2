@@ -196,6 +196,12 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: 0,
     labelEn: "Daily withdrawal cap per player (USDT equivalent, 0 = no cap)", labelBn: "প্রতি খেলোয়াড়ের দৈনিক উত্তোলন সীমা (USDT সমতুল্য, 0 = সীমা নেই)",
   },
+  // Section C: per-action cap for manual balance adjustments.
+  player_adjust_max_usdt: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 500,
+    labelEn: "Manual balance adjustment cap per action (USDT equivalent, 0 = no cap)", labelBn: "ম্যানুয়াল ব্যালেন্স সমন্বয়ের প্রতি-অ্যাকশন সীমা (USDT সমতুল্য, 0 = সীমা নেই)",
+  },
   withdraw_fees: {
     type: "json", scope: "public", group: "currencies",
     def: { "BTC": "0.0001", "ETH": "0.001", "USDT": "1", "BDT": "10" },
