@@ -31,6 +31,12 @@ export async function authenticateSession(headers: Headers): Promise<User> {
   if (!user.isActive) {
     throw new Error("Account disabled");
   }
+  // AP3: a force sign-out bumps the account epoch; any token minted
+  // before the bump stops authenticating here. Legacy tokens without
+  // an epoch claim count as epoch 0.
+  if ((claim.epoch ?? 0) !== (user.sessionEpoch ?? 0)) {
+    throw new Error("Session revoked");
+  }
   // AP1: carry the session's 2FA scope alongside the user row so
   // middleware can restrict setup-scoped admin sessions.
   (user as User & { authScope?: string }).authScope =

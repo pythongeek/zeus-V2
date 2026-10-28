@@ -4,7 +4,7 @@ import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getAllSettings, setSetting } from "../lib/settings";
-import { count, sum, desc, eq, and } from "drizzle-orm";
+import { count, sum, desc, eq, and, or, inArray } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
 // Record every admin mutation for accountability. Failures to log are
@@ -297,6 +297,73 @@ export const adminRouter = createRouter({
       }
       await writeAudit(ctx, "admin.updateSettings", { keys: changed });
       return { success: true, changed };
+    }),
+
+  // ===== AP3: access overview — admin accounts + auth events =====
+  // Sessions are stateless JWTs, so there is no per-device session
+  // list; this view shows the accounts, their 2FA state and last
+  // sign-in, the recent auth event trail, and force sign-out works
+  // by bumping the account's session epoch (see AP3 schema notes).
+  getAccessOverview: adminQuery.query(async () => {
+    const db = getDb();
+    const admins = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        totpEnabled: users.totpEnabled,
+        lastSignInAt: users.lastSignInAt,
+        sessionEpoch: users.sessionEpoch,
+      })
+      .from(users)
+      .where(or(eq(users.role, "admin"), eq(users.role, "super_admin")));
+    const events = await db
+      .select({
+        id: auditLog.id,
+        action: auditLog.action,
+        details: auditLog.details,
+        ipAddress: auditLog.ipAddress,
+        createdAt: auditLog.createdAt,
+        userEmail: users.email,
+        userName: users.name,
+      })
+      .from(auditLog)
+      .leftJoin(users, eq(auditLog.userId, users.id))
+      .where(
+        inArray(auditLog.action, [
+          "auth.login",
+          "auth.loginFailed",
+          "auth.totpVerified",
+          "auth.totpEnabled",
+          "auth.totpDisabled",
+          "auth.forceSignOut",
+        ]),
+      )
+      .orderBy(desc(auditLog.createdAt))
+      .limit(100);
+    return { admins, events };
+  }),
+
+  forceSignOut: superAdminQuery
+    .input(z.object({ userId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const target = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .then(rows => rows[0]);
+      if (!target) throw new Error("User not found");
+      await db
+        .update(users)
+        .set({ sessionEpoch: (target.sessionEpoch ?? 0) + 1 })
+        .where(eq(users.id, input.userId));
+      await writeAudit(ctx, "auth.forceSignOut", {
+        userId: input.userId,
+        email: target.email,
+      });
+      return { success: true, userId: input.userId };
     }),
 
   // ===== B3: change audit log (read) =====

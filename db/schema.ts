@@ -18,6 +18,10 @@ export const users = sqliteTable("users", {
   // (api/lib/totp.ts); totpEnabled flips only after a code verifies.
   totpSecret: text("totp_secret"),
   totpEnabled: integer("totp_enabled", { mode: "boolean" }).default(false).notNull(),
+  // AP3: session epoch — session JWTs carry the epoch they were
+  // minted at; bumping it (force sign-out) revokes every existing
+  // session for the account without touching the password.
+  sessionEpoch: integer("session_epoch").default(0).notNull(),
   avatar: text("avatar"),
   // AP2: super_admin is the owner tier (settings, roles, math);
   // admin is the day-to-day operations tier.

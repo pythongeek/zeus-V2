@@ -220,6 +220,90 @@ function GameConfigCard({
   );
 }
 
+// AP3: Access & sessions card — admin accounts with 2FA state and
+// last sign-in, the recent auth event trail, and force sign-out
+// (super admin only; bumps the account's session epoch server-side).
+function AccessCard({ enabled, isSuper }: { enabled: boolean; isSuper: boolean }) {
+  const { t } = useLang();
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.admin.getAccessOverview.useQuery(undefined, {
+    enabled,
+    retry: false,
+  });
+  const forceSignOut = trpc.admin.forceSignOut.useMutation({
+    onSuccess: async () => {
+      toast.success(t("forceSignOutDone"));
+      await utils.admin.getAccessOverview.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  if (!enabled) return null;
+
+  return (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardHeader>
+        <CardTitle className="text-amber-400">{t("accessTitle")}</CardTitle>
+        <CardDescription className="text-slate-400">{t("accessDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {isLoading || !data ? (
+          <div className="text-slate-400 text-sm">…</div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {data.admins.map((a: any) => (
+                <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate">{a.name ?? "—"} <span className="text-slate-500">· {a.email ?? ""}</span></div>
+                    <div className="text-xs text-slate-500">
+                      {t("lastSignIn")}: {a.lastSignInAt ? new Date(a.lastSignInAt).toLocaleString() : "—"}
+                    </div>
+                  </div>
+                  <div className="ml-auto flex items-center gap-2">
+                    <Badge className={a.totpEnabled ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : "bg-red-500/20 text-red-300 border-red-500/30"}>
+                      2FA {a.totpEnabled ? t("on") : t("off")}
+                    </Badge>
+                    {isSuper && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs border-slate-700 text-slate-300 hover:bg-slate-800"
+                        disabled={forceSignOut.isPending}
+                        onClick={() => forceSignOut.mutate({ userId: a.id })}
+                      >
+                        {t("forceSignOut")}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-300 mb-2">{t("accessEvents")}</h3>
+              {!data.events.length ? (
+                <p className="text-xs text-slate-500">{t("queueEmpty")}</p>
+              ) : (
+                <ul className="space-y-1 text-xs text-slate-400">
+                  {data.events.map((e: any) => (
+                    <li key={e.id} className="flex gap-2 flex-wrap">
+                      <span className="text-slate-500">{new Date(e.createdAt).toLocaleString()}</span>
+                      <span className="text-slate-200">{e.action}</span>
+                      <span>{e.userEmail ?? e.userName ?? (typeof e.details === "object" ? (e.details as any)?.identifier ?? "" : "")}</span>
+                      <span className="text-slate-600">{e.ipAddress ?? ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <p className="text-xs text-slate-600">{t("sessionNote")}</p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // P0.2: admin sections (sidebar). Sections with no content yet in the
 // approved programme (Risk = Section G, Promotions = Section H) render
 // an honest placeholder instead of pretending to work.
@@ -723,6 +807,7 @@ export default function Admin() {
                   <TotpSetup />
                 </CardContent>
               </Card>
+              <AccessCard enabled={isAuthenticated && isAdmin} isSuper={isSuper} />
               <GameConfigCard enabled={isAuthenticated && isAdmin} groups={[]} showAudit titleKey="recentChanges" />
             </>
           )}

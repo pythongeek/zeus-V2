@@ -74,9 +74,17 @@ async function issueSession(
   unionId: string,
   scope?: "setup",
 ) {
+  // AP3: stamp the token with the account's current session epoch.
+  const db = getDb();
+  const epochRow = await db
+    .select({ sessionEpoch: users.sessionEpoch })
+    .from(users)
+    .where(eq(users.unionId, unionId))
+    .then(rows => rows[0]);
   const token = await signSessionToken({
     unionId,
     clientId: "zeus-local",
+    epoch: epochRow?.sessionEpoch ?? 0,
     ...(scope ? { scope } : {}),
   });
   const opts = getSessionCookieOptions(ctx.req.headers);
@@ -200,10 +208,21 @@ export const authLocalRouter = createRouter({
         .then(rows => rows[0]);
 
       // Uniform error: never reveal whether the account exists.
+      // AP3: failed attempts are audited (identifier only) for the
+      // admin Access view; auditing must never break login itself.
       const failed = new Error("Invalid credentials");
-      if (!row || !row.passwordHash) throw failed;
-      if (!verifyPassword(input.password, row.passwordHash)) throw failed;
+      if (!row || !row.passwordHash || !verifyPassword(input.password, row.passwordHash)) {
+        try {
+          await writeAudit(ctx, row?.id ?? null, "auth.loginFailed", {
+            identifier: input.identifier,
+          });
+        } catch { /* audit is best-effort on the failure path */ }
+        throw failed;
+      }
       if (!row.isActive) throw new Error("Account disabled");
+      try {
+        await writeAudit(ctx, row.id, "auth.login", {});
+      } catch { /* best-effort */ }
 
       await db
         .update(users)

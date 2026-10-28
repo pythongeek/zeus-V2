@@ -27,7 +27,7 @@ export async function verifySessionToken(
     const { payload } = await jose.jwtVerify(token, secret, {
       algorithms: [JWT_ALG],
     });
-    const { unionId, clientId, scope } = payload as Record<string, unknown>;
+    const { unionId, clientId, scope, epoch } = payload as Record<string, unknown>;
     if (!unionId || !clientId) {
       console.warn("[session] JWT payload missing required fields.");
       return null;
@@ -36,6 +36,7 @@ export async function verifySessionToken(
       unionId: unionId as string,
       clientId: clientId as string,
       ...(scope === "setup" ? { scope: "setup" as const } : {}),
+      ...(typeof epoch === "number" ? { epoch } : {}),
     } as SessionPayload;
   } catch (error) {
     console.warn("[session] JWT verification failed:", error);
