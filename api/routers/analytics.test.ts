@@ -183,6 +183,9 @@ describe("B3/B4: top players + money position", () => {
     insertTx(whale.id, "withdrawal", "45", "pending", nowSec - 10);
     const pos = await a.getMoneyPosition();
     expect(pos.availableUsdt).toBe(1000);
+    // byCurrency must SUM across users (a second USDT holder exists:
+    // the admin's empty row must not clobber the whale's 1000).
+    expect(pos.byCurrency.USDT.available).toBe("1000");
     expect(pos.liabilitiesUsdt).toBe(1000);
     expect(pos.pendingWithdrawalsCount).toBe(1);
     expect(pos.pendingWithdrawalsUsdt).toBe(45);

@@ -268,10 +268,17 @@ export const adminRouter = createRouter({
     let availableUsdt = 0;
     let lockedUsdt = 0;
     const byCurrency: Record<string, { available: string; locked: string }> = {};
+    const rawByCurrency = new Map<string, { available: bigint; locked: bigint }>();
     for (const b of bals) {
       availableUsdt += toUsdt(parseFloat(b.available || "0"), b.currency);
       lockedUsdt += toUsdt(parseFloat(b.locked || "0"), b.currency);
-      byCurrency[b.currency] = { available: b.available, locked: b.locked };
+      const cur = rawByCurrency.get(b.currency) ?? { available: 0n, locked: 0n };
+      cur.available += parseMoney(b.available || "0");
+      cur.locked += parseMoney(b.locked || "0");
+      rawByCurrency.set(b.currency, cur);
+    }
+    for (const [currency, v] of rawByCurrency) {
+      byCurrency[currency] = { available: fmtMoney(v.available), locked: fmtMoney(v.locked) };
     }
     const pools = await db.select().from(jackpotPool);
     let poolsUsdt = 0;
