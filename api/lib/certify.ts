@@ -161,7 +161,7 @@ export interface CertifyResult {
   mcSpins: number;
 }
 
-export function certifyMath(bundle: MathBundle, mcSpins = 150_000): CertifyResult {
+export function certifyMath(bundle: MathBundle, mcSpins = 500_000): CertifyResult {
   const exact = exactBase(bundle);
   const payouts = bundlePayouts(bundle);
   const mathLike = {
