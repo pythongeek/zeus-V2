@@ -134,6 +134,18 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: "",
     labelEn: "Binance account name shown with the PayID", labelBn: "PayID-এর সঙ্গে দেখানো Binance অ্যাকাউন্টের নাম",
   },
+  // U5: same Binance Pay QR card + uni-qr link as Golden Toss, both
+  // admin-editable like the PayID. The image itself is a static asset.
+  binance_qr_image: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "Binance Pay QR image path or URL shown for deposits", labelBn: "ডিপোজিটের জন্য Binance Pay QR ছবির পথ বা URL",
+  },
+  binance_pay_link: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "Binance Pay link (opens the Binance app payment screen)", labelBn: "Binance Pay লিংক (Binance অ্যাপের পেমেন্ট স্ক্রিন খোলে)",
+  },
   fx_rates: {
     type: "json", scope: "public", group: "currencies",
     def: { "BTC": 11000000, "ETH": 380000, "USDT": 110, "BDT": 1 },

@@ -1494,6 +1494,29 @@ for (let i = 0; i < 5; i++) {
                         <div className="text-[#9E9EAC]">{t("depositPayName")}: {store.config.binance_pay_name}</div>
                       ) : null}
                       <div className="text-[#5E5E6E]">{t("depositVerifyNote")}</div>
+                      {store.config.binance_qr_image ? (
+                        <div className="flex flex-col items-center gap-1.5 pt-2">
+                          <img
+                            src={String(store.config.binance_qr_image)}
+                            alt={t("depositScanQr")}
+                            className="w-52 max-w-full rounded-lg border border-[#2A2A35]"
+                            loading="lazy"
+                          />
+                          <div className="text-[#9E9EAC]">{t("depositScanQr")}</div>
+                        </div>
+                      ) : null}
+                      {store.config.binance_pay_link ? (
+                        <div className="pt-1 text-center">
+                          <a
+                            href={String(store.config.binance_pay_link)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#D4AF37] underline underline-offset-2 font-semibold"
+                          >
+                            {t("depositOpenPay")}
+                          </a>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex gap-2">
                       <select
