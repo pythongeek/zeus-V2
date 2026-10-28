@@ -176,12 +176,21 @@ describe("A2: atomic spin + ledger", () => {
     const ok = attempts.filter((a) => a.status === "fulfilled") as PromiseFulfilledResult<any>[];
     expect(ok.length).toBeGreaterThanOrEqual(3);
 
-    const totalWin = ok.reduce((sum, a) => sum + parseFloat(a.value.winAmount), 0);
     const finalBal = parseFloat(
       rawOne("SELECT available FROM balances WHERE user_id = ? AND currency = 'USDT'", rich.user.id).available,
     );
     expect(finalBal).toBeGreaterThanOrEqual(0);
-    expect(finalBal).toBeCloseTo(3 - ok.length + totalWin, 8);
+    // F6 hardening: the old expectation (3 - ok.length + sum of response
+    // winAmounts) was flaky — when a burst spin triggers free spins, a
+    // later burst spin becomes a FREE spin (no debit, different credit
+    // kind), which the response arithmetic cannot model. The ledger is
+    // the source of truth: final balance must equal the starting
+    // balance plus the exact sum of ledger legs.
+    const ledgerSum = rawOne(
+      "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) AS s FROM ledger_entries WHERE user_id = ?",
+      rich.user.id,
+    ).s;
+    expect(finalBal).toBeCloseTo(3 + ledgerSum, 8);
 
     const spinRows = raw("SELECT nonce FROM spins WHERE user_id = ? ORDER BY nonce", rich.user.id);
     expect(spinRows).toHaveLength(ok.length);
@@ -192,6 +201,10 @@ describe("A2: atomic spin + ledger", () => {
       "SELECT COUNT(*) AS c FROM ledger_entries WHERE user_id = ? AND kind = 'spin_debit'",
       rich.user.id,
     ).c;
-    expect(debits).toBe(ok.length);
+    const paidSpins = rawOne(
+      "SELECT COUNT(*) AS c FROM spins WHERE user_id = ? AND is_free_spin = 0",
+      rich.user.id,
+    ).c;
+    expect(debits).toBe(paidSpins);
   });
 });
