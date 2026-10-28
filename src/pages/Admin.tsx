@@ -383,6 +383,23 @@ export default function Admin() {
     refetchInterval: 15000,
   });
 
+  // D1: deposit-reject inline form + history filters
+  const [rejectFor, setRejectFor] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [histStatus, setHistStatus] = useState("");
+  const [histType, setHistType] = useState("");
+  const [histSearch, setHistSearch] = useState("");
+  const { data: txHistory } = trpc.admin.listTransactions.useQuery(
+    {
+      status: (histStatus || undefined) as any,
+      type: (histType || undefined) as any,
+      search: histSearch || undefined,
+      limit: 50,
+      offset: 0,
+    },
+    { enabled: isAuthenticated && isAdmin && section === "payments", retry: false },
+  );
+
   const [jackpotAmount, setJackpotAmount] = useState<Record<string, string>>({
     mini: "",
     major: "",
@@ -428,6 +445,17 @@ export default function Admin() {
       await invalidateTx();
     },
     onError: (err) => toast.error(`${t("approveFailed")}: ${err.message}`),
+  });
+
+  const rejectDepositMutation = trpc.admin.rejectDeposit.useMutation({
+    onSuccess: async () => {
+      toast.success(t("depositRejected"));
+      setRejectFor(null);
+      setRejectReason("");
+      await invalidateTx();
+      await utils.admin.listTransactions.invalidate();
+    },
+    onError: (err) => toast.error(`${t("rejectFailed")}: ${err.message}`),
   });
 
   const rejectWithdrawMutation = trpc.admin.rejectWithdraw.useMutation({
@@ -715,14 +743,24 @@ export default function Admin() {
                             </TableCell>
                             <TableCell className="text-right space-x-2">
                               {tx.type === "deposit" ? (
-                                <Button
-                                  size="sm"
-                                  className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
-                                  disabled={approveDepositMutation.isPending}
-                                  onClick={() => approveDepositMutation.mutate({ txId: tx.id })}
-                                >
-                                  {t("approveDeposit")}
-                                </Button>
+                                <>
+                                  <Button
+                                    size="sm"
+                                    className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+                                    disabled={approveDepositMutation.isPending}
+                                    onClick={() => approveDepositMutation.mutate({ txId: tx.id })}
+                                  >
+                                    {t("approveDeposit")}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10"
+                                    onClick={() => { setRejectFor(rejectFor === tx.id ? null : tx.id); setRejectReason(""); }}
+                                  >
+                                    {t("reject")}
+                                  </Button>
+                                </>
                               ) : (
                                 <>
                                   <Button
@@ -744,6 +782,128 @@ export default function Admin() {
                                   </Button>
                                 </>
                               )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+              {rejectFor !== null && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 space-y-3">
+                  <div className="text-sm text-red-300 font-medium">
+                    {t("rejectingDeposit")} #{rejectFor}
+                  </div>
+                  <Input
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    placeholder={t("rejectReasonPh")}
+                    className="bg-slate-950 border-slate-700 text-slate-200"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="bg-red-600 hover:bg-red-500 text-white"
+                      disabled={rejectDepositMutation.isPending || rejectReason.trim().length < 3}
+                      onClick={() => rejectDepositMutation.mutate({ txId: rejectFor, reason: rejectReason.trim() })}
+                    >
+                      {t("confirmReject")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-slate-700 text-slate-300"
+                      onClick={() => setRejectFor(null)}
+                    >
+                      {t("cancel")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <Card className="bg-slate-900/80 border-slate-800">
+                <CardHeader>
+                  <CardTitle>{t("historyTitle")}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    <select
+                      value={histStatus}
+                      onChange={(e) => setHistStatus(e.target.value)}
+                      className="bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200"
+                    >
+                      <option value="">{t("allStatuses")}</option>
+                      <option value="pending">pending</option>
+                      <option value="confirming">confirming</option>
+                      <option value="confirmed">confirmed</option>
+                      <option value="failed">failed</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                    <select
+                      value={histType}
+                      onChange={(e) => setHistType(e.target.value)}
+                      className="bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200"
+                    >
+                      <option value="">{t("allTypes")}</option>
+                      <option value="deposit">deposit</option>
+                      <option value="withdrawal">withdrawal</option>
+                    </select>
+                    <Input
+                      value={histSearch}
+                      onChange={(e) => setHistSearch(e.target.value)}
+                      placeholder={t("searchTxPh")}
+                      className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs max-w-xs"
+                    />
+                  </div>
+                  {!txHistory || txHistory.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-2">{t("noResults")}</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-slate-800 hover:bg-transparent">
+                          <TableHead className="text-slate-400">ID</TableHead>
+                          <TableHead className="text-slate-400">{t("playerName")}</TableHead>
+                          <TableHead className="text-slate-400">{t("type")}</TableHead>
+                          <TableHead className="text-slate-400">{t("amountPlaceholder")}</TableHead>
+                          <TableHead className="text-slate-400">{t("statusCol")}</TableHead>
+                          <TableHead className="text-slate-400">{t("noteCol")}</TableHead>
+                          <TableHead className="text-slate-400">{t("dateCol")}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {txHistory.map((tx: any) => (
+                          <TableRow key={tx.id} className="border-slate-800/60">
+                            <TableCell className="font-mono text-xs">#{tx.id}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{tx.userName ?? `User ${tx.userId}`}</div>
+                              <div className="text-xs text-slate-500">{tx.userEmail ?? ""}</div>
+                            </TableCell>
+                            <TableCell className="text-xs">{tx.type.toUpperCase()}</TableCell>
+                            <TableCell className="font-mono text-sm">{tx.amount} {tx.currency}</TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="secondary"
+                                className={
+                                  tx.status === "confirmed"
+                                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                                    : tx.status === "pending" || tx.status === "confirming"
+                                      ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                                      : "bg-red-500/15 text-red-400 border-red-500/30"
+                                }
+                              >
+                                {tx.status.toUpperCase()}
+                              </Badge>
+                              {tx.type === "withdrawal" && tx.status === "confirmed" && (
+                                <span className="ml-2 text-[11px] text-slate-400">
+                                  {tx.paidAt ? `${t("paidLabel")} · ${tx.payoutRef ?? ""}` : t("unpaidLabel")}
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-400 max-w-[200px] truncate">
+                              {tx.reviewNote ?? tx.holdReason ?? (tx.type === "deposit" ? tx.txHash : tx.toAddress) ?? "—"}
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-500">
+                              {new Date(tx.createdAt).toLocaleString()}
                             </TableCell>
                           </TableRow>
                         ))}

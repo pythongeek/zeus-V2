@@ -131,6 +131,13 @@ export const transactions = sqliteTable("transactions", {
   confirmations: integer("confirmations", { mode: "number" }).default(0).notNull(),
   requiredConfirmations: integer("required_confirmations", { mode: "number" }).default(3).notNull(),
   processedAt: integer("processed_at", { mode: "timestamp" }),
+  // Section D: money-operations workflow (migration 0014).
+  approvedBy: integer("approved_by", { mode: "number" }),
+  approvedAt: integer("approved_at", { mode: "timestamp" }),
+  payoutRef: text("payout_ref"),
+  paidAt: integer("paid_at", { mode: "timestamp" }),
+  reviewNote: text("review_note"),
+  holdReason: text("hold_reason"),
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
 }, (table) => ({

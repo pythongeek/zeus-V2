@@ -4,7 +4,7 @@ import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getAllSettings, setSetting } from "../lib/settings";
-import { count, sum, desc, eq, and, or, inArray } from "drizzle-orm";
+import { count, sum, desc, eq, and, or, inArray, like } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
 // Record every admin mutation for accountability. Failures to log are
@@ -196,6 +196,86 @@ export const adminRouter = createRouter({
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency,
       });
       return { success: true, txId: tx.id };
+    }),
+
+  // D1: deposits can now be rejected (previously approve-only, so a
+  // bad claim sat in the queue forever). No balance was ever locked
+  // for a deposit, so rejection moves no money — it records the
+  // refusal with a reason the player can be told.
+  rejectDeposit: adminQuery
+    .input(z.object({ txId: z.number(), reason: z.string().min(3).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const tx = await db.select().from(transactions)
+        .where(and(eq(transactions.id, input.txId), eq(transactions.type, "deposit")))
+        .then(rows => rows[0]);
+      if (!tx) throw new Error("Deposit transaction not found");
+      if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
+
+      await db.update(transactions)
+        .set({ status: "failed", reviewNote: input.reason, processedAt: new Date() })
+        .where(eq(transactions.id, tx.id));
+
+      await writeAudit(ctx, "admin.rejectDeposit", {
+        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, reason: input.reason,
+      });
+      return { success: true, txId: tx.id };
+    }),
+
+  // D1: full transaction history for the Payments section — filter
+  // by status/type and free-text search across player email/name and
+  // the transaction reference/address.
+  listTransactions: adminQuery
+    .input(z.object({
+      status: z.enum(["pending", "confirming", "confirmed", "failed", "cancelled"]).optional(),
+      type: z.enum(["deposit", "withdrawal"]).optional(),
+      search: z.string().max(120).optional(),
+      limit: z.number().min(1).max(200).default(50),
+      offset: z.number().min(0).default(0),
+    }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const conds = [];
+      if (input.status) conds.push(eq(transactions.status, input.status));
+      if (input.type) conds.push(eq(transactions.type, input.type));
+      if (input.search) {
+        const pattern = `%${input.search}%`;
+        conds.push(or(
+          like(users.email, pattern),
+          like(users.name, pattern),
+          like(transactions.txHash, pattern),
+          like(transactions.toAddress, pattern),
+        ));
+      }
+      return db
+        .select({
+          id: transactions.id,
+          userId: transactions.userId,
+          userName: users.name,
+          userEmail: users.email,
+          userPhone: users.phone,
+          type: transactions.type,
+          currency: transactions.currency,
+          amount: transactions.amount,
+          fee: transactions.fee,
+          status: transactions.status,
+          toAddress: transactions.toAddress,
+          txHash: transactions.txHash,
+          reviewNote: transactions.reviewNote,
+          holdReason: transactions.holdReason,
+          approvedBy: transactions.approvedBy,
+          approvedAt: transactions.approvedAt,
+          payoutRef: transactions.payoutRef,
+          paidAt: transactions.paidAt,
+          processedAt: transactions.processedAt,
+          createdAt: transactions.createdAt,
+        })
+        .from(transactions)
+        .leftJoin(users, eq(users.id, transactions.userId))
+        .where(conds.length ? and(...conds) : undefined)
+        .orderBy(desc(transactions.createdAt))
+        .limit(input.limit)
+        .offset(input.offset);
     }),
 
   approveWithdraw: adminQuery
