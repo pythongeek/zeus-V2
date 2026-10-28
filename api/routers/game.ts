@@ -462,6 +462,20 @@ export const gameRouter = createRouter({
           lines.push(...reeval.lines);
         }
 
+        // E3: optional max-win cap (x bet) on the game win itself.
+        // Jackpot pool awards are added after this point and are
+        // never capped — the pool is the players' money, not a
+        // multiplier outcome.
+        const maxWinX = getSetting<number>("max_win_x");
+        if (typeof maxWinX === "number" && maxWinX > 0) {
+          const capMicro = mulDivRound(
+            spinBetMicro,
+            BigInt(Math.round(maxWinX * 100)),
+            100n,
+          );
+          if (winMicro > capMicro) winMicro = capMicro;
+        }
+
         const jackpot = features.jackpots ? checkJackpot(hash) : null;
         // A6: the award IS the tier's pool balance at this moment (read
         // inside the transaction) — no longer a bet multiplier.
@@ -776,4 +790,4 @@ export const gameRouter = createRouter({
     }),
 });
 
-export { SYMBOLS, SYMBOL_NAMES, REEL_STRIPS, PAYLINES, calculateSpin, evaluatePaylines, checkThunderStrike };
+export { SYMBOLS, SYMBOL_NAMES, REEL_STRIPS, PAYLINES, calculateSpin, evaluatePaylines, checkThunderStrike, checkJackpot };
