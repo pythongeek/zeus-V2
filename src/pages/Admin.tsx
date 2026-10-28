@@ -11,7 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw,
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
-  FlaskConical,
+  FlaskConical, HeartPulse, BellRing, Download,
 } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { toast } from "sonner";
@@ -25,6 +25,267 @@ import { TotpSetup } from "@/components/TotpSetup";
 // admin section renders only its own setting groups, and the audit
 // trail can stand alone in the System section.
 const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math", "security"];
+
+/** Section I: system health, exports, alert channels. */
+function fmtBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)} KB`;
+  return `${n} B`;
+}
+
+function HealthCard({ enabled }: { enabled: boolean }) {
+  const { t } = useLang();
+  const q = trpc.admin.getSystemHealth.useQuery(undefined, { enabled, retry: false });
+  const h: any = q.data;
+  const row = (label: string, value: React.ReactNode) => (
+    <div className="flex flex-wrap items-baseline gap-2 border-b border-slate-800/60 py-1.5">
+      <span className="text-xs uppercase text-slate-500 w-36 shrink-0">{label}</span>
+      <span className="text-sm text-slate-200">{value}</span>
+    </div>
+  );
+  return (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <HeartPulse className="h-4 w-4 text-emerald-400" /> {t("healthTitle")}
+          <span className="flex-1" />
+          <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700" onClick={() => q.refetch()}>
+            {t("refreshBtn")}
+          </Button>
+        </CardTitle>
+        <CardDescription className="text-slate-400">{t("healthDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading || !h ? (
+          <p className="text-sm text-slate-500">{t("loading")}</p>
+        ) : (
+          <div>
+            {row(t("hService"), (
+              <span>
+                <span className="text-emerald-400">●</span> {t("hRunning")} · {t("hUptime")}{" "}
+                {Math.floor(h.service.uptimeSec / 3600)}h {Math.floor((h.service.uptimeSec % 3600) / 60)}m ·{" "}
+                Node {h.service.nodeVersion}
+              </span>
+            ))}
+            {row(t("hVersion"), (
+              <span className="font-mono text-xs">
+                {h.version.commit ?? "—"}
+                {h.version.commitDate ? ` · ${new Date(h.version.commitDate).toLocaleString()}` : ""}
+              </span>
+            ))}
+            {row(t("hDatabase"), <span className="font-mono text-xs">{fmtBytes(h.db.sizeBytes)}</span>)}
+            {row(t("hDisk"), h.disk ? (
+              <span className="font-mono text-xs">
+                {fmtBytes(h.disk.free)} {t("hFreeOf")} {fmtBytes(h.disk.total)}
+              </span>
+            ) : "—")}
+            {row(t("hBackup"), h.backup ? (
+              <span className="text-xs">
+                {h.backup.file} · {new Date(h.backup.at * 1000).toLocaleString()} · {fmtBytes(h.backup.sizeBytes)}
+              </span>
+            ) : t("hNoBackup"))}
+            {row(t("hMonitor"), (
+              <span className="text-xs">
+                {h.monitor.failCount === 0
+                  ? <span className="text-emerald-400">{t("hMonitorOk")}</span>
+                  : <span className="text-red-400">{h.monitor.failCount} {t("hMonitorFailing")}</span>}
+                {h.monitor.recent.length > 0 && (
+                  <span className="block font-mono text-[11px] text-slate-500 mt-1">
+                    {h.monitor.recent[h.monitor.recent.length - 1]}
+                  </span>
+                )}
+              </span>
+            ))}
+            <div className="pt-3">
+              <div className="text-xs uppercase text-slate-500 mb-1.5">{t("hErrors")}</div>
+              {h.errors.length === 0 ? (
+                <p className="text-xs text-emerald-400">{t("hNoErrors")}</p>
+              ) : (
+                <pre className="text-[11px] leading-relaxed text-red-300/80 bg-slate-950/60 border border-slate-800 rounded-lg p-3 overflow-x-auto max-h-56 overflow-y-auto whitespace-pre-wrap">
+                  {h.errors.join("\n")}
+                </pre>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ExportsCard({ enabled }: { enabled: boolean }) {
+  const { t } = useLang();
+  const [kind, setKind] = useState<"players" | "transactions" | "spins" | "settings_history">("players");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const exportM = trpc.admin.exportData.useMutation({
+    onSuccess: (r: any) => {
+      const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = r.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${t("exportDone")}: ${r.rowCount}${r.truncated ? ` (${t("exportTruncated")})` : ""}`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  if (!enabled) return null;
+  const inputCls = "bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100";
+  return (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Download className="h-4 w-4 text-sky-400" /> {t("exportsTitle")}
+        </CardTitle>
+        <CardDescription className="text-slate-400">{t("exportsDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="space-y-1">
+            <span className="text-xs text-slate-500 block">{t("exportKind")}</span>
+            <select className={inputCls} value={kind} onChange={(e) => setKind(e.target.value as any)}>
+              <option value="players">{t("exportPlayers")}</option>
+              <option value="transactions">{t("exportTransactions")}</option>
+              <option value="spins">{t("exportSpins")}</option>
+              <option value="settings_history">{t("exportSettingsHistory")}</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs text-slate-500 block">{t("fromLbl")}</span>
+            <input type="date" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs text-slate-500 block">{t("toLbl")}</span>
+            <input type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} />
+          </label>
+          <Button
+            size="sm"
+            className="h-9 bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+            disabled={exportM.isPending}
+            onClick={() =>
+              exportM.mutate({
+                kind,
+                ...(from ? { from } : {}),
+                ...(to ? { to } : {}),
+              })
+            }
+          >
+            {exportM.isPending ? t("loading") : t("downloadCsv")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AlertChannelsCard({ enabled, canEdit }: { enabled: boolean; canEdit: boolean }) {
+  const { t, lang } = useLang();
+  const utils = trpc.useUtils();
+  const { data: settingsList } = trpc.admin.getSettings.useQuery(undefined, { enabled, retry: false });
+  const [webhook, setWebhook] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(null);
+  const saveM = trpc.admin.updateSettings.useMutation({
+    onSuccess: async () => {
+      toast.success(t("channelsSaved"));
+      setWebhook(null);
+      setChatId(null);
+      await utils.admin.getSettings.invalidate();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const testM = trpc.admin.testAlertChannel.useMutation({
+    onSuccess: (r: any) => {
+      const parts: string[] = [];
+      parts.push(
+        r.webhook.configured
+          ? `${t("chanWebhook")}: ${r.webhook.ok ? "OK" : r.webhook.error ?? `HTTP ${r.webhook.status}`}`
+          : `${t("chanWebhook")}: ${t("chanNotSet")}`,
+      );
+      parts.push(
+        r.telegram.configured
+          ? `${t("chanTelegram")}: ${r.telegram.ok ? "OK" : r.telegram.error}`
+          : `${t("chanTelegram")}: ${t("chanNotSet")}`,
+      );
+      toast.info(parts.join(" · "), { duration: 8000 });
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  if (!enabled || !settingsList) return null;
+  const current = (key: string) => String(settingsList.find((s: any) => s.key === key)?.value ?? "");
+  const label = (s: any) => (lang === "bn" ? s.labelBn : s.labelEn);
+  const whDef = settingsList.find((s: any) => s.key === "alert_webhook_url");
+  const tgDef = settingsList.find((s: any) => s.key === "alert_telegram_chat_id");
+  const inputCls = "w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 font-mono";
+  return (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BellRing className="h-4 w-4 text-amber-400" /> {t("channelsTitle")}
+        </CardTitle>
+        <CardDescription className="text-slate-400">{t("channelsDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {whDef && (
+          <label className="block space-y-1">
+            <span className="text-xs text-slate-400">{label(whDef)}</span>
+            <input
+              className={inputCls}
+              disabled={!canEdit}
+              value={webhook ?? current("alert_webhook_url")}
+              onChange={(e) => setWebhook(e.target.value)}
+              placeholder="https://..."
+            />
+          </label>
+        )}
+        {tgDef && (
+          <label className="block space-y-1">
+            <span className="text-xs text-slate-400">{label(tgDef)}</span>
+            <input
+              className={inputCls}
+              disabled={!canEdit}
+              value={chatId ?? current("alert_telegram_chat_id")}
+              onChange={(e) => setChatId(e.target.value)}
+              placeholder="-100..."
+            />
+          </label>
+        )}
+        <div className="flex flex-wrap gap-2">
+          {canEdit && (
+            <Button
+              size="sm"
+              className="h-8 text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold"
+              disabled={saveM.isPending || (webhook === null && chatId === null)}
+              onClick={() =>
+                saveM.mutate({
+                  entries: {
+                    ...(webhook !== null ? { alert_webhook_url: webhook } : {}),
+                    ...(chatId !== null ? { alert_telegram_chat_id: chatId } : {}),
+                  },
+                })
+              }
+            >
+              {t("saveChanges")}
+            </Button>
+          )}
+          {canEdit && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs border-slate-700"
+              disabled={testM.isPending}
+              onClick={() => testM.mutate()}
+            >
+              {testM.isPending ? t("loading") : t("testChannelsBtn")}
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 /** Section G: risk, reconciliation & alerts. */
 function RiskSection({
@@ -2442,6 +2703,9 @@ export default function Admin() {
                 </CardContent>
               </Card>
               <AccessCard enabled={isAuthenticated && isAdmin} isSuper={isSuper} />
+              <HealthCard enabled={isAuthenticated && isAdmin} />
+              <ExportsCard enabled={isAuthenticated && isAdmin} />
+              <AlertChannelsCard enabled={isAuthenticated && isAdmin} canEdit={isSuper} />
               <GameConfigCard enabled={isAuthenticated && isAdmin} groups={[]} showAudit titleKey="recentChanges" />
             </>
           )}
