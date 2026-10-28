@@ -3,7 +3,9 @@ import { createRouter, adminFullQuery as adminQuery, superAdminQuery } from "../
 import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
-import { getAllSettings, setSetting } from "../lib/settings";
+import { getAllSettings, getSetting, setSetting } from "../lib/settings";
+import { toUsdt } from "../lib/limits";
+import { decryptSecret, verifyTotp } from "../lib/totp";
 import { count, sum, desc, eq, and, or, inArray, like } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
@@ -145,14 +147,30 @@ export const adminRouter = createRouter({
         status: transactions.status,
         toAddress: transactions.toAddress,
         txHash: transactions.txHash,
+        reviewNote: transactions.reviewNote,
+        holdReason: transactions.holdReason,
+        approvedBy: transactions.approvedBy,
+        approvedAt: transactions.approvedAt,
         createdAt: transactions.createdAt,
       })
       .from(transactions)
       .leftJoin(users, eq(users.id, transactions.userId))
-      .where(eq(transactions.status, "pending"))
+      .where(inArray(transactions.status, ["pending", "confirming"]))
       .orderBy(desc(transactions.createdAt))
       .limit(100);
-    return rows;
+    // D4: annotate each row with the policy outcome so the UI can
+    // label stages and ask for a 2FA code only when one is due.
+    const dualAbove = getSetting<number>("withdrawal_dual_approval_usdt") ?? 100;
+    const totpAbove = getSetting<number>("withdrawal_2fa_above_usdt") ?? 1000;
+    return rows.map((r) => {
+      const usdtEq = toUsdt(parseFloat(r.amount), r.currency);
+      return {
+        ...r,
+        usdtEq: Math.round(usdtEq * 100) / 100,
+        requiresDual: r.type === "withdrawal" && dualAbove > 0 && usdtEq > dualAbove,
+        requiresTotp: r.type === "withdrawal" && totpAbove > 0 && usdtEq > totpAbove,
+      };
+    });
   }),
 
   approveDeposit: adminQuery
@@ -278,15 +296,67 @@ export const adminRouter = createRouter({
         .offset(input.offset);
     }),
 
+  // D3+D4: staged withdrawal approval.
+  // - A held withdrawal cannot be approved until the hold is released.
+  // - Above the dual-approval threshold, the first approval parks the
+  //   withdrawal in "confirming"; a DIFFERENT admin must give the
+  //   second approval, which executes the payout bookkeeping.
+  // - Above the 2FA threshold, the executing approver must present a
+  //   fresh authenticator code with the request.
+  // Execution itself is unchanged from the original flow: locked
+  // funds leave the balance, totalWithdrawn grows, status confirms.
+  // The actual Binance payout is then recorded via markWithdrawalPaid.
   approveWithdraw: adminQuery
-    .input(z.object({ txId: z.number() }))
+    .input(z.object({ txId: z.number(), totpCode: z.string().regex(/^\d{6}$/).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+      const adminId = ctx.user?.id;
+      if (!adminId) throw new Error("Unauthorized");
       const tx = await db.select().from(transactions)
         .where(and(eq(transactions.id, input.txId), eq(transactions.type, "withdrawal")))
         .then(rows => rows[0]);
       if (!tx) throw new Error("Withdrawal transaction not found");
-      if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
+      if (tx.status !== "pending" && tx.status !== "confirming") {
+        throw new Error(`Transaction is ${tx.status}, not pending`);
+      }
+      if (tx.holdReason) {
+        throw new Error("Withdrawal is on hold — release the hold before approving");
+      }
+
+      const usdtEq = toUsdt(parseFloat(tx.amount), tx.currency);
+      const dualAbove = getSetting<number>("withdrawal_dual_approval_usdt") ?? 100;
+
+      // Stage 1 of dual approval: record who approved first, park.
+      if (tx.status === "pending" && dualAbove > 0 && usdtEq > dualAbove) {
+        await db.update(transactions)
+          .set({ status: "confirming", approvedBy: adminId, approvedAt: new Date() })
+          .where(eq(transactions.id, tx.id));
+        await writeAudit(ctx, "admin.withdrawFirstApproval", {
+          txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, usdtEq,
+        });
+        return { success: true, txId: tx.id, stage: "awaiting-second" as const };
+      }
+
+      // Stage 2 must come from a different admin than stage 1.
+      if (tx.status === "confirming" && tx.approvedBy != null && tx.approvedBy === adminId) {
+        throw new Error("Dual approval requires a different admin for the second approval");
+      }
+
+      // 2FA re-confirmation for large payouts.
+      const totpAbove = getSetting<number>("withdrawal_2fa_above_usdt") ?? 1000;
+      if (totpAbove > 0 && usdtEq > totpAbove) {
+        const me = await db.select().from(users).where(eq(users.id, adminId)).then(r => r[0]);
+        if (!me?.totpEnabled || !me.totpSecret) {
+          throw new Error("Enroll in two-factor authentication before approving large payouts");
+        }
+        if (!input.totpCode) {
+          throw new Error("A two-factor code is required to approve payouts above this amount");
+        }
+        const secret = decryptSecret(me.totpSecret);
+        if (!secret || !verifyTotp(secret, input.totpCode)) {
+          throw new Error("Invalid two-factor code");
+        }
+      }
 
       const amountMicro = parseMoney(tx.amount);
 
@@ -315,8 +385,113 @@ export const adminRouter = createRouter({
 
       await writeAudit(ctx, "admin.approveWithdraw", {
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, toAddress: tx.toAddress,
+        usdtEq, firstApprovedBy: tx.approvedBy ?? null, totpConfirmed: totpAbove > 0 && usdtEq > totpAbove,
+      });
+      return { success: true, txId: tx.id, stage: "executed" as const };
+    }),
+
+  // D3: record the actual payout once the money has been sent —
+  // approval and payment are separate facts with separate actors.
+  markWithdrawalPaid: adminQuery
+    .input(z.object({ txId: z.number(), payoutRef: z.string().min(3).max(120) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const tx = await db.select().from(transactions)
+        .where(and(eq(transactions.id, input.txId), eq(transactions.type, "withdrawal")))
+        .then(rows => rows[0]);
+      if (!tx) throw new Error("Withdrawal transaction not found");
+      if (tx.status !== "confirmed") throw new Error("Only an approved withdrawal can be marked paid");
+      if (tx.paidAt) throw new Error("Withdrawal already marked paid");
+      await db.update(transactions)
+        .set({ paidAt: new Date(), payoutRef: input.payoutRef })
+        .where(eq(transactions.id, tx.id));
+      await writeAudit(ctx, "admin.markWithdrawalPaid", {
+        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, payoutRef: input.payoutRef,
       });
       return { success: true, txId: tx.id };
+    }),
+
+  // D4: holds block approval until an admin releases them (or places
+  // one manually). Releasing never moves money by itself.
+  releaseHold: adminQuery
+    .input(z.object({ txId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const tx = await db.select().from(transactions)
+        .where(eq(transactions.id, input.txId))
+        .then(rows => rows[0]);
+      if (!tx) throw new Error("Transaction not found");
+      if (!tx.holdReason) throw new Error("Transaction is not on hold");
+      await db.update(transactions)
+        .set({ holdReason: null })
+        .where(eq(transactions.id, tx.id));
+      await writeAudit(ctx, "admin.releaseHold", {
+        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, releasedHold: tx.holdReason,
+      });
+      return { success: true, txId: tx.id };
+    }),
+
+  addHold: adminQuery
+    .input(z.object({ txId: z.number(), reason: z.string().min(3).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const tx = await db.select().from(transactions)
+        .where(eq(transactions.id, input.txId))
+        .then(rows => rows[0]);
+      if (!tx) throw new Error("Transaction not found");
+      if (tx.status !== "pending" && tx.status !== "confirming") {
+        throw new Error("Only an open transaction can be held");
+      }
+      await db.update(transactions)
+        .set({ holdReason: input.reason })
+        .where(eq(transactions.id, tx.id));
+      await writeAudit(ctx, "admin.addHold", {
+        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, reason: input.reason,
+      });
+      return { success: true, txId: tx.id };
+    }),
+
+  // D3: the money snapshot shown next to a queue row — balances,
+  // lifetime in/out and wagering, all in USDT terms plus per-currency
+  // detail, so the approver sees who they are paying.
+  getPlayerMoneySummary: adminQuery
+    .input(z.object({ userId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const bals = await db.select().from(balances).where(eq(balances.userId, input.userId));
+      const spinAgg = await db
+        .select({ currency: spins.currency, wagered: sum(spins.betAmount), won: sum(spins.winAmount), n: count() })
+        .from(spins)
+        .where(eq(spins.userId, input.userId))
+        .groupBy(spins.currency);
+      const pending = await db
+        .select({ n: count() })
+        .from(transactions)
+        .where(and(eq(transactions.userId, input.userId), inArray(transactions.status, ["pending", "confirming"])));
+      let depositedUsdt = 0;
+      let withdrawnUsdt = 0;
+      let wageredUsdt = 0;
+      for (const b of bals) {
+        depositedUsdt += toUsdt(parseFloat(b.totalDeposited || "0"), b.currency);
+        withdrawnUsdt += toUsdt(parseFloat(b.totalWithdrawn || "0"), b.currency);
+      }
+      for (const a of spinAgg) {
+        wageredUsdt += toUsdt(parseFloat(a.wagered || "0"), a.currency);
+      }
+      return {
+        balances: bals.map((b) => ({
+          currency: b.currency,
+          available: b.available,
+          locked: b.locked,
+          totalDeposited: b.totalDeposited,
+          totalWithdrawn: b.totalWithdrawn,
+        })),
+        depositedUsdt: Math.round(depositedUsdt * 100) / 100,
+        withdrawnUsdt: Math.round(withdrawnUsdt * 100) / 100,
+        wageredUsdt: Math.round(wageredUsdt * 100) / 100,
+        spinsCount: spinAgg.reduce((acc, a) => acc + (a.n || 0), 0),
+        pendingCount: pending[0]?.n ?? 0,
+      };
     }),
 
   rejectWithdraw: adminQuery
@@ -327,7 +502,9 @@ export const adminRouter = createRouter({
         .where(and(eq(transactions.id, input.txId), eq(transactions.type, "withdrawal")))
         .then(rows => rows[0]);
       if (!tx) throw new Error("Withdrawal transaction not found");
-      if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
+      if (tx.status !== "pending" && tx.status !== "confirming") {
+        throw new Error(`Transaction is ${tx.status}, not pending`);
+      }
 
       const amountMicro = parseMoney(tx.amount);
 
@@ -356,6 +533,7 @@ export const adminRouter = createRouter({
 
       await writeAudit(ctx, "admin.rejectWithdraw", {
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, reason: input.reason ?? null,
+        wasStage: tx.status, firstApprovedBy: tx.approvedBy ?? null,
       });
       return { success: true, txId: tx.id };
     }),

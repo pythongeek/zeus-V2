@@ -175,6 +175,27 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: 5000,
     labelEn: "Daily deposit cap per player (USDT equivalent, 0 = no cap)", labelBn: "প্রতি খেলোয়াড়ের দৈনিক ডিপোজিট সীমা (USDT সমতুল্য, 0 = সীমা নেই)",
   },
+  // D4: withdrawal policy controls (Section D).
+  withdrawal_dual_approval_usdt: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 100,
+    labelEn: "Dual approval above (USDT equivalent, 0 = off) — a second, different admin must confirm", labelBn: "দ্বৈত অনুমোদনের সীমা (USDT সমতুল্য, 0 = বন্ধ) — দ্বিতীয়, ভিন্ন অ্যাডমিনকে নিশ্চিত করতে হবে",
+  },
+  withdrawal_2fa_above_usdt: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 1000,
+    labelEn: "Two-factor re-confirm above (USDT equivalent, 0 = off) — final approver enters a fresh authenticator code", labelBn: "টু-ফ্যাক্টর পুনঃনিশ্চিতের সীমা (USDT সমতুল্য, 0 = বন্ধ) — চূড়ান্ত অনুমোদনকারীকে নতুন অথেনটিকেটর কোড দিতে হবে",
+  },
+  withdrawal_autohold_factor: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 0,
+    labelEn: "Auto-hold withdrawals above this × lifetime deposits (0 = off)", labelBn: "আজীবন ডিপোজিটের এই গুণিতকের বেশি উত্তোলন স্বয়ংক্রিয় হোল্ড (0 = বন্ধ)",
+  },
+  withdrawal_daily_cap_usdt: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 0,
+    labelEn: "Daily withdrawal cap per player (USDT equivalent, 0 = no cap)", labelBn: "প্রতি খেলোয়াড়ের দৈনিক উত্তোলন সীমা (USDT সমতুল্য, 0 = সীমা নেই)",
+  },
   withdraw_fees: {
     type: "json", scope: "public", group: "currencies",
     def: { "BTC": "0.0001", "ETH": "0.001", "USDT": "1", "BDT": "10" },

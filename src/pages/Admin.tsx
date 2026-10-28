@@ -386,6 +386,17 @@ export default function Admin() {
   // D1: deposit-reject inline form + history filters
   const [rejectFor, setRejectFor] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  // D3/D4: per-row 2FA codes, hold form, mark-paid form, snapshot
+  const [totpByTx, setTotpByTx] = useState<Record<number, string>>({});
+  const [holdFor, setHoldFor] = useState<number | null>(null);
+  const [holdReason, setHoldReason] = useState("");
+  const [markPaidFor, setMarkPaidFor] = useState<number | null>(null);
+  const [payoutRef, setPayoutRef] = useState("");
+  const [snapshotFor, setSnapshotFor] = useState<{ userId: number; email: string } | null>(null);
+  const { data: snapshot } = trpc.admin.getPlayerMoneySummary.useQuery(
+    { userId: snapshotFor?.userId ?? 0 },
+    { enabled: isAuthenticated && isAdmin && snapshotFor !== null, retry: false },
+  );
   const [histStatus, setHistStatus] = useState("");
   const [histType, setHistType] = useState("");
   const [histSearch, setHistSearch] = useState("");
@@ -440,11 +451,44 @@ export default function Admin() {
   });
 
   const approveWithdrawMutation = trpc.admin.approveWithdraw.useMutation({
-    onSuccess: async () => {
-      toast.success(t("withdrawApproved"));
+    onSuccess: async (data: any) => {
+      toast.success(data?.stage === "awaiting-second" ? t("firstApprovalRecorded") : t("withdrawApproved"));
       await invalidateTx();
+      await utils.admin.listTransactions.invalidate();
     },
     onError: (err) => toast.error(`${t("approveFailed")}: ${err.message}`),
+  });
+
+  const releaseHoldMutation = trpc.admin.releaseHold.useMutation({
+    onSuccess: async () => {
+      toast.success(t("holdReleased"));
+      setSnapshotFor(null);
+      await invalidateTx();
+      await utils.admin.listTransactions.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const addHoldMutation = trpc.admin.addHold.useMutation({
+    onSuccess: async () => {
+      toast.success(t("holdPlaced"));
+      setHoldFor(null);
+      setHoldReason("");
+      await invalidateTx();
+      await utils.admin.listTransactions.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const markPaidMutation = trpc.admin.markWithdrawalPaid.useMutation({
+    onSuccess: async () => {
+      toast.success(t("markedPaid"));
+      setMarkPaidFor(null);
+      setPayoutRef("");
+      await utils.admin.listTransactions.invalidate();
+      await invalidateTx();
+    },
+    onError: (err) => toast.error(err.message),
   });
 
   const rejectDepositMutation = trpc.admin.rejectDeposit.useMutation({
@@ -737,9 +781,21 @@ export default function Admin() {
                             </TableCell>
                             <TableCell className="font-mono text-sm">
                               {tx.amount} {tx.currency}
+                              {(tx as any).usdtEq != null && (
+                                <div className="text-[11px] text-slate-500 font-sans">≈ ${Number((tx as any).usdtEq).toFixed(2)}</div>
+                              )}
+                              {(tx as any).status === "confirming" && (
+                                <div className="mt-1"><Badge variant="secondary" className="bg-amber-500/15 text-amber-400 border-amber-500/30 text-[10px]">{t("awaitingSecond")}</Badge></div>
+                              )}
+                              {(tx as any).holdReason && (
+                                <div className="mt-1"><Badge variant="secondary" className="bg-red-500/15 text-red-400 border-red-500/30 text-[10px]">{t("onHold")}</Badge></div>
+                              )}
                             </TableCell>
-                            <TableCell className="font-mono text-xs text-slate-500 max-w-[140px] truncate">
-                              {tx.type === "deposit" && tx.txHash ? tx.txHash : tx.toAddress ?? "—"}
+                            <TableCell className="font-mono text-xs text-slate-500 max-w-[180px]">
+                              <div className="truncate">{tx.type === "deposit" && tx.txHash ? tx.txHash : tx.toAddress ?? "—"}</div>
+                              {(tx as any).holdReason && (
+                                <div className="text-red-400/90 font-sans text-[11px] whitespace-normal">{String((tx as any).holdReason)}</div>
+                              )}
                             </TableCell>
                             <TableCell className="text-right space-x-2">
                               {tx.type === "deposit" ? (
@@ -762,14 +818,25 @@ export default function Admin() {
                                   </Button>
                                 </>
                               ) : (
-                                <>
+                                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                  {/* 2FA code is due only when THIS click executes the payout:
+                                      confirming stage, or no dual stage stands in front of it. */}
+                                  {(tx as any).requiresTotp && !((tx as any).status === "pending" && (tx as any).requiresDual) && (
+                                    <Input
+                                      value={totpByTx[tx.id] ?? ""}
+                                      onChange={(e) => setTotpByTx((prev) => ({ ...prev, [tx.id]: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                                      placeholder={t("totpCodePh")}
+                                      inputMode="numeric"
+                                      className="h-7 w-24 text-xs bg-slate-950 border-slate-700 text-slate-100"
+                                    />
+                                  )}
                                   <Button
                                     size="sm"
                                     className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
-                                    disabled={approveWithdrawMutation.isPending}
-                                    onClick={() => approveWithdrawMutation.mutate({ txId: tx.id })}
+                                    disabled={approveWithdrawMutation.isPending || !!(tx as any).holdReason}
+                                    onClick={() => approveWithdrawMutation.mutate({ txId: tx.id, totpCode: totpByTx[tx.id] || undefined })}
                                   >
-                                    {t("approvePayout")}
+                                    {(tx as any).status === "confirming" ? t("approveSecond") : (tx as any).requiresDual ? t("approveFirst") : t("approvePayout")}
                                   </Button>
                                   <Button
                                     size="sm"
@@ -780,7 +847,35 @@ export default function Admin() {
                                   >
                                     {t("reject")}
                                   </Button>
-                                </>
+                                  {(tx as any).holdReason ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-xs border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
+                                      disabled={releaseHoldMutation.isPending}
+                                      onClick={() => releaseHoldMutation.mutate({ txId: tx.id })}
+                                    >
+                                      {t("releaseHold")}
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-xs border-slate-600 text-slate-300 hover:bg-slate-800"
+                                      onClick={() => { setHoldFor(holdFor === tx.id ? null : tx.id); setHoldReason(""); }}
+                                    >
+                                      {t("placeHold")}
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs text-slate-400 hover:text-slate-200"
+                                    onClick={() => setSnapshotFor(snapshotFor?.userId === tx.userId ? null : { userId: tx.userId, email: tx.userEmail ?? "" })}
+                                  >
+                                    {t("detailsBtn")}
+                                  </Button>
+                                </div>
                               )}
                             </TableCell>
                           </TableRow>
@@ -819,6 +914,61 @@ export default function Admin() {
                       {t("cancel")}
                     </Button>
                   </div>
+                </div>
+              )}
+              {holdFor !== null && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                  <div className="text-sm text-amber-300 font-medium">{t("placingHold")} #{holdFor}</div>
+                  <Input
+                    value={holdReason}
+                    onChange={(e) => setHoldReason(e.target.value)}
+                    placeholder={t("holdReasonPh")}
+                    className="bg-slate-950 border-slate-700 text-slate-200"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="bg-amber-600 hover:bg-amber-500 text-white"
+                      disabled={addHoldMutation.isPending || holdReason.trim().length < 3}
+                      onClick={() => addHoldMutation.mutate({ txId: holdFor, reason: holdReason.trim() })}
+                    >
+                      {t("placeHold")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-slate-700 text-slate-300"
+                      onClick={() => setHoldFor(null)}
+                    >
+                      {t("cancel")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {snapshotFor !== null && (
+                <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-4 space-y-2">
+                  <div className="text-sm font-medium text-slate-200">
+                    {t("snapshotTitle")} — {snapshotFor.email}
+                  </div>
+                  {!snapshot ? (
+                    <p className="text-sm text-slate-500">{t("loading")}</p>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div><div className="text-slate-500 text-xs">{t("lifetimeDeposits")}</div><div className="font-mono">${Number(snapshot.depositedUsdt).toFixed(2)}</div></div>
+                        <div><div className="text-slate-500 text-xs">{t("lifetimeWithdrawals")}</div><div className="font-mono">${Number(snapshot.withdrawnUsdt).toFixed(2)}</div></div>
+                        <div><div className="text-slate-500 text-xs">{t("totalWagered")}</div><div className="font-mono">${Number(snapshot.wageredUsdt).toFixed(2)}</div></div>
+                        <div><div className="text-slate-500 text-xs">{t("pendingCountLabel")}</div><div className="font-mono">{snapshot.pendingCount}</div></div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {snapshot.balances.map((b: any) => (
+                          <span key={b.currency} className="text-xs font-mono bg-slate-800/80 border border-slate-700 rounded px-2 py-1">
+                            {b.currency}: {b.available} {b.locked !== "0" ? `(+${b.locked} locked)` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               <Card className="bg-slate-900/80 border-slate-800">
@@ -898,6 +1048,16 @@ export default function Admin() {
                                   {tx.paidAt ? `${t("paidLabel")} · ${tx.payoutRef ?? ""}` : t("unpaidLabel")}
                                 </span>
                               )}
+                              {tx.type === "withdrawal" && tx.status === "confirmed" && !tx.paidAt && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="ml-2 h-6 text-[11px] border-slate-600 text-slate-300 hover:bg-slate-800"
+                                  onClick={() => { setMarkPaidFor(markPaidFor === tx.id ? null : tx.id); setPayoutRef(""); }}
+                                >
+                                  {t("markPaid")}
+                                </Button>
+                              )}
                             </TableCell>
                             <TableCell className="text-xs text-slate-400 max-w-[200px] truncate">
                               {tx.reviewNote ?? tx.holdReason ?? (tx.type === "deposit" ? tx.txHash : tx.toAddress) ?? "—"}
@@ -912,6 +1072,35 @@ export default function Admin() {
                   )}
                 </CardContent>
               </Card>
+              {markPaidFor !== null && (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-3">
+                  <div className="text-sm text-emerald-300 font-medium">{t("markingPaid")} #{markPaidFor}</div>
+                  <Input
+                    value={payoutRef}
+                    onChange={(e) => setPayoutRef(e.target.value)}
+                    placeholder={t("payoutRefPh")}
+                    className="bg-slate-950 border-slate-700 text-slate-200"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white"
+                      disabled={markPaidMutation.isPending || payoutRef.trim().length < 3}
+                      onClick={() => markPaidMutation.mutate({ txId: markPaidFor, payoutRef: payoutRef.trim() })}
+                    >
+                      {t("markPaid")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-slate-700 text-slate-300"
+                      onClick={() => setMarkPaidFor(null)}
+                    >
+                      {t("cancel")}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["currencies"]} titleKey="cfgGroup_currencies" canEdit={isSuper} />
             </>
           )}

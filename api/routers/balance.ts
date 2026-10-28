@@ -197,6 +197,43 @@ export const balanceRouter = createRouter({
         throw new Error("Withdrawal above maximum");
       }
 
+      // D4: operator daily withdrawal cap + auto-hold when a
+      // withdrawal dwarfs the player's lifetime deposits.
+      const { toUsdt, dhakaDayStartSec } = await import("../lib/limits");
+      const { getSqliteClient } = await import("../queries/connection");
+      const sqlite = getSqliteClient();
+      const amountUsdt = toUsdt(parseFloat(input.amount), input.currency);
+      const dailyCapW = getSetting<number>("withdrawal_daily_cap_usdt") ?? 0;
+      if (dailyCapW > 0) {
+        const rows = sqlite
+          .prepare(
+            `SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
+             WHERE user_id = ? AND type = 'withdrawal' AND status IN ('pending', 'confirming', 'confirmed')
+               AND created_at >= ?
+             GROUP BY currency`,
+          )
+          .all(ctx.user.id, dhakaDayStartSec()) as any[];
+        const usedToday = rows.reduce((sum, r) => sum + toUsdt(r.total || 0, r.currency), 0);
+        if (usedToday + amountUsdt > dailyCapW) {
+          throw new Error("Daily withdrawal limit reached");
+        }
+      }
+      let holdReason: string | null = null;
+      const holdFactor = getSetting<number>("withdrawal_autohold_factor") ?? 0;
+      if (holdFactor > 0) {
+        const depRows = sqlite
+          .prepare(
+            `SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
+             WHERE user_id = ? AND type = 'deposit' AND status = 'confirmed'
+             GROUP BY currency`,
+          )
+          .all(ctx.user.id) as any[];
+        const lifetimeDeposits = depRows.reduce((sum, r) => sum + toUsdt(r.total || 0, r.currency), 0);
+        if (amountUsdt > holdFactor * lifetimeDeposits) {
+          holdReason = `Auto-hold: withdrawal $${amountUsdt.toFixed(2)} exceeds ${holdFactor}× lifetime deposits $${lifetimeDeposits.toFixed(2)}`;
+        }
+      }
+
       // Check balance
       const balance = await db.select().from(balances)
         .where(and(
@@ -230,6 +267,7 @@ export const balanceRouter = createRouter({
         fee: String(fee),
         toAddress: input.toAddress,
         status: "pending",
+        holdReason,
       }).returning();
 
       return {
@@ -239,6 +277,7 @@ export const balanceRouter = createRouter({
         fee: String(fee),
         toAddress: input.toAddress,
         status: "pending",
+        held: holdReason !== null,
       };
     }),
 
