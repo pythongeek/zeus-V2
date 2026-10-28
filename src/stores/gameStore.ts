@@ -87,7 +87,7 @@ interface GameStore {
   setTurboMode: (turbo: boolean) => void;
   // C4: Lite mode — CSS reels instead of the Pixi canvas (persisted)
   liteMode: boolean;
-  setLiteMode: (lite: boolean) => void;
+  setLiteMode: (lite: boolean, persist?: boolean) => void;
 
   // Audio
   audioEnabled: boolean;
@@ -163,8 +163,13 @@ export const useGameStore = create<GameStore>((set) => ({
   turboMode: false,
   setTurboMode: (turbo) => set({ turboMode: turbo }),
   liteMode: typeof localStorage !== "undefined" && localStorage.getItem("zeus.lite") === "1",
-  setLiteMode: (lite) => {
-    try { localStorage.setItem("zeus.lite", lite ? "1" : "0"); } catch { /* storage unavailable */ }
+  setLiteMode: (lite, persist = true) => {
+    // U1: persist=false is the FPS guard's automatic Lite — a slow moment
+    // must not latch Lite forever; only the player's own toggle (the
+    // default) is remembered across visits.
+    if (persist) {
+      try { localStorage.setItem("zeus.lite", lite ? "1" : "0"); } catch { /* storage unavailable */ }
+    }
     set({ liteMode: lite });
   },
 

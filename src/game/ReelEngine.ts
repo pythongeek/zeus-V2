@@ -66,6 +66,7 @@ export class ReelEngine {
   private spinOpts: SpinOptions | null = null;
   private winLayer: Container;
   private winGlow: Graphics | null = null;
+  private panels: Graphics[] = [];
   private symbolTextures = new Map<string, Texture>();
   private cellSize = 0;
   private anticipationReel: number | null = null;
@@ -128,18 +129,66 @@ export class ReelEngine {
     }
   }
 
+  private makeFallbackTexture(key: string): Texture {
+    // Emergency tile: a symbol cell must NEVER render invisible. If the
+    // artwork cannot be loaded (slow/blocked network, restrictive
+    // webview), draw a gold-on-dark tile with the symbol's mark instead.
+    const marks: Record<string, string> = {
+      zeus: "ZE", thunderbolt: "\u03DF", pegasus: "PE", temple: "TE",
+      harp: "HA", amphora: "AM", helmet: "HE", shield: "SH",
+      ace: "A", king: "K", queen: "Q",
+    };
+    const mark = marks[key] ?? "?";
+    const size = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      const grad = ctx.createLinearGradient(0, 0, 0, size);
+      grad.addColorStop(0, "#23202f");
+      grad.addColorStop(1, "#12101c");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+      ctx.strokeStyle = "#d4af37";
+      ctx.lineWidth = 6;
+      ctx.strokeRect(10, 10, size - 20, size - 20);
+      ctx.fillStyle = "#f4d03f";
+      ctx.font = `bold ${mark.length > 1 ? 92 : 120}px Georgia, serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(mark, size / 2, size / 2 + 6);
+    }
+    return Texture.from(canvas);
+  }
+
+  private loadOneTexture(key: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const img = new Image();
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.symbolTextures.set(
+          key,
+          ok ? Texture.from(img) : this.makeFallbackTexture(key),
+        );
+        resolve();
+      };
+      const timer = setTimeout(() => finish(false), 8000);
+      img.onload = () => { clearTimeout(timer); finish(true); };
+      img.onerror = () => { clearTimeout(timer); finish(false); };
+      img.src = `/assets/symbol-${key}.webp`;
+    });
+  }
+
   private async loadTextures(): Promise<void> {
-    // Load once; fall back to a plain white texture if an asset is missing.
-    const loads = SYMBOL_KEYS.map(
-      (key) =>
-        new Promise<void>((resolve) => {
-          const tex = Texture.from(`/assets/symbol-${key}.webp`);
-          // Texture.from is sync-ish for browser images; ensure fallback works
-          this.symbolTextures.set(key, tex);
-          resolve();
-        }),
-    );
-    await Promise.all(loads);
+    // U1: genuinely await every artwork image (8s per-image timeout,
+    // canvas fallback on failure). Texture.from() used to be
+    // fire-and-forget, so on slow networks or restrictive webviews the
+    // sprites rendered invisible until (or unless) their image arrived
+    // — the "blank board" players reported.
+    await Promise.all(SYMBOL_KEYS.map((key) => this.loadOneTexture(key)));
   }
 
   private buildReels(): void {
@@ -154,6 +203,13 @@ export class ReelEngine {
     this.app.stage.addChild(this.winLayer);
 
     for (let r = 0; r < this.reels; r++) {
+      // U1/G9: subtle per-column panel behind the strip so reels read as
+      // distinct columns (previously one undifferentiated black slab).
+      const panel = new Graphics();
+      this.drawPanel(panel, gapX + r * (this.cellSize + gapX), gapY, this.cellSize);
+      this.app.stage.addChild(panel);
+      this.panels.push(panel);
+
       const container = new Container();
       container.x = gapX + r * (this.cellSize + gapX);
       container.y = gapY;
@@ -187,6 +243,17 @@ export class ReelEngine {
       this.velocities.push(0);
       this.states.push("idle");
     }
+    // Win overlays render above the symbol sprites: the artwork has
+    // opaque backgrounds, so lines/glow below the sprites never showed.
+    this.app.stage.addChild(this.winLayer);
+  }
+
+  private drawPanel(g: Graphics, x: number, y: number, cell: number): void {
+    g.clear();
+    g.beginFill(0x101019, 0.9);
+    g.lineStyle(1, 0x2a2a35, 0.7);
+    g.drawRoundedRect(x - 4, y - 4, cell + 8, cell * ROWS + 8, 12);
+    g.endFill();
   }
 
   /** Snap strips to display the given visible symbols. */
@@ -401,6 +468,9 @@ export class ReelEngine {
       for (let r = 0; r < this.reels; r++) {
         this.reelContainers[r].x = gapX + r * (this.cellSize + gapX);
         this.reelContainers[r].y = gapY;
+        if (this.panels[r]) {
+          this.drawPanel(this.panels[r], this.reelContainers[r].x, gapY, this.cellSize);
+        }
         for (const sprite of this.strips[r]) {
           sprite.width = this.cellSize * 0.82;
           sprite.height = this.cellSize * 0.82;

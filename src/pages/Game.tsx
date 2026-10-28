@@ -43,6 +43,40 @@ const BDT_RATES: Record<string, number> = {
   BDT: 1,
 };
 
+// U1: a symbol cell must never render blank. The artwork sits on top of
+// a gold-letter tile; while it loads, or if it fails outright, the tile
+// keeps the board readable (the owner's phone showed empty black cells).
+const SYMBOL_MARKS: Record<string, string> = {
+  zeus: "ZE", thunderbolt: "\u03DF", pegasus: "PE", temple: "TE",
+  harp: "HA", amphora: "AM", helmet: "HE", shield: "SH",
+  ace: "A", king: "K", queen: "Q",
+};
+
+function SymbolTile({ symbol, spinning, win }: { symbol: string; spinning: boolean; win: boolean }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="relative w-full h-full rounded-md bg-gradient-to-b from-[#23202F] to-[#12101C] border border-[#2A2A35] overflow-hidden">
+      <span
+        className="absolute inset-0 flex items-center justify-center font-bold text-[#D4AF37]/80"
+        style={{ fontFamily: "Cinzel, serif", fontSize: "1.5rem" }}
+      >
+        {SYMBOL_MARKS[symbol] ?? "?"}
+      </span>
+      {!failed && (
+        <img
+          src={`/assets/symbol-${symbol}.webp`}
+          alt={symbol}
+          onError={() => setFailed(true)}
+          className={`absolute inset-0 w-full h-full object-contain ${
+            spinning ? "blur-[2px]" : ""
+          } ${win ? "scale-110 drop-shadow-[0_0_14px_rgba(255,213,79,0.95)]" : ""}`}
+          draggable={false}
+        />
+      )}
+    </div>
+  );
+}
+
 // F3: Responsible-gaming settings — limits + self-exclusion (server-enforced
 // by api/lib/limits.ts; this is only the player's control surface).
 function RgSettings() {
@@ -214,6 +248,7 @@ export default function Game() {
   const engineRef = useRef<ReelEngine | null>(null);
   const reelSymbolsRef = useRef<string[][]>([]);
   const [engineFailed, setEngineFailed] = useState(false);
+  const [boardReady, setBoardReady] = useState(false);
   const winLineColors = [0xd4af37, 0x00e676, 0x4fc3f7, 0xff5252, 0xba68c8];
 
   // Create/destroy the engine with auth state
@@ -221,6 +256,7 @@ export default function Game() {
     if (!isAuthenticated || store.liteMode || !reelsHostRef.current || engineRef.current || engineFailed) return;
     let cancelled = false;
     try {
+      setBoardReady(false);
       const engine = new ReelEngine(reelsHostRef.current, 5);
       engine
         .init()
@@ -231,6 +267,7 @@ export default function Game() {
           }
           engine.setSymbols(reelSymbolsRef.current);
           engineRef.current = engine;
+          setBoardReady(true);
         })
         .catch((err) => {
           console.error("ReelEngine init failed — falling back to CSS reels", err);
@@ -238,6 +275,7 @@ export default function Game() {
         });
       return () => {
         cancelled = true;
+        if (engineRef.current === engine) engineRef.current = null;
         engine.destroy();
       };
     } catch (err) {
@@ -275,17 +313,23 @@ export default function Game() {
         slowWindows = frames < 35 ? slowWindows + 1 : 0;
         frames = 0;
         windowStart = now;
-        if (slowWindows >= 2) {
+        if (slowWindows >= 3) {
           fpsGuardDoneRef.current = true;
-          store.setLiteMode(true);
+          store.setLiteMode(true, false);
           toast.info(t("liteModeAuto"));
           return;
         }
       }
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // U1: never measure during page load — startup jank (bundle parse,
+    // texture upload, first layout) used to trip this guard on healthy
+    // phones. Start after a grace period; cleanup clears both handles.
+    const startTimer = setTimeout(() => {
+      windowStart = performance.now();
+      raf = requestAnimationFrame(tick);
+    }, 3500);
+    return () => { clearTimeout(startTimer); cancelAnimationFrame(raf); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, store.liteMode, engineFailed]);
 
@@ -898,14 +942,7 @@ export default function Game() {
                     <div className={`flex flex-col ${store.gameState === "spinning" ? "animate-spin-reel" : ""}`}>
                       {reel.map((symbol, rowIndex) => (
                         <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
-                          <img
-                            src={`/assets/symbol-${symbol}.webp`}
-                            alt={symbol}
-                            className={`w-full h-full object-contain ${
-                              store.gameState === "spinning" ? "blur-[2px]" : ""
-                            } ${winCells.has(`${reelIndex}:${rowIndex}`) ? "scale-110 drop-shadow-[0_0_14px_rgba(255,213,79,0.95)]" : ""}`}
-                            draggable={false}
-                          />
+                          <SymbolTile symbol={symbol} spinning={store.gameState === "spinning"} win={winCells.has(`${reelIndex}:${rowIndex}`)} />
                         </div>
                       ))}
                     </div>
@@ -913,7 +950,15 @@ export default function Game() {
                 ))}
               </div>
             ) : (
-              <div ref={reelsHostRef} className="w-full aspect-[5/3] min-h-[220px]" />
+              <div className="relative">
+                <div ref={reelsHostRef} className="w-full aspect-[5/3] min-h-[220px]" />
+                {!boardReady && (
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#0A0A0F]/85 rounded-lg">
+                    <div className="w-10 h-10 rounded-full border-2 border-[#2A2A35] border-t-[#D4AF37] animate-spin" />
+                    <div className="text-xs tracking-widest text-[#9E9EAC]">{t("loading")}</div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
