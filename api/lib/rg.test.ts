@@ -52,7 +52,7 @@ describe("daily deposit limit (USDT-denominated, Dhaka day)", () => {
     const u = 102;
     const db = getSqliteClient();
     db.prepare(
-      "INSERT INTO transactions (user_id, type, currency, amount, status, to_address, created_at) VALUES (?, 'deposit', 'USDT', '40', 'completed', 'addr', ?)",
+      "INSERT INTO transactions (user_id, type, currency, amount, status, to_address, created_at) VALUES (?, 'deposit', 'USDT', '40', 'confirmed', 'addr', ?)",
     ).run(u, todaySec());
     limits.setLimits(u, { depositLimitDaily: "50" });
     expect(limits.todaysDepositsUsdt(u)).toBeCloseTo(40);
