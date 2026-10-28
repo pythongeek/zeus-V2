@@ -7,6 +7,7 @@ import { getAllSettings, getSetting, setSetting } from "../lib/settings";
 import { toUsdt, getLimits, getUsage, dhakaDayStartSec, tsSec } from "../lib/limits";
 import { getMathConfig } from "./game";
 import { certifyMath as certifyBundle, type MathBundle } from "../lib/certify";
+import { runReconciliation as executeReconciliation } from "../lib/reconcile";
 import { hashPassword } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
@@ -807,15 +808,21 @@ export const adminRouter = createRouter({
         .where(and(eq(balances.userId, tx.userId), eq(balances.currency, tx.currency)))
         .then(rows => rows[0]);
 
+      // G1: every available-balance movement writes a ledger leg so
+      // the chain stays complete (deposits previously credited with
+      // no leg, which made true reconciliation impossible).
+      let newAvailable: bigint;
       if (bal) {
+        newAvailable = parseMoney(bal.available) + amountMicro;
         await db.update(balances)
           .set({
-            available: fmtMoney(parseMoney(bal.available) + amountMicro),
+            available: fmtMoney(newAvailable),
             totalDeposited: fmtMoney(parseMoney(bal.totalDeposited || "0") + amountMicro),
             updatedAt: new Date(),
           })
           .where(eq(balances.id, bal.id));
       } else {
+        newAvailable = amountMicro;
         await db.insert(balances).values({
           userId: tx.userId,
           currency: tx.currency,
@@ -823,6 +830,11 @@ export const adminRouter = createRouter({
           totalDeposited: canonicalMoney(tx.amount),
         });
       }
+      getSqliteClient()
+        .prepare(
+          "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'deposit_credit', ?, ?, ?)",
+        )
+        .run(tx.userId, tx.currency, fmtMoney(amountMicro), fmtMoney(newAvailable));
 
       await writeAudit(ctx, "admin.approveDeposit", {
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency,
@@ -1133,13 +1145,21 @@ export const adminRouter = createRouter({
         throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
       }
 
+      const unlockedAvailable = parseMoney(bal.available) + amountMicro;
       await db.update(balances)
         .set({
           locked: fmtMoney(lockedMicro - amountMicro),
-          available: fmtMoney(parseMoney(bal.available) + amountMicro),
+          available: fmtMoney(unlockedAvailable),
           updatedAt: new Date(),
         })
         .where(eq(balances.id, bal.id));
+
+      // G1: the unlock is an available-balance movement — ledger leg.
+      getSqliteClient()
+        .prepare(
+          "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'withdrawal_unlock', ?, ?, ?)",
+        )
+        .run(tx.userId, tx.currency, fmtMoney(amountMicro), fmtMoney(unlockedAvailable));
 
       await db.update(transactions)
         .set({ status: "cancelled", processedAt: new Date() })
@@ -1407,6 +1427,253 @@ export const adminRouter = createRouter({
       await writeAudit(ctx, "admin.updateJackpotConfig", { ...input });
       return { success: true };
     }),
+
+  /* ================= Section G: risk, reconciliation, alerts ================= */
+  runReconciliation: adminQuery.mutation(async ({ ctx }) => {
+    const result = executeReconciliation(ctx.user!.id);
+    await writeAudit(ctx, "admin.runReconciliation", { ...result });
+    return result;
+  }),
+
+  getReconciliation: adminQuery.query(async () => {
+    const client = getSqliteClient();
+    const lastRun = client
+      .prepare("SELECT * FROM reconciliation_runs ORDER BY id DESC LIMIT 1")
+      .get() as any;
+    const recentRuns = client
+      .prepare("SELECT * FROM reconciliation_runs ORDER BY id DESC LIMIT 10")
+      .all() as any[];
+    const mismatches = client
+      .prepare(
+        `SELECT m.*, u.email, u.name FROM reconciliation_mismatches m
+         LEFT JOIN users u ON u.id = m.user_id
+         WHERE m.status = 'open' ORDER BY m.first_seen_at ASC`,
+      )
+      .all() as any[];
+    return { lastRun: lastRun ?? null, recentRuns, mismatches };
+  }),
+
+  getAlerts: adminQuery
+    .input(
+      z.object({
+        status: z.enum(["open", "acknowledged", "resolved", "all"]).default("open"),
+        limit: z.number().int().min(1).max(200).default(50),
+      }),
+    )
+    .query(async ({ input }) => {
+      const client = getSqliteClient();
+      const rows = (
+        input.status === "all"
+          ? client
+              .prepare("SELECT * FROM admin_alerts ORDER BY id DESC LIMIT ?")
+              .all(input.limit)
+          : client
+              .prepare("SELECT * FROM admin_alerts WHERE status = ? ORDER BY id DESC LIMIT ?")
+              .all(input.status, input.limit)
+      ) as any[];
+      const openCount = client
+        .prepare("SELECT COUNT(*) AS c FROM admin_alerts WHERE status = 'open'")
+        .get() as any;
+      return { alerts: rows, openCount: openCount.c };
+    }),
+
+  ackAlert: adminQuery
+    .input(z.object({ alertId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const now = Math.floor(Date.now() / 1000);
+      const info = getSqliteClient()
+        .prepare(
+          "UPDATE admin_alerts SET status = 'acknowledged', ack_by = ?, ack_at = ? WHERE id = ? AND status = 'open'",
+        )
+        .run(ctx.user!.id, now, input.alertId);
+      if (info.changes === 0) throw new Error("Alert not found or not open");
+      await writeAudit(ctx, "admin.ackAlert", { alertId: input.alertId });
+      return { success: true };
+    }),
+
+  resolveAlert: adminQuery
+    .input(z.object({ alertId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const now = Math.floor(Date.now() / 1000);
+      const info = getSqliteClient()
+        .prepare(
+          "UPDATE admin_alerts SET status = 'resolved', resolved_by = ?, resolved_at = ? WHERE id = ? AND status IN ('open', 'acknowledged')",
+        )
+        .run(ctx.user!.id, now, input.alertId);
+      if (info.changes === 0) throw new Error("Alert not found or already resolved");
+      await writeAudit(ctx, "admin.resolveAlert", { alertId: input.alertId });
+      return { success: true };
+    }),
+
+  getRiskSummary: adminQuery.query(async () => {
+    const client = getSqliteClient();
+    const alerts = client
+      .prepare("SELECT COUNT(*) AS c FROM admin_alerts WHERE status = 'open'")
+      .get() as any;
+    const mismatches = client
+      .prepare("SELECT COUNT(*) AS c FROM reconciliation_mismatches WHERE status = 'open'")
+      .get() as any;
+    return { openAlerts: alerts.c, openMismatches: mismatches.c };
+  }),
+
+  getRiskSignals: adminQuery.query(async () => {
+    const client = getSqliteClient();
+    const TS = tsSec("created_at");
+    const now = Math.floor(Date.now() / 1000);
+
+    // Accounts sharing a payout address (multi-account indicator).
+    const sharedAddresses = client
+      .prepare(
+        `SELECT t.to_address AS address, COUNT(DISTINCT t.user_id) AS user_count,
+                GROUP_CONCAT(DISTINCT t.user_id) AS user_ids
+         FROM transactions t
+         WHERE t.type = 'withdrawal' AND t.to_address IS NOT NULL AND t.to_address <> ''
+         GROUP BY t.to_address HAVING user_count >= 2 ORDER BY user_count DESC LIMIT 20`,
+      )
+      .all() as any[];
+
+    // Accounts sharing an IP (from login audit; first hop of XFF).
+    const sharedIps = client
+      .prepare(
+        `SELECT ip AS ip_address, COUNT(DISTINCT user_id) AS user_count,
+                GROUP_CONCAT(DISTINCT user_id) AS user_ids
+         FROM (
+           SELECT user_id, TRIM(SUBSTR(ip_address, 1, INSTR(ip_address || ',', ',') - 1)) AS ip
+           FROM audit_log
+           WHERE action = 'auth.login' AND ip_address IS NOT NULL AND ip_address <> '' AND user_id IS NOT NULL
+         )
+         GROUP BY ip HAVING user_count >= 2 ORDER BY user_count DESC LIMIT 20`,
+      )
+      .all() as any[];
+
+    const userBrief = (ids: string) => {
+      const list = ids.split(",").map((x) => parseInt(x, 10)).filter(Boolean);
+      if (list.length === 0) return [];
+      const rows = client
+        .prepare(
+          `SELECT id, email, name FROM users WHERE id IN (${list.map(() => "?").join(",")})`,
+        )
+        .all(...list) as any[];
+      return rows;
+    };
+
+    // Spin-rate outliers (last 24h): flag players spinning at more
+    // than 3x the active-player median, with a floor of 500 spins.
+    const spinRows = client
+      .prepare(
+        `SELECT s.user_id, COUNT(*) AS spins FROM spins s
+         WHERE ${tsSec("s.created_at")} >= ? GROUP BY s.user_id ORDER BY spins DESC`,
+      )
+      .all(now - 86400) as any[];
+    const counts = spinRows.map((r) => r.spins).sort((a, b) => a - b);
+    const median = counts.length ? counts[Math.floor(counts.length / 2)] : 0;
+    const spinOutliers = spinRows
+      .filter((r) => r.spins >= 500 && r.spins > 3 * Math.max(median, 1))
+      .slice(0, 10)
+      .map((r) => ({
+        userId: r.user_id,
+        spins24h: r.spins,
+        median24h: median,
+        users: userBrief(String(r.user_id)),
+      }));
+
+    // Win-rate outliers: >= 200 lifetime spins and player RTP > 110%.
+    const winRows = client
+      .prepare(
+        `SELECT s.user_id, COUNT(*) AS spins,
+                SUM(CAST(s.bet_amount AS REAL)) AS wagered,
+                SUM(CAST(s.win_amount AS REAL)) AS won
+         FROM spins s JOIN users u ON u.id = s.user_id
+         WHERE u.role = 'user' AND s.is_free_spin = 0
+         GROUP BY s.user_id HAVING spins >= 200 AND wagered > 0
+         ORDER BY (won / wagered) DESC`,
+      )
+      .all() as any[];
+    const winOutliers = winRows
+      .filter((r) => r.won / r.wagered > 1.1)
+      .slice(0, 10)
+      .map((r) => ({
+        userId: r.user_id,
+        spins: r.spins,
+        wagered: Math.round(r.wagered * 100) / 100,
+        won: Math.round(r.won * 100) / 100,
+        rtpPct: Math.round((r.won / r.wagered) * 10000) / 100,
+        users: userBrief(String(r.user_id)),
+      }));
+
+    // Deposit-without-play: confirmed withdrawals while lifetime
+    // wagered is under half of confirmed deposits (USDT terms,
+    // summed per currency with FX conversion).
+    const depRows = client
+      .prepare(
+        "SELECT user_id, currency, SUM(CAST(amount AS REAL)) AS total FROM transactions WHERE type = 'deposit' AND status = 'confirmed' GROUP BY user_id, currency",
+      )
+      .all() as any[];
+    const wdRows = client
+      .prepare(
+        "SELECT user_id, currency, SUM(CAST(amount AS REAL)) AS total FROM transactions WHERE type = 'withdrawal' AND status = 'confirmed' GROUP BY user_id, currency",
+      )
+      .all() as any[];
+    const wagRows = client
+      .prepare(
+        "SELECT user_id, currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins WHERE is_free_spin = 0 GROUP BY user_id, currency",
+      )
+      .all() as any[];
+    const sumUsdt = (rows: any[]) => {
+      const m = new Map<number, number>();
+      for (const r of rows) m.set(r.user_id, (m.get(r.user_id) ?? 0) + toUsdt(r.total || 0, r.currency));
+      return m;
+    };
+    const depMap = sumUsdt(depRows);
+    const wdMap = sumUsdt(wdRows);
+    const wagMap = sumUsdt(wagRows);
+    const depositNoPlay: any[] = [];
+    for (const [userId, withdrawals] of wdMap) {
+      const deposits = depMap.get(userId) ?? 0;
+      const wagered = wagMap.get(userId) ?? 0;
+      if (withdrawals > 0 && deposits >= 100 && wagered < deposits * 0.5) {
+        depositNoPlay.push({
+          userId,
+          depositsUsdt: Math.round(deposits * 100) / 100,
+          withdrawalsUsdt: Math.round(withdrawals * 100) / 100,
+          wageredUsdt: Math.round(wagered * 100) / 100,
+          users: userBrief(String(userId)),
+        });
+      }
+    }
+    depositNoPlay.sort((a, b) => b.withdrawalsUsdt - a.withdrawalsUsdt);
+
+    // Failed-login bursts per identifier (last 24h, >= 8 failures).
+    const bursts = client
+      .prepare(
+        `SELECT json_extract(details, '$.identifier') AS identifier, COUNT(*) AS failures, MAX(created_at) AS last_at
+         FROM audit_log
+         WHERE action = 'auth.loginFailed' AND ${TS} >= ?
+         GROUP BY identifier HAVING failures >= 8 ORDER BY failures DESC LIMIT 20`,
+      )
+      .all(now - 86400) as any[];
+
+    return {
+      sharedAddresses: sharedAddresses.map((r) => ({
+        address: r.address,
+        userCount: r.user_count,
+        users: userBrief(r.user_ids),
+      })),
+      sharedIps: sharedIps.map((r) => ({
+        ip: r.ip_address,
+        userCount: r.user_count,
+        users: userBrief(r.user_ids),
+      })),
+      spinOutliers,
+      winOutliers,
+      depositNoPlay: depositNoPlay.slice(0, 10),
+      failedLoginBursts: bursts.map((b) => ({
+        identifier: b.identifier,
+        failures: b.failures,
+        lastAt: b.last_at,
+      })),
+    };
+  }),
 
   getAuditLog: adminQuery
     .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())

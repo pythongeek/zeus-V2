@@ -155,6 +155,14 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   },
   // AP1: admin two-factor enforcement (Golden Toss parity). Admin
   // scope — never exposed in the public game config.
+  alert_big_win_usdt: {
+    type: "number", scope: "admin", def: 500, group: "security",
+    labelEn: "Alert threshold: single win at or above (USDT value)", labelBn: "সতর্কতার সীমা: একক জয় (USDT মূল্যে) এর বেশি হলে",
+  },
+  alert_big_withdrawal_usdt: {
+    type: "number", scope: "admin", def: 1000, group: "security",
+    labelEn: "Alert threshold: withdrawal request at or above (USDT value)", labelBn: "সতর্কতার সীমা: উত্তোলনের অনুরোধ (USDT মূল্যে) এর বেশি হলে",
+  },
   admin_2fa_required: {
     type: "boolean", scope: "admin", group: "security",
     def: false,

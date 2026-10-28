@@ -3,6 +3,7 @@ import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { getSetting, getPublicConfig } from "../lib/settings";
+import { toUsdt } from "../lib/limits";
 import { checkSpinPace } from "../lib/rate-limit";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
@@ -492,6 +493,30 @@ export const gameRouter = createRouter({
           jackpotTier = jackpot.tier;
           jackpotAwardMicro = poolMicroByTier[jackpot.tier] ?? 0n;
           winMicro += jackpotAwardMicro;
+        }
+
+        // G2: large wins raise an inbox alert (threshold in USDT
+        // value, admin-configurable; checked inside the spin txn).
+        const bigWinThreshold = getSetting<number>("alert_big_win_usdt");
+        if (
+          typeof bigWinThreshold === "number" && bigWinThreshold > 0 && winMicro > 0n &&
+          toUsdt(Number(winMicro) / 1e8, spinCurrency) >= bigWinThreshold
+        ) {
+          client
+            .prepare(
+              "INSERT INTO admin_alerts (kind, severity, title, details, ref_user_id, ref_id) VALUES ('big_win', 'warning', ?, ?, ?, NULL)",
+            )
+            .run(
+              `Large win: ${fmtMoney(winMicro)} ${spinCurrency} on a ${fmtMoney(spinBetMicro)} bet`,
+              JSON.stringify({
+                amount: fmtMoney(winMicro),
+                currency: spinCurrency,
+                bet: fmtMoney(spinBetMicro),
+                multiple: Number(winMicro) / Number(spinBetMicro),
+                jackpotTier,
+              }),
+              ctx.user.id,
+            );
         }
 
         // Free-spin bookkeeping: consume one, add any retrigger/award.

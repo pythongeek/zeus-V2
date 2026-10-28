@@ -270,6 +270,34 @@ export const balanceRouter = createRouter({
         holdReason,
       }).returning();
 
+      // G1: the lock moves available balance — write the ledger leg
+      // so the chain stays complete.
+      sqlite
+        .prepare(
+          "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'withdrawal_lock', ?, ?, ?)",
+        )
+        .run(
+          ctx.user.id,
+          input.currency,
+          fmtMoney(-amountMicro),
+          fmtMoney(parseMoney(balance.available) - amountMicro),
+        );
+
+      // G2: large withdrawal requests raise an inbox alert.
+      const bigWdThreshold = getSetting<number>("alert_big_withdrawal_usdt") ?? 1000;
+      if (bigWdThreshold > 0 && amountUsdt >= bigWdThreshold) {
+        sqlite
+          .prepare(
+            "INSERT INTO admin_alerts (kind, severity, title, details, ref_user_id, ref_id) VALUES ('big_withdrawal', 'warning', ?, ?, ?, ?)",
+          )
+          .run(
+            `Large withdrawal request: ${fmtMoney(amountMicro)} ${input.currency} (~$${amountUsdt.toFixed(2)})`,
+            JSON.stringify({ txId: tx.id, amount: fmtMoney(amountMicro), currency: input.currency, usdtEq: amountUsdt, toAddress: input.toAddress }),
+            ctx.user.id,
+            String(tx.id),
+          );
+      }
+
       return {
         txId: tx.id,
         amount: input.amount,

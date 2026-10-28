@@ -31,9 +31,33 @@ try {
   const ins = db.prepare('INSERT INTO jackpot_pool_snapshots (tier, amount) VALUES (?, ?)');
   for (const p of pools) ins.run(p.tier, p.current_amount);
   db.prepare('DELETE FROM jackpot_pool_snapshots WHERE created_at < unixepoch() - 30*86400').run();
+  try {
+    const poolsNow = db.prepare('SELECT tier, seed_amount, current_amount FROM jackpot_pool').all();
+    for (const p of poolsNow) {
+      if (parseFloat(p.current_amount) < parseFloat(p.seed_amount)) {
+        const dup = db.prepare("SELECT id FROM admin_alerts WHERE kind = 'low_pool' AND ref_id = ? AND status IN ('open', 'acknowledged') LIMIT 1").get(p.tier);
+        if (!dup) {
+          db.prepare("INSERT INTO admin_alerts (kind, severity, title, details, ref_id) VALUES ('low_pool', 'warning', ?, ?, ?)").run(
+            'Jackpot pool below seed: ' + p.tier,
+            JSON.stringify({ tier: p.tier, current: p.current_amount, seed: p.seed_amount }),
+            p.tier,
+          );
+        }
+      }
+    }
+  } catch (e) { /* alerts table may predate migration 0018 */ }
   db.close();
 } catch (e) { /* snapshots are best-effort */ }
 " >/dev/null 2>&1 || true
+
+# G1: nightly reconciliation on the first monitor run of the day.
+RECON_STATE="/var/lib/zeus-monitor/last-recon-date"
+TODAY="$(date +%F)"
+if [ "$(cat "$RECON_STATE" 2>/dev/null)" != "$TODAY" ]; then
+  if /opt/zeus-slot/runtime/bin/node /opt/zeus-slot/scripts/reconcile.mjs >> "$LOG_FILE" 2>&1; then
+    echo "$TODAY" > "$RECON_STATE"
+  fi
+fi
 
 COUNT=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
 if [ "$fail" -eq 0 ]; then
