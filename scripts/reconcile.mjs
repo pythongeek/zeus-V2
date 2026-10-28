@@ -148,4 +148,23 @@ apply();
 console.log(
   `${new Date().toISOString()} RECON run #${runId}: ${balances.length} accounts, ${findings.length} mismatches (${newCount} new)`,
 );
+
+// I3: forward new findings to the configured alert webhook.
+if (newCount > 0) {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'alert_webhook_url'").get();
+    const url = row ? JSON.parse(row.value) : "";
+    if (typeof url === "string" && url) {
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: `Zeus reconciliation run #${runId}: ${newCount} NEW ledger mismatch(es) — see Admin > Risk.`,
+          content: `Zeus reconciliation run #${runId}: ${newCount} NEW ledger mismatch(es) — see Admin > Risk.`,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+    }
+  } catch { /* webhook is best-effort */ }
+}
 db.close();

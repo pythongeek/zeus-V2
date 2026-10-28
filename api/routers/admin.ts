@@ -1675,6 +1675,279 @@ export const adminRouter = createRouter({
     };
   }),
 
+  /* ================= Section I: system & ops ================= */
+  getSystemHealth: adminQuery.query(async () => {
+    const fsMod = await import("node:fs");
+    const { execFile } = await import("node:child_process");
+    const run = (cmd: string, args: string[], timeout = 5000): Promise<string> =>
+      new Promise((resolve) => {
+        execFile(cmd, args, { timeout, maxBuffer: 1024 * 1024 }, (err, stdout) =>
+          resolve(err ? "" : String(stdout)),
+        );
+      });
+
+    // Version: the live git commit of the deployed tree.
+    let commit: string | null = null;
+    let commitDate: string | null = null;
+    const gitOut = await run("git", ["-C", "/opt/zeus-slot", "log", "-1", "--format=%h|%cI"]);
+    if (gitOut.trim()) {
+      const [h, d] = gitOut.trim().split("|");
+      commit = h ?? null;
+      commitDate = d ?? null;
+    }
+
+    // DB size (main file + WAL + shm).
+    let dbSizeBytes = 0;
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        dbSizeBytes += fsMod.statSync(`/opt/zeus-slot/data/zeus.sqlite${suffix}`).size;
+      } catch { /* file may not exist */ }
+    }
+
+    // Disk headroom for the root filesystem.
+    let disk: { total: number; free: number } | null = null;
+    try {
+      const st = (fsMod as any).statfsSync("/");
+      disk = { total: Number(st.blocks) * Number(st.bsize), free: Number(st.bavail) * Number(st.bsize) };
+    } catch { /* statfs unavailable */ }
+
+    // Last backup (file + log line).
+    let backup: { file: string; at: number; sizeBytes: number; logLine: string } | null = null;
+    try {
+      const dir = "/var/backups/apps";
+      const files = fsMod
+        .readdirSync(dir)
+        .filter((f) => f.startsWith("zeus-nightly-") && f.endsWith(".tar.gz"))
+        .sort();
+      if (files.length) {
+        const file = files[files.length - 1];
+        const st = fsMod.statSync(`${dir}/${file}`);
+        let logLine = "";
+        try {
+          const log = fsMod.readFileSync(`${dir}/zeus-backup.log`, "utf8").trim().split("\n");
+          logLine = log[log.length - 1] ?? "";
+        } catch { /* no log */ }
+        backup = { file, at: Math.floor(st.mtimeMs / 1000), sizeBytes: st.size, logLine };
+      }
+    } catch { /* backups dir unreadable */ }
+
+    // Monitor status (fail counter + recent log lines).
+    let monitor: { failCount: number; recent: string[] } = { failCount: 0, recent: [] };
+    try {
+      const fc = fsMod.readFileSync("/var/lib/zeus-monitor/failcount", "utf8").trim();
+      monitor.failCount = parseInt(fc, 10) || 0;
+    } catch { /* no state yet */ }
+    try {
+      const lines = fsMod.readFileSync("/var/log/zeus-monitor.log", "utf8").trim().split("\n");
+      monitor.recent = lines.slice(-5);
+    } catch { /* no log yet */ }
+
+    // Sanitised error tail from the service journal (24h): drop any
+    // line that smells like a credential before it leaves the box.
+    let errors: string[] = [];
+    const journal = await run(
+      "journalctl",
+      ["-u", "zeus-slot", "--since", "24 hours ago", "--no-pager", "-n", "400"],
+      8000,
+    );
+    if (journal) {
+      const SENSITIVE = /password|secret|token|api[_-]?key|authorization/i;
+      errors = journal
+        .split("\n")
+        .filter((l) => /error|failed|exception|unhandled|ERR_/i.test(l) && !SENSITIVE.test(l))
+        .map((l) => l.slice(0, 300))
+        .slice(-20);
+    }
+
+    return {
+      service: {
+        uptimeSec: Math.floor(process.uptime()),
+        startedAt: Math.floor(Date.now() / 1000) - Math.floor(process.uptime()),
+        nodeVersion: process.version,
+        pid: process.pid,
+      },
+      version: { commit, commitDate },
+      db: { sizeBytes: dbSizeBytes },
+      disk,
+      backup,
+      monitor,
+      errors,
+    };
+  }),
+
+  exportData: adminQuery
+    .input(
+      z.object({
+        kind: z.enum(["players", "transactions", "spins", "settings_history"]),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const client = getSqliteClient();
+      const LIMIT = 10000;
+      const esc = (v: unknown): string => {
+        const s = v === null || v === undefined ? "" : String(v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const fmtTs = (v: unknown): string => {
+        if (typeof v === "number" && v > 1e9) return new Date(v * 1000).toISOString();
+        return v === null || v === undefined ? "" : String(v);
+      };
+      const fromSec = input.from ? Math.floor(Date.parse(`${input.from}T00:00:00Z`) / 1000) : null;
+      const toSec = input.to ? Math.floor(Date.parse(`${input.to}T23:59:59Z`) / 1000) : null;
+      const range = (col: string) => {
+        const clauses: string[] = [];
+        const params: number[] = [];
+        if (fromSec !== null) { clauses.push(`${tsSec(col)} >= ?`); params.push(fromSec); }
+        if (toSec !== null) { clauses.push(`${tsSec(col)} <= ?`); params.push(toSec); }
+        return { sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
+      };
+
+      let header: string[] = [];
+      let rows: unknown[][] = [];
+      let truncatedFlag = false;
+      if (input.kind === "players") {
+        header = ["id", "name", "email", "phone", "role", "active", "tags", "created_at", "usdt_available", "usdt_locked", "bdt_available", "bdt_locked"];
+        const r = range("u.created_at");
+        const data = client
+          .prepare(
+            `SELECT u.*, b.currency, b.available, b.locked FROM users u
+             LEFT JOIN balances b ON b.user_id = u.id ${r.sql} ORDER BY u.id LIMIT ?`,
+          )
+          .all(...r.params, LIMIT * 4) as any[];
+        const byUser = new Map<number, any>();
+        for (const row of data) {
+          if (!byUser.has(row.id)) {
+            byUser.set(row.id, {
+              base: row,
+              usdt_available: "0", usdt_locked: "0", bdt_available: "0", bdt_locked: "0",
+            });
+          }
+          const agg = byUser.get(row.id);
+          if (row.currency === "USDT") { agg.usdt_available = row.available; agg.usdt_locked = row.locked; }
+          if (row.currency === "BDT") { agg.bdt_available = row.available; agg.bdt_locked = row.locked; }
+        }
+        rows = [...byUser.values()].slice(0, LIMIT).map((a) => [
+          a.base.id, a.base.name, a.base.email, a.base.phone, a.base.role,
+          a.base.is_active ? 1 : 0, a.base.tags ?? "", fmtTs(a.base.created_at),
+          a.usdt_available, a.usdt_locked, a.bdt_available, a.bdt_locked,
+        ]);
+      } else if (input.kind === "transactions") {
+        header = ["id", "created_at", "user_email", "type", "currency", "amount", "fee", "status", "to_address", "tx_hash", "payout_ref", "paid_at", "review_note"];
+        const r = range("t.created_at");
+        const data = client
+          .prepare(
+            `SELECT t.*, u.email FROM transactions t LEFT JOIN users u ON u.id = t.user_id ${r.sql} ORDER BY t.id DESC LIMIT ?`,
+          )
+          .all(...r.params, LIMIT + 1) as any[];
+        rows = data.slice(0, LIMIT).map((t) => [
+          t.id, fmtTs(t.created_at), t.email, t.type, t.currency, t.amount, t.fee, t.status,
+          t.to_address, t.tx_hash, t.payout_ref, fmtTs(t.paid_at), t.review_note,
+        ]);
+        truncatedFlag = data.length > LIMIT;
+      } else if (input.kind === "spins") {
+        header = ["id", "created_at", "user_email", "currency", "bet_amount", "win_amount", "is_free_spin", "feature_triggered", "is_jackpot", "hash"];
+        const r = range("s.created_at");
+        const data = client
+          .prepare(
+            `SELECT s.*, u.email FROM spins s LEFT JOIN users u ON u.id = s.user_id ${r.sql} ORDER BY s.id DESC LIMIT ?`,
+          )
+          .all(...r.params, LIMIT + 1) as any[];
+        rows = data.slice(0, LIMIT).map((sp) => [
+          sp.id, fmtTs(sp.created_at), sp.email, sp.currency, sp.bet_amount, sp.win_amount,
+          sp.is_free_spin, sp.feature_triggered, sp.is_jackpot, sp.hash,
+        ]);
+        truncatedFlag = data.length > LIMIT;
+      } else {
+        header = ["created_at", "admin_email", "action", "details"];
+        const clauses: string[] = [];
+        const params: number[] = [];
+        if (fromSec !== null) { clauses.push(`${tsSec("a.created_at")} >= ?`); params.push(fromSec); }
+        if (toSec !== null) { clauses.push(`${tsSec("a.created_at")} <= ?`); params.push(toSec); }
+        const data = client
+          .prepare(
+            `SELECT a.*, u.email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+             WHERE a.action IN ('admin.updateSettings', 'admin.publishMath', 'admin.updateJackpotConfig', 'admin.saveMathDraft')
+             ${clauses.length ? `AND ${clauses.join(" AND ")}` : ""}
+             ORDER BY a.id DESC LIMIT ?`,
+          )
+          .all(...params, LIMIT + 1) as any[];
+        rows = data.slice(0, LIMIT).map((a) => [
+          fmtTs(a.created_at), a.email, a.action,
+          typeof a.details === "string" ? a.details : JSON.stringify(a.details),
+        ]);
+        truncatedFlag = data.length > LIMIT;
+      }
+
+      const csv = [header.join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");
+      const wasTruncated = truncatedFlag;
+      await writeAudit(ctx, "admin.exportData", { kind: input.kind, rows: rows.length, truncated: wasTruncated });
+      return {
+        filename: `zeus-${input.kind}-${new Date().toISOString().slice(0, 10)}.csv`,
+        csv,
+        rowCount: rows.length,
+        truncated: wasTruncated,
+      };
+    }),
+
+  // I3: alert channels live in settings (not env). The test button
+  // posts from the app; the monitor reads the same settings for its
+  // health alerts, falling back to the legacy env var.
+  testAlertChannel: superAdminQuery.mutation(async ({ ctx }) => {
+    const webhook = getSetting<string>("alert_webhook_url");
+    const telegramChat = getSetting<string>("alert_telegram_chat_id");
+    const message = "Zeus Slot test alert — channels are working.";
+    const result: {
+      webhook: { configured: boolean; ok?: boolean; status?: number; error?: string };
+      telegram: { configured: boolean; ok?: boolean; error?: string };
+    } = {
+      webhook: { configured: !!webhook },
+      telegram: { configured: !!telegramChat },
+    };
+    if (webhook) {
+      try {
+        const res = await fetch(webhook, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: message, content: message }),
+          signal: AbortSignal.timeout(8000),
+        });
+        result.webhook.ok = res.ok;
+        result.webhook.status = res.status;
+      } catch (e: any) {
+        result.webhook.ok = false;
+        result.webhook.error = String(e?.message ?? e).slice(0, 200);
+      }
+    }
+    if (telegramChat) {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) {
+        result.telegram.ok = false;
+        result.telegram.error = "TELEGRAM_BOT_TOKEN is not set in the server environment";
+      } else {
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: telegramChat, text: message }),
+            signal: AbortSignal.timeout(8000),
+          });
+          result.telegram.ok = res.ok;
+          if (!res.ok) result.telegram.error = `Telegram API returned ${res.status}`;
+        } catch (e: any) {
+          result.telegram.ok = false;
+          result.telegram.error = String(e?.message ?? e).slice(0, 200);
+        }
+      }
+    }
+    await writeAudit(ctx, "admin.testAlertChannel", {
+      webhook: result.webhook.ok ?? false,
+      telegram: result.telegram.ok ?? false,
+    });
+    return result;
+  }),
+
   getAuditLog: adminQuery
     .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())
     .query(async ({ input }) => {

@@ -75,7 +75,19 @@ echo "$(date -Iseconds) FAIL #$COUNT:$reasons" >> "$LOG_FILE"
 if [ "$COUNT" -ge 3 ]; then
   MSG="Zeus Slot ALERT: health failing ($COUNT consecutive):$reasons — $(hostname)"
   echo "$(date -Iseconds) ALERT raised:$reasons" >> "$LOG_FILE"
-  WEBHOOK=$(grep -E '^ZEUS_ALERT_WEBHOOK=' /opt/zeus-slot/.env 2>/dev/null | cut -d= -f2- || true)
+  # I3: webhook lives in admin settings now; the env var is the fallback.
+  WEBHOOK=$(/opt/zeus-slot/runtime/bin/node -e "
+try {
+  const Database = require('/opt/zeus-slot/node_modules/better-sqlite3');
+  const db = new Database('/opt/zeus-slot/data/zeus.sqlite', { readonly: true });
+  const row = db.prepare(\"SELECT value FROM settings WHERE key = 'alert_webhook_url'\").get();
+  db.close();
+  if (row) { const v = JSON.parse(row.value); if (typeof v === 'string' && v) console.log(v); }
+} catch (e) {}
+" 2>/dev/null || true)
+  if [ -z "${WEBHOOK:-}" ]; then
+    WEBHOOK=$(grep -E '^ZEUS_ALERT_WEBHOOK=' /opt/zeus-slot/.env 2>/dev/null | cut -d= -f2- || true)
+  fi
   if [ -n "${WEBHOOK:-}" ]; then
     curl -s --max-time 10 -d "$MSG" "$WEBHOOK" >/dev/null 2>&1 || true
   fi

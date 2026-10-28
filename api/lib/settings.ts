@@ -155,6 +155,14 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   },
   // AP1: admin two-factor enforcement (Golden Toss parity). Admin
   // scope — never exposed in the public game config.
+  alert_webhook_url: {
+    type: "string", scope: "admin", def: "", group: "security",
+    labelEn: "Alert webhook URL (monitor + critical alerts; empty = off)", labelBn: "সতর্কতা ওয়েবহুক URL (মনিটর + গুরুতর সতর্কতা; খালি = বন্ধ)",
+  },
+  alert_telegram_chat_id: {
+    type: "string", scope: "admin", def: "", group: "security",
+    labelEn: "Telegram alert chat ID (needs TELEGRAM_BOT_TOKEN in the server env)", labelBn: "টেলিগ্রাম সতর্কতার চ্যাট ID (সার্ভার env-এ TELEGRAM_BOT_TOKEN লাগবে)",
+  },
   alert_big_win_usdt: {
     type: "number", scope: "admin", def: 500, group: "security",
     labelEn: "Alert threshold: single win at or above (USDT value)", labelBn: "সতর্কতার সীমা: একক জয় (USDT মূল্যে) এর বেশি হলে",
