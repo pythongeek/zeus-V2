@@ -237,6 +237,46 @@ describe("G2/G3: alerts + risk signals", () => {
     expect(dnp.withdrawalsUsdt).toBe(150);
   });
 
+  it("big-win alert fires inside the spin when the win clears the threshold", async () => {
+    settingsLib.setSetting("alert_big_win_usdt", 1, null);
+    // Hunt a seed whose nonce-1 win is >= 10x (win >= $10 at $1 bet).
+    let seed: string | null = null;
+    for (let i = 0; i < 5000 && !seed; i++) {
+      const candidate = `g-win-hunt-${i}`;
+      const { symbols, hash } = engine.calculateSpin(candidate, "gclient", 1);
+      if (engine.checkJackpot(hash)) continue;
+      const res = engine.evaluatePaylines(symbols.map((c: number[]) => [...c]), 1);
+      if (res.totalPayout >= 200) seed = candidate;
+    }
+    expect(seed).toBeTruthy();
+    const db = getDb();
+    const [user] = await db
+      .insert(schema.users)
+      .values({ unionId: `test:gwin:${Math.random().toString(36).slice(2)}`, name: "G Win" })
+      .returning();
+    await db.insert(schema.balances).values({
+      userId: user.id, currency: "USDT", available: "100", locked: "0",
+    });
+    const [session] = await db
+      .insert(schema.gameSessions)
+      .values({
+        userId: user.id,
+        serverSeed: seed!,
+        serverSeedHash: crypto.createHash("sha256").update(seed!).digest("hex"),
+        clientSeed: "gclient",
+        nonce: 0,
+        status: "active",
+      })
+      .returning();
+    const caller = callerFor(gameRouter, user);
+    const r = await caller.spin({ sessionId: session.id, betAmount: "1", currency: "USDT" });
+    expect(parseFloat(r.winAmount)).toBeGreaterThanOrEqual(10);
+    const alerts = await adminCaller.getAlerts({ status: "open", limit: 50 });
+    const mine = alerts.alerts.filter((a: any) => a.kind === "big_win" && a.ref_user_id === user.id);
+    expect(mine).toHaveLength(1);
+    settingsLib.setSetting("alert_big_win_usdt", 500, null);
+  });
+
   it("failed-login bursts are derived from the audit log", async () => {
     const client = getSqliteClient();
     const now = Math.floor(Date.now() / 1000);
