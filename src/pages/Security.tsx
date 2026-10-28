@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ShieldCheck, LogOut } from "lucide-react";
+import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useLang } from "@/i18n";
@@ -17,7 +18,16 @@ export default function Security() {
   const { t } = useLang();
   const navigate = useNavigate();
   const utils = trpc.useUtils();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+
+  // AP1b: this page is only for setup-scoped sessions. Anyone else
+  // landing here (e.g. a player caught by a stale-cache redirect
+  // right after an account switch) goes straight back to the game.
+  useEffect(() => {
+    if (user && (user as { authScope?: string }).authScope !== "setup") {
+      navigate("/");
+    }
+  }, [user, navigate]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">

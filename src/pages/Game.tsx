@@ -265,17 +265,31 @@ function RgSettings() {
 export default function Game() {
   const store = useGameStore();
   const { t, num, lang } = useLang();
-  const { isAuthenticated, user, logout } = useAuth({
+  const { isAuthenticated, user, logout, refresh } = useAuth({
     redirectOnUnauthenticated: true,
     redirectPath: "/login",
   });
   const navigate = useNavigate();
-  // AP1: a setup-scoped admin session must complete 2FA enrollment first.
+  // AP1: a setup-scoped admin session must complete 2FA enrollment
+  // first. AP1b: the /me cache can still hold the PREVIOUS account
+  // right after a login switch (observed live: a player landed on
+  // /security once after an admin session), so confirm with a fresh
+  // fetch before redirecting.
   useEffect(() => {
-    if ((user as { authScope?: string } | null)?.authScope === "setup") {
-      navigate("/security");
-    }
-  }, [user, navigate]);
+    if ((user as { authScope?: string } | null)?.authScope !== "setup") return;
+    let cancelled = false;
+    refresh().then((res) => {
+      if (
+        !cancelled &&
+        (res.data as { authScope?: string } | undefined)?.authScope === "setup"
+      ) {
+        navigate("/security");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, navigate, refresh]);
   const [reelSymbols, setReelSymbols] = useState<string[][]>([
     ["ace", "king", "queen"],
     ["shield", "helmet", "amphora"],

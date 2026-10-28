@@ -333,7 +333,7 @@ export default function Admin() {
 
   // Client-side gate: the page is only usable by authenticated admins.
   // (The server independently enforces the admin role on every admin query.)
-  const { isAuthenticated, isLoading: authLoading, user } = useAuth({
+  const { isAuthenticated, isLoading: authLoading, user, refresh } = useAuth({
     redirectOnUnauthenticated: true,
     redirectPath: "/login",
   });
@@ -341,12 +341,22 @@ export default function Admin() {
   const isAdmin = role === "admin" || role === "super_admin";
   const isSuper = role === "super_admin";
 
-  // AP1: a setup-scoped admin session must complete 2FA enrollment first.
+  // AP1: a setup-scoped admin session must complete 2FA enrollment
+  // first. AP1b: confirm with a fresh /me fetch before redirecting —
+  // the cache can still hold the previous account right after a
+  // login switch.
   useEffect(() => {
-    if ((user as any)?.authScope === "setup") {
-      navigate("/security");
-    }
-  }, [user, navigate]);
+    if ((user as any)?.authScope !== "setup") return;
+    let cancelled = false;
+    refresh().then((res) => {
+      if (!cancelled && (res.data as any)?.authScope === "setup") {
+        navigate("/security");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, navigate, refresh]);
 
   const [section, setSection] = useState<SectionId>(() => sectionFromHash());
   useEffect(() => {
