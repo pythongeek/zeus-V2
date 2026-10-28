@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, adminFullQuery as adminQuery } from "../middleware";
+import { createRouter, adminFullQuery as adminQuery, superAdminQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { users, spins, jackpotPool, auditLog, transactions, balances } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
@@ -71,13 +71,30 @@ export const adminRouter = createRouter({
     }));
   }),
 
-  updateUserRole: adminQuery
+  // AP2: role management is a super-admin power, and the panel must
+  // never be left without at least one super admin.
+  updateUserRole: superAdminQuery
     .input(z.object({
       userId: z.number(),
-      role: z.enum(["admin", "user"]),
+      role: z.enum(["user", "admin", "super_admin"]),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+      const target = await db
+        .select({ role: users.role })
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .then(rows => rows[0]);
+      if (!target) throw new Error("User not found");
+      if (target.role === "super_admin" && input.role !== "super_admin") {
+        const supers = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.role, "super_admin"));
+        if (supers.length <= 1) {
+          throw new Error("At least one super admin must remain");
+        }
+      }
       await db.update(users).set({ role: input.role }).where(eq(users.id, input.userId));
       await writeAudit(ctx, "admin.updateUserRole", { ...input });
       return { success: true, userId: input.userId, role: input.role };
@@ -95,7 +112,8 @@ export const adminRouter = createRouter({
       return { success: true, userId: input.userId, isActive: input.isActive };
     }),
 
-  updateJackpot: adminQuery
+  // AP2: pool amounts are owner-tier control.
+  updateJackpot: superAdminQuery
     .input(z.object({
       tier: z.enum(["mini", "major", "mega"]),
       amount: z.number().positive(),
@@ -268,7 +286,8 @@ export const adminRouter = createRouter({
     return getAllSettings();
   }),
 
-  updateSettings: adminQuery
+  // AP2: settings writes are a super-admin power (reads stay admin-tier).
+  updateSettings: superAdminQuery
     .input(z.object({ entries: z.record(z.string(), z.unknown()) }))
     .mutation(async ({ ctx, input }) => {
       const changed: string[] = [];

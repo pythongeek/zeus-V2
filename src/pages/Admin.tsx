@@ -29,11 +29,14 @@ function GameConfigCard({
   groups,
   showAudit = false,
   titleKey,
+  canEdit = true,
 }: {
   enabled: boolean;
   groups?: string[];
   showAudit?: boolean;
   titleKey?: string;
+  // AP2: settings writes are super-admin only; plain admins browse.
+  canEdit?: boolean;
 }) {
   const { t, lang } = useLang();
   const utils = trpc.useUtils();
@@ -135,7 +138,8 @@ function GameConfigCard({
                         {s.type === "boolean" ? (
                           <input
                             type="checkbox"
-                            className="h-4 w-4 accent-amber-500"
+                            disabled={!canEdit}
+                            className="h-4 w-4 accent-amber-500 disabled:opacity-50"
                             checked={draftFor(s) === "true"}
                             onChange={(e) =>
                               setDraft(s.key, e.target.checked ? "true" : "false")
@@ -143,13 +147,15 @@ function GameConfigCard({
                           />
                         ) : s.type === "json" ? (
                           <textarea
-                            className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200 min-h-[72px]"
+                            disabled={!canEdit}
+                            className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-200 min-h-[72px] disabled:opacity-50"
                             value={draftFor(s)}
                             onChange={(e) => setDraft(s.key, e.target.value)}
                           />
                         ) : (
                           <Input
-                            className="bg-slate-950 border-slate-700 text-slate-200"
+                            disabled={!canEdit}
+                            className="bg-slate-950 border-slate-700 text-slate-200 disabled:opacity-50"
                             value={draftFor(s)}
                             inputMode={s.type === "string" ? "text" : "decimal"}
                             onChange={(e) => setDraft(s.key, e.target.value)}
@@ -171,16 +177,20 @@ function GameConfigCard({
         )}
 
         {visibleGroups.length > 0 && (
-          <div className="flex items-center gap-3">
-            <Button
-              className="bg-amber-500 hover:bg-amber-400 text-black font-semibold"
-              disabled={!dirtyKeys.length || updateMutation.isPending}
-              onClick={handleSave}
-            >
-              {t("saveChanges")}
-              {dirtyKeys.length ? ` (${dirtyKeys.length})` : ""}
-            </Button>
-          </div>
+          canEdit ? (
+            <div className="flex items-center gap-3">
+              <Button
+                className="bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                disabled={!dirtyKeys.length || updateMutation.isPending}
+                onClick={handleSave}
+              >
+                {t("saveChanges")}
+                {dirtyKeys.length ? ` (${dirtyKeys.length})` : ""}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">{t("superOnlyNote")}</p>
+          )
         )}
 
         {showAudit && !!auditRows?.length && (
@@ -245,6 +255,7 @@ export default function Admin() {
   });
   const role = (user as any)?.role as string | undefined;
   const isAdmin = role === "admin" || role === "super_admin";
+  const isSuper = role === "super_admin";
 
   // AP1: a setup-scoped admin session must complete 2FA enrollment first.
   useEffect(() => {
@@ -516,24 +527,36 @@ export default function Admin() {
                           <TableCell className="font-medium">{u.name}</TableCell>
                           <TableCell>
                             <Badge
-                              variant={u.role === "admin" ? "default" : "secondary"}
-                              className={u.role === "admin" ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-slate-800 text-slate-300"}
+                              variant={u.role === "user" ? "secondary" : "default"}
+                              className={
+                                u.role === "super_admin"
+                                  ? "bg-red-500/20 text-red-300 border-red-500/30"
+                                  : u.role === "admin"
+                                    ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
+                                    : "bg-slate-800 text-slate-300"
+                              }
                             >
-                              {u.role.toUpperCase()}
+                              {u.role.replace("_", " ").toUpperCase()}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => updateRoleMutation.mutate({
-                                userId: u.id,
-                                role: u.role === "admin" ? "user" : "admin",
-                              })}
-                              className="text-xs text-slate-400 hover:text-white"
-                            >
-                              {t("toggleRole")}
-                            </Button>
+                            {isSuper && (
+                              <select
+                                value={u.role}
+                                disabled={updateRoleMutation.isPending}
+                                onChange={(e) =>
+                                  updateRoleMutation.mutate({
+                                    userId: u.id,
+                                    role: e.target.value as "user" | "admin" | "super_admin",
+                                  })
+                                }
+                                className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200"
+                              >
+                                <option value="user">user</option>
+                                <option value="admin">admin</option>
+                                <option value="super_admin">super_admin</option>
+                              </select>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -635,12 +658,12 @@ export default function Admin() {
                   )}
                 </CardContent>
               </Card>
-              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["currencies"]} titleKey="cfgGroup_currencies" />
+              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["currencies"]} titleKey="cfgGroup_currencies" canEdit={isSuper} />
             </>
           )}
 
           {section === "engine" && (
-            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["bets", "features", "presentation", "math"]} titleKey="navEngine" />
+            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["bets", "features", "presentation", "math"]} titleKey="navEngine" canEdit={isSuper} />
           )}
 
           {section === "jackpots" && (
@@ -656,7 +679,7 @@ export default function Admin() {
                       <span className="text-sm font-semibold uppercase text-amber-400">{pool.tier} {t("jackpotWord")}</span>
                       <span className="text-sm font-mono text-slate-300">{pool.amount} {(pool as any).currency ?? "USDT"}</span>
                     </div>
-                    <div className="flex gap-2">
+                    {isSuper && (<div className="flex gap-2">
                       <Input
                         type="number"
                         placeholder={t("amountPlaceholder")}
@@ -675,7 +698,7 @@ export default function Admin() {
                       >
                         {t("save")}
                       </Button>
-                    </div>
+                    </div>)}
                   </div>
                 ))}
               </CardContent>
@@ -683,7 +706,7 @@ export default function Admin() {
           )}
 
           {section === "site" && (
-            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["site"]} titleKey="cfgGroup_site" />
+            <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["site"]} titleKey="cfgGroup_site" canEdit={isSuper} />
           )}
 
           {section === "risk" && placeholder}
@@ -691,7 +714,7 @@ export default function Admin() {
 
           {section === "system" && (
             <>
-              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["security"]} titleKey="cfgGroup_security" />
+              <GameConfigCard enabled={isAuthenticated && isAdmin} groups={["security"]} titleKey="cfgGroup_security" canEdit={isSuper} />
               <Card className="bg-slate-900/80 border-slate-800">
                 <CardHeader>
                   <CardTitle className="text-amber-400">{t("totpCardTitle")}</CardTitle>

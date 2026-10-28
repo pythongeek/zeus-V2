@@ -19,7 +19,9 @@ export const users = sqliteTable("users", {
   totpSecret: text("totp_secret"),
   totpEnabled: integer("totp_enabled", { mode: "boolean" }).default(false).notNull(),
   avatar: text("avatar"),
-  role: text("role", { enum: ["user", "admin"] }).default("user").notNull(),
+  // AP2: super_admin is the owner tier (settings, roles, math);
+  // admin is the day-to-day operations tier.
+  role: text("role", { enum: ["user", "admin", "super_admin"] }).default("user").notNull(),
   walletAddress: text("wallet_address").unique(),
   username: text("username").unique(),
   nonce: text("nonce").notNull().default(""),

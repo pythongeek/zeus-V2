@@ -50,6 +50,8 @@ const USER_FACING_EXACT = new Set([
   "Two-factor is not set up yet",
   "Two-factor setup is for admin accounts only",
   "Two-factor cannot be disabled while it is required for all admins",
+  "User not found",
+  "At least one super admin must remain",
 ]);
 const USER_FACING_PREFIXES = [
   "Your account is self-excluded until",
@@ -107,8 +109,25 @@ function requireRole(role: string) {
   });
 }
 
+function requireAnyRole(roles: string[]) {
+  return t.middleware(async (opts) => {
+    const { ctx, next } = opts;
+
+    if (!ctx.user || !roles.includes(ctx.user.role)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: ErrorMessages.insufficientRole,
+      });
+    }
+
+    return next({ ctx: { ...ctx, user: ctx.user } });
+  });
+}
+
 export const authedQuery = t.procedure.use(requireAuth);
-export const adminQuery = authedQuery.use(requireRole("admin"));
+// AP2: two admin tiers — "admin" runs day-to-day operations,
+// "super_admin" (the owner tier) owns settings, roles and game math.
+export const adminQuery = authedQuery.use(requireAnyRole(["admin", "super_admin"]));
 
 // AP1: a setup-scoped session (admin who must still enroll in 2FA
 // because admin_2fa_required is on) may authenticate and use the
@@ -125,3 +144,6 @@ const requireFullScope = t.middleware(async (opts) => {
 });
 
 export const adminFullQuery = adminQuery.use(requireFullScope);
+export const superAdminQuery = authedQuery
+  .use(requireRole("super_admin"))
+  .use(requireFullScope);
