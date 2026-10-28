@@ -122,7 +122,7 @@ export function todaysDepositsUsdt(userId: number): number {
   const rows = db
     .prepare(
       `SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
-       WHERE user_id = ? AND type = 'deposit' AND status IN ('pending', 'completed')
+       WHERE user_id = ? AND type = 'deposit' AND status IN ('pending', 'confirmed')
          AND created_at >= ?
        GROUP BY currency`,
     )

@@ -123,9 +123,27 @@ export const balanceRouter = createRouter({
 
       if (amount <= 0) throw new Error("Invalid amount");
 
+      // D2: operator deposit bounds from admin settings.
+      const minCfg = getSetting<Record<string, string>>("deposit_min");
+      const maxCfg = getSetting<Record<string, string>>("deposit_max");
+      const amountMicro = parseMoney(input.amount);
+      if (minCfg?.[input.currency] && amountMicro < parseMoney(minCfg[input.currency])) {
+        throw new Error("Deposit below minimum");
+      }
+      if (maxCfg?.[input.currency] && amountMicro > parseMoney(maxCfg[input.currency])) {
+        throw new Error("Deposit above maximum");
+      }
+
       // F3: self-exclusion + daily deposit limit gate every deposit.
-      const { assertDepositAllowed } = await import("../lib/limits");
+      const { assertDepositAllowed, todaysDepositsUsdt, toUsdt } = await import("../lib/limits");
       assertDepositAllowed(ctx.user.id, input.currency, amount);
+
+      // D2: operator daily cap (USDT terms) across today's
+      // pending + confirmed deposits.
+      const dailyCap = getSetting<number>("deposit_daily_cap_usdt") ?? 0;
+      if (dailyCap > 0 && todaysDepositsUsdt(ctx.user.id) + toUsdt(amount, input.currency) > dailyCap) {
+        throw new Error("Daily deposit limit reached");
+      }
 
       if (input.currency !== "USDT" && input.currency !== "BDT") {
         throw new Error("Deposits are via Binance PayID only (USDT or BDT)");

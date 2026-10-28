@@ -39,6 +39,8 @@ const USER_FACING_EXACT = new Set([
   "Unable to register from this client — please use a regular browser",
   "Withdrawal below minimum",
   "Withdrawal above maximum",
+  "Deposit below minimum",
+  "Deposit above maximum",
   "Spin could not be recorded — please try again",
   "Deposit transaction not found",
   "Withdrawal transaction not found",

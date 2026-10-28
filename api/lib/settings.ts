@@ -158,6 +158,23 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: { "BTC": 11000000, "ETH": 380000, "USDT": 110, "BDT": 1 },
     labelEn: "BDT exchange rates per unit (display + conversions)", labelBn: "BDT বিনিময় হার (প্রতি ইউনিট)",
   },
+  // D2: deposit bounds, mirroring the withdrawal ones, plus an
+  // operator daily cap (USDT terms) enforced at request time.
+  deposit_min: {
+    type: "json", scope: "public", group: "currencies",
+    def: { "USDT": "5", "BDT": "500" },
+    labelEn: "Minimum deposit per currency", labelBn: "প্রতি মুদ্রায় সর্বনিম্ন ডিপোজিট",
+  },
+  deposit_max: {
+    type: "json", scope: "public", group: "currencies",
+    def: { "USDT": "10000", "BDT": "1000000" },
+    labelEn: "Maximum deposit per currency", labelBn: "প্রতি মুদ্রায় সর্বোচ্চ ডিপোজিট",
+  },
+  deposit_daily_cap_usdt: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 5000,
+    labelEn: "Daily deposit cap per player (USDT equivalent, 0 = no cap)", labelBn: "প্রতি খেলোয়াড়ের দৈনিক ডিপোজিট সীমা (USDT সমতুল্য, 0 = সীমা নেই)",
+  },
   withdraw_fees: {
     type: "json", scope: "public", group: "currencies",
     def: { "BTC": "0.0001", "ETH": "0.001", "USDT": "1", "BDT": "10" },
