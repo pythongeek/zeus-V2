@@ -373,9 +373,77 @@ export default function Admin() {
     enabled: isAuthenticated && isAdmin,
     retry: false,
   });
-  const { data: users, isLoading: usersLoading } = trpc.admin.getUsers.useQuery(undefined, {
-    enabled: isAuthenticated && isAdmin,
-    retry: false,
+  // Section C: player list v2 + 360 detail state.
+  const [playerSearch, setPlayerSearch] = useState("");
+  const [playerStatus, setPlayerStatus] = useState("");
+  const [playerSort, setPlayerSort] = useState<"newest" | "balance" | "activity">("newest");
+  const [playerOffset, setPlayerOffset] = useState(0);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
+  const { data: playerList, isLoading: usersLoading } = trpc.admin.listPlayers.useQuery(
+    {
+      search: playerSearch || undefined,
+      status: (playerStatus || undefined) as any,
+      sort: playerSort,
+      limit: 25,
+      offset: playerOffset,
+    },
+    { enabled: isAuthenticated && isAdmin && section === "players", retry: false },
+  );
+  const { data: playerDetail } = trpc.admin.getPlayerDetail.useQuery(
+    { userId: selectedPlayerId ?? 0 },
+    { enabled: isAuthenticated && isAdmin && selectedPlayerId !== null, retry: false },
+  );
+  const [adjCurrency, setAdjCurrency] = useState("USDT");
+  const [adjAmount, setAdjAmount] = useState("");
+  const [adjReason, setAdjReason] = useState("");
+  const [freezeReason, setFreezeReason] = useState("");
+  const [noteText, setNoteText] = useState("");
+  const [tagsText, setTagsText] = useState("");
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
+
+  const invalidatePlayers = async () => {
+    await utils.admin.listPlayers.invalidate();
+    await utils.admin.getPlayerDetail.invalidate();
+    await utils.admin.getStats.invalidate();
+  };
+  const adjustMutation = trpc.admin.adjustPlayerBalance.useMutation({
+    onSuccess: async (data: any) => {
+      toast.success(`${t("adjustDone")} — ${t("newBalance")}: ${data.balanceAfter} ${adjCurrency}`);
+      setAdjAmount("");
+      setAdjReason("");
+      await invalidatePlayers();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const freezeMutation = trpc.admin.setPlayerFrozen.useMutation({
+    onSuccess: async (_d, vars: any) => {
+      toast.success(vars.frozen ? t("playerFrozen") : t("playerUnfrozen"));
+      setFreezeReason("");
+      await invalidatePlayers();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const noteMutation = trpc.admin.addPlayerNote.useMutation({
+    onSuccess: async () => {
+      toast.success(t("noteAdded"));
+      setNoteText("");
+      await utils.admin.getPlayerDetail.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const tagsMutation = trpc.admin.setPlayerTags.useMutation({
+    onSuccess: async () => {
+      toast.success(t("tagsSaved"));
+      await invalidatePlayers();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const resetPwMutation = trpc.admin.resetPlayerPassword.useMutation({
+    onSuccess: async (data: any) => {
+      setTempPassword(data.tempPassword);
+      toast.success(t("pwResetDone"));
+    },
+    onError: (err) => toast.error(err.message),
   });
   const { data: jackpotPools, refetch: refetchJackpots } = trpc.jackpot.getPools.useQuery();
   const { data: pendingTxs, isLoading: txsLoading } = trpc.admin.listPendingTransactions.useQuery(undefined, {
@@ -668,29 +736,80 @@ export default function Admin() {
           )}
 
           {section === "players" && (
+            <>
             <Card className="bg-slate-900/80 border-slate-800">
               <CardHeader>
                 <CardTitle>{t("userManagement")}</CardTitle>
                 <CardDescription className="text-slate-400">{t("userManagementDesc")}</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    value={playerSearch}
+                    onChange={(e) => { setPlayerSearch(e.target.value); setPlayerOffset(0); }}
+                    placeholder={t("searchPlayersPh")}
+                    className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs max-w-xs"
+                  />
+                  <select
+                    value={playerStatus}
+                    onChange={(e) => { setPlayerStatus(e.target.value); setPlayerOffset(0); }}
+                    className="bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200"
+                  >
+                    <option value="">{t("allPlayers")}</option>
+                    <option value="active">{t("statusActive")}</option>
+                    <option value="frozen">{t("frozenBadge")}</option>
+                  </select>
+                  <select
+                    value={playerSort}
+                    onChange={(e) => setPlayerSort(e.target.value as any)}
+                    className="bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200"
+                  >
+                    <option value="newest">{t("sortNewest")}</option>
+                    <option value="balance">{t("sortBalance")}</option>
+                    <option value="activity">{t("sortActivity")}</option>
+                  </select>
+                  <span className="text-xs text-slate-500 self-center">
+                    {t("totalPlayers")}: {playerList?.total ?? 0}
+                  </span>
+                  <div className="flex gap-1 ml-auto">
+                    <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700 text-slate-300" disabled={playerOffset === 0} onClick={() => setPlayerOffset(Math.max(0, playerOffset - 25))}>{t("prevPage")}</Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700 text-slate-300" disabled={!playerList || playerOffset + 25 >= playerList.total} onClick={() => setPlayerOffset(playerOffset + 25)}>{t("nextPage")}</Button>
+                  </div>
+                </div>
                 {usersLoading ? (
                   <p className="text-sm text-slate-500 py-4">{t("loading")}</p>
+                ) : !playerList || playerList.rows.length === 0 ? (
+                  <p className="text-sm text-slate-500 py-2">{t("noResults")}</p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow className="border-slate-800 hover:bg-transparent">
-                        <TableHead className="text-slate-400">{t("userId")}</TableHead>
                         <TableHead className="text-slate-400">{t("playerName")}</TableHead>
                         <TableHead className="text-slate-400">{t("role")}</TableHead>
+                        <TableHead className="text-slate-400">{t("balanceCol")}</TableHead>
+                        <TableHead className="text-slate-400">{t("lastSpinCol")}</TableHead>
                         <TableHead className="text-right text-slate-400">{t("actions")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {users?.map((u) => (
+                      {playerList.rows.map((u: any) => (
                         <TableRow key={u.id} className="border-slate-800/60">
-                          <TableCell className="font-mono text-xs">{u.unionId}</TableCell>
-                          <TableCell className="font-medium">{u.name}</TableCell>
+                          <TableCell>
+                            <div className="font-medium flex items-center gap-2">
+                              {u.name ?? `User ${u.id}`}
+                              {!u.isActive && (
+                                <Badge variant="secondary" className="bg-red-500/15 text-red-400 border-red-500/30 text-[10px]">{t("frozenBadge")}</Badge>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-500">{u.email ?? ""}{u.phone ? ` · ${u.phone}` : ""}</div>
+                            {u.tags.length > 0 && (
+                              <div className="flex gap-1 mt-1">
+                                {u.tags.map((tag: string) => (
+                                  <span key={tag} className="text-[10px] bg-sky-500/15 text-sky-300 border border-sky-500/30 rounded px-1.5 py-0.5">{tag}</span>
+                                ))}
+                              </div>
+                            )}
+                          </TableCell>
                           <TableCell>
                             <Badge
                               variant={u.role === "user" ? "secondary" : "default"}
@@ -702,10 +821,22 @@ export default function Admin() {
                                     : "bg-slate-800 text-slate-300"
                               }
                             >
-                              {u.role.replace("_", " ").toUpperCase()}
+                              {String(u.role).replace("_", " ").toUpperCase()}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell className="font-mono text-sm">${Number(u.balanceUsdt).toFixed(2)}</TableCell>
+                          <TableCell className="text-xs text-slate-500">
+                            {u.lastSpinAt ? new Date(u.lastSpinAt).toLocaleString() : t("neverLabel")}
+                          </TableCell>
+                          <TableCell className="text-right space-x-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs border-slate-600 text-slate-200 hover:bg-slate-800"
+                              onClick={() => { setSelectedPlayerId(selectedPlayerId === u.id ? null : u.id); setTempPassword(null); setTagsText(""); }}
+                            >
+                              {t("detailsBtn")}
+                            </Button>
                             {isSuper && (
                               <select
                                 value={u.role}
@@ -731,6 +862,147 @@ export default function Admin() {
                 )}
               </CardContent>
             </Card>
+
+            {selectedPlayerId !== null && playerDetail && (
+              <Card className="bg-slate-900/80 border-sky-900/60">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-3 flex-wrap">
+                    <span>{playerDetail.profile.name ?? `User ${playerDetail.profile.id}`}</span>
+                    {!playerDetail.profile.isActive && (
+                      <Badge variant="secondary" className="bg-red-500/15 text-red-400 border-red-500/30">{t("frozenBadge")}</Badge>
+                    )}
+                  </CardTitle>
+                  <CardDescription className="text-slate-400">
+                    {playerDetail.profile.email ?? ""} · {t("memberSince")}: {new Date(playerDetail.profile.createdAt).toLocaleDateString()} · {t("lastSignIn")}: {playerDetail.profile.lastSignInAt ? new Date(playerDetail.profile.lastSignInAt).toLocaleString() : t("neverLabel")}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                    <div><div className="text-slate-500 text-xs">{t("lifetimeDeposits")}</div><div className="font-mono">${Number(playerDetail.stats.depositedUsdt).toFixed(2)}</div></div>
+                    <div><div className="text-slate-500 text-xs">{t("lifetimeWithdrawals")}</div><div className="font-mono">${Number(playerDetail.stats.withdrawnUsdt).toFixed(2)}</div></div>
+                    <div><div className="text-slate-500 text-xs">{t("totalWagered")}</div><div className="font-mono">${Number(playerDetail.stats.wageredUsdt).toFixed(2)}</div></div>
+                    <div><div className="text-slate-500 text-xs">{t("wonLabel")}</div><div className="font-mono">${Number(playerDetail.stats.wonUsdt).toFixed(2)}</div></div>
+                    <div><div className="text-slate-500 text-xs">{t("spinsLabel")}</div><div className="font-mono">{playerDetail.stats.spinsCount}</div></div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {playerDetail.balances.map((b: any) => (
+                      <span key={b.currency} className="text-xs font-mono bg-slate-800/80 border border-slate-700 rounded px-2 py-1">
+                        {b.currency}: {b.available}{b.locked !== "0" ? ` (+${b.locked} locked)` : ""}
+                      </span>
+                    ))}
+                  </div>
+                  {playerDetail.rg && (
+                    <div className="text-xs text-slate-400 bg-slate-950/60 border border-slate-800 rounded p-3">
+                      <span className="text-slate-300 font-medium">{t("rgState")}: </span>
+                      {t("rgDepositLimit")}: {playerDetail.rg.limits.depositLimitDaily ?? t("noLimitSet")} · {t("rgLossLimit")}: {playerDetail.rg.limits.lossLimitDaily ?? t("noLimitSet")} · {t("rgSessionLimit")}: {playerDetail.rg.limits.sessionLimitMinutes ?? t("noLimitSet")} · {t("selfExcludedUntil")}: {playerDetail.rg.limits.selfExcludedUntil > 0 ? new Date(playerDetail.rg.limits.selfExcludedUntil * 1000).toLocaleString() : t("noLimitSet")}
+                    </div>
+                  )}
+
+                  {playerDetail.profile.role === "user" && (
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div className="rounded-lg border border-slate-800 p-3 space-y-2">
+                        <div className="text-sm font-medium text-slate-200">{t("adjustTitle")}</div>
+                        <div className="flex gap-2">
+                          <select value={adjCurrency} onChange={(e) => setAdjCurrency(e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-200">
+                            <option value="USDT">USDT</option>
+                            <option value="BDT">BDT</option>
+                          </select>
+                          <Input value={adjAmount} onChange={(e) => setAdjAmount(e.target.value)} placeholder={t("adjustAmountPh")} className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs" />
+                        </div>
+                        <Input value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder={t("reasonPh")} className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs" />
+                        <Button size="sm" className="bg-sky-600 hover:bg-sky-500 text-white" disabled={adjustMutation.isPending || !/^-?\d+(\.\d{1,8})?$/.test(adjAmount) || adjReason.trim().length < 3} onClick={() => adjustMutation.mutate({ userId: playerDetail.profile.id, currency: adjCurrency as any, amount: adjAmount, reason: adjReason.trim() })}>
+                          {t("adjustBtn")}
+                        </Button>
+                      </div>
+                      <div className="rounded-lg border border-slate-800 p-3 space-y-2">
+                        <div className="text-sm font-medium text-slate-200">{playerDetail.profile.isActive ? t("freezeTitle") : t("unfreezeTitle")}</div>
+                        <Input value={freezeReason} onChange={(e) => setFreezeReason(e.target.value)} placeholder={t("reasonPh")} className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs" />
+                        <Button size="sm" className={playerDetail.profile.isActive ? "bg-red-600 hover:bg-red-500 text-white" : "bg-emerald-600 hover:bg-emerald-500 text-white"} disabled={freezeMutation.isPending || freezeReason.trim().length < 3} onClick={() => freezeMutation.mutate({ userId: playerDetail.profile.id, frozen: playerDetail.profile.isActive, reason: freezeReason.trim() })}>
+                          {playerDetail.profile.isActive ? t("freezeBtn") : t("unfreezeBtn")}
+                        </Button>
+                        {isSuper && (
+                          <div className="pt-2 border-t border-slate-800 space-y-2">
+                            <Button size="sm" variant="outline" className="border-slate-600 text-slate-200" disabled={resetPwMutation.isPending} onClick={() => resetPwMutation.mutate({ userId: playerDetail.profile.id })}>
+                              {t("resetPwBtn")}
+                            </Button>
+                            {tempPassword && (
+                              <div className="text-xs bg-amber-500/10 border border-amber-500/30 rounded p-2 text-amber-200">
+                                {t("tempPwNote")} <span className="font-mono font-bold select-all">{tempPassword}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div className="rounded-lg border border-slate-800 p-3 space-y-2">
+                      <div className="text-sm font-medium text-slate-200">{t("tagsTitle")}</div>
+                      <Input value={tagsText} onChange={(e) => setTagsText(e.target.value)} placeholder={playerDetail.profile.tags.join(", ") || t("tagsPh")} className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs" />
+                      <Button size="sm" variant="outline" className="border-slate-600 text-slate-200" disabled={tagsMutation.isPending} onClick={() => tagsMutation.mutate({ userId: playerDetail.profile.id, tags: tagsText.split(",").map((x) => x.trim()).filter(Boolean) })}>
+                        {t("saveTags")}
+                      </Button>
+                    </div>
+                    <div className="rounded-lg border border-slate-800 p-3 space-y-2">
+                      <div className="text-sm font-medium text-slate-200">{t("notesTitle")}</div>
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                        {playerDetail.notes.length === 0 ? (
+                          <p className="text-xs text-slate-500">{t("noResults")}</p>
+                        ) : playerDetail.notes.map((n: any) => (
+                          <div key={n.id} className="text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+                            <div className="text-slate-200">{n.note}</div>
+                            <div className="text-slate-500 mt-0.5">{n.adminEmail ?? ""} · {new Date(n.createdAt).toLocaleString()}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <Input value={noteText} onChange={(e) => setNoteText(e.target.value)} placeholder={t("notePh")} className="bg-slate-950 border-slate-700 text-slate-200 h-8 text-xs" />
+                        <Button size="sm" className="bg-sky-600 hover:bg-sky-500 text-white shrink-0" disabled={noteMutation.isPending || noteText.trim().length === 0} onClick={() => noteMutation.mutate({ userId: playerDetail.profile.id, note: noteText.trim() })}>
+                          {t("addNote")}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <div className="text-sm font-medium text-slate-200 mb-2">{t("recentTxs")}</div>
+                      {playerDetail.recentTxs.length === 0 ? <p className="text-slate-500">{t("noResults")}</p> : playerDetail.recentTxs.map((tx: any) => (
+                        <div key={tx.id} className="flex justify-between border-b border-slate-800/60 py-1">
+                          <span className="text-slate-400">#{tx.id} {tx.type}</span>
+                          <span className="font-mono">{tx.amount} {tx.currency}</span>
+                          <span className="text-slate-500">{tx.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-slate-200 mb-2">{t("recentSpins")}</div>
+                      {playerDetail.recentSpins.length === 0 ? <p className="text-slate-500">{t("noResults")}</p> : playerDetail.recentSpins.map((sp: any) => (
+                        <div key={sp.id} className="flex justify-between border-b border-slate-800/60 py-1">
+                          <span className="text-slate-400">#{sp.id}{sp.isFreeSpin ? " (free)" : ""}</span>
+                          <span className="font-mono">-{sp.betAmount} / +{sp.winAmount} {sp.currency}</span>
+                          <span className="text-slate-500">{new Date(sp.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {playerDetail.auditTrail.length > 0 && (
+                    <div className="text-xs">
+                      <div className="text-sm font-medium text-slate-200 mb-2">{t("auditTrail")}</div>
+                      {playerDetail.auditTrail.map((a: any) => (
+                        <div key={a.id} className="flex gap-3 border-b border-slate-800/60 py-1">
+                          <span className="text-slate-500 shrink-0">{new Date(a.createdAt).toLocaleString()}</span>
+                          <span className="text-slate-300 font-mono">{a.action}</span>
+                          <span className="text-slate-500 truncate">{typeof a.details === "string" ? a.details : JSON.stringify(a.details)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+            </>
           )}
 
           {section === "payments" && (
