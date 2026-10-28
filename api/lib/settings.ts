@@ -113,6 +113,23 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "number", scope: "admin", def: 96.0, group: "math",
     labelEn: "Declared RTP % (update only after re-certification)", labelBn: "ঘোষিত RTP % (পুনঃসার্টিফিকেশনের পরই বদলান)",
   },
+  // ---- Section E: RTP Lab ----
+  math_draft: {
+    type: "json", scope: "admin", def: null, group: "math",
+    labelEn: "RTP Lab draft bundle (managed in the Lab)", labelBn: "RTP ল্যাব ড্রাফট বান্ডল (ল্যাবে পরিচালিত)",
+  },
+  rtp_publish_min: {
+    type: "number", scope: "admin", def: 90, group: "math",
+    labelEn: "RTP Lab: minimum publishable RTP %", labelBn: "RTP ল্যাব: সর্বনিম্ন প্রকাশযোগ্য RTP %",
+  },
+  rtp_publish_max: {
+    type: "number", scope: "admin", def: 98, group: "math",
+    labelEn: "RTP Lab: maximum publishable RTP %", labelBn: "RTP ল্যাব: সর্বোচ্চ প্রকাশযোগ্য RTP %",
+  },
+  max_win_x: {
+    type: "number", scope: "admin", def: 0, group: "math",
+    labelEn: "Max win cap (x bet, 0 = off; jackpots excluded)", labelBn: "সর্বোচ্চ জয়ের সীমা (বাজির ×, ০ = বন্ধ; জ্যাকপট বাদে)",
+  },
   // ---- B2: features, currencies, presentation (public) ----
   features: {
     type: "json", scope: "public", group: "features",

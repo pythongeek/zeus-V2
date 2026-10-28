@@ -5,6 +5,8 @@ import { users, spins, jackpotPool, auditLog, transactions, balances, playerNote
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getAllSettings, getSetting, setSetting } from "../lib/settings";
 import { toUsdt, getLimits, getUsage, dhakaDayStartSec, tsSec } from "../lib/limits";
+import { getMathConfig } from "./game";
+import { certifyMath as certifyBundle, type MathBundle } from "../lib/certify";
 import { hashPassword } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
@@ -37,6 +39,79 @@ async function writeAudit(
     ipAddress: ctx.req.headers.get("x-forwarded-for") ?? null,
     userAgent: ctx.req.headers.get("user-agent") ?? null,
   });
+}
+
+/* ---- Section E helpers: math bundle <-> settings ---- */
+function liveMathBundle(): MathBundle {
+  const cfg = getMathConfig();
+  const paytable: MathBundle["paytable"] = {};
+  for (let id = 0; id <= 10; id++) {
+    const p = cfg.payouts[id as keyof typeof cfg.payouts];
+    paytable[String(id)] = { "3": p[3], "4": p[4], "5": p[5] };
+  }
+  return {
+    paytable,
+    reels: cfg.strips,
+    freeSpins: cfg.freeSpins,
+    thunder: { chanceDenominator: cfg.thunderDenominator, floorX: cfg.thunderFloorX },
+  };
+}
+
+const mathBundleSchema = z.object({
+  paytable: z.record(
+    z.string(),
+    z.object({
+      "3": z.number().min(0).max(100000),
+      "4": z.number().min(0).max(100000),
+      "5": z.number().min(0).max(100000),
+    }),
+  ),
+  reels: z.array(z.array(z.number().int().min(0).max(10)).min(10).max(200)).length(5),
+  freeSpins: z.record(z.string(), z.number().int().min(0).max(1000)),
+  thunder: z.object({
+    chanceDenominator: z.number().int().min(1).max(100000),
+    floorX: z.number().min(0).max(100),
+  }),
+}).superRefine((b, ctx) => {
+  for (let id = 0; id <= 10; id++) {
+    if (!b.paytable[String(id)]) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `paytable missing symbol ${id}` });
+    }
+  }
+  for (const k of ["3", "4", "5"]) {
+    if (b.freeSpins[k] === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `freeSpins missing ${k}` });
+    }
+  }
+});
+
+async function publishMathBundle(ctx: any, bundle: MathBundle, note: string | null) {
+  const adminId = ctx.user!.id as number;
+  const cert = certifyBundle(bundle);
+  const min = getSetting<number>("rtp_publish_min");
+  const max = getSetting<number>("rtp_publish_max");
+  if (cert.totalPct < min || cert.totalPct > max) {
+    throw new Error(
+      `Certified RTP ${cert.totalPct}% is outside the publish bounds ${min}-${max}%`,
+    );
+  }
+  setSetting("math_paytable", bundle.paytable, adminId);
+  setSetting("math_reels", bundle.reels, adminId);
+  setSetting("math_free_spins", bundle.freeSpins, adminId);
+  setSetting("math_thunder", bundle.thunder, adminId);
+  setSetting("rtp_declared", cert.totalPct, adminId);
+  const info = getSqliteClient()
+    .prepare(
+      "INSERT INTO math_versions (bundle, total_rtp, breakdown, note, published_by) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(JSON.stringify(bundle), cert.totalPct, JSON.stringify(cert), note, adminId);
+  setSetting("math_draft", null, adminId);
+  await writeAudit(ctx, "admin.publishMath", {
+    versionId: Number(info.lastInsertRowid),
+    totalRtp: cert.totalPct,
+    note,
+  });
+  return { versionId: Number(info.lastInsertRowid), totalPct: cert.totalPct, breakdown: cert };
 }
 
 export const adminRouter = createRouter({
@@ -1164,6 +1239,79 @@ export const adminRouter = createRouter({
     }),
 
   // ===== B3: change audit log (read) =====
+
+  /* ================= Section E: RTP Lab =================
+   * Draft -> certify -> publish -> rollback for the game math.
+   * Publishing re-certifies server-side and refuses bundles whose
+   * total RTP falls outside rtp_publish_min/max. Every publish
+   * (rollbacks included) appends an immutable math_versions row.
+   */
+  getMathLab: superAdminQuery.query(async () => {
+    const live = liveMathBundle();
+    const draft = getSetting<MathBundle | null>("math_draft");
+    const versions = getSqliteClient()
+      .prepare(
+        "SELECT id, total_rtp, breakdown, note, published_by, created_at FROM math_versions ORDER BY id DESC LIMIT 20",
+      )
+      .all() as any[];
+    return {
+      live,
+      draft: draft ?? null,
+      bounds: {
+        min: getSetting<number>("rtp_publish_min"),
+        max: getSetting<number>("rtp_publish_max"),
+      },
+      maxWinX: getSetting<number>("max_win_x"),
+      declaredRtp: getSetting<number>("rtp_declared"),
+      versions: versions.map((v) => ({
+        id: v.id,
+        totalRtp: v.total_rtp,
+        breakdown: v.breakdown ? JSON.parse(v.breakdown) : null,
+        note: v.note,
+        publishedBy: v.published_by,
+        createdAt: v.created_at,
+      })),
+    };
+  }),
+
+  saveMathDraft: superAdminQuery
+    .input(z.object({ bundle: mathBundleSchema }))
+    .mutation(async ({ ctx, input }) => {
+      setSetting("math_draft", input.bundle, ctx.user!.id);
+      await writeAudit(ctx, "admin.saveMathDraft", {});
+      return { saved: true };
+    }),
+
+  certifyMath: superAdminQuery
+    .input(z.object({ bundle: mathBundleSchema }))
+    .mutation(async ({ input }) => {
+      const cert = certifyBundle(input.bundle as MathBundle);
+      const min = getSetting<number>("rtp_publish_min");
+      const max = getSetting<number>("rtp_publish_max");
+      return { ...cert, withinBounds: cert.totalPct >= min && cert.totalPct <= max, bounds: { min, max } };
+    }),
+
+  publishMath: superAdminQuery
+    .input(z.object({ bundle: mathBundleSchema, note: z.string().max(300).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const published = publishMathBundle(ctx, input.bundle as MathBundle, input.note ?? null);
+      return published;
+    }),
+
+  rollbackMath: superAdminQuery
+    .input(z.object({ versionId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const row = getSqliteClient()
+        .prepare("SELECT id, bundle FROM math_versions WHERE id = ?")
+        .get(input.versionId) as any;
+      if (!row) throw new Error("Version not found");
+      const bundle = JSON.parse(row.bundle) as MathBundle;
+      const parsed = mathBundleSchema.safeParse(bundle);
+      if (!parsed.success) {
+        throw new Error("Stored version no longer validates");
+      }
+      return publishMathBundle(ctx, bundle, `Rollback to version #${row.id}`);
+    }),
 
   getAuditLog: adminQuery
     .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())
