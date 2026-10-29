@@ -6,6 +6,7 @@ import { trpc } from "@/providers/trpc";
 import { ReelEngine, type WinLine } from "@/game/ReelEngine";
 import { useLang, LanguageToggle } from "@/i18n";
 import { Celebration, type CelebrationData, type CelebrationTier } from "@/components/Celebration";
+import { LiveTicker } from "@/components/LiveTicker";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
 import { toast } from "sonner";
@@ -1021,6 +1022,9 @@ export default function Game() {
           <p className="text-[#B8B8C8] max-w-md">{store.config?.maintenance_message ? store.config.maintenance_message : t("maintenanceBody")}</p>
         </div>
       ) : null}
+
+      {/* Step 9: live win ticker (real settled wins only) */}
+      <LiveTicker />
 
       {/* Main Game Area */}
       <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">

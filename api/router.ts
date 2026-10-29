@@ -7,6 +7,7 @@ import { balanceRouter } from "./routers/balance";
 import { fairnessRouter } from "./routers/fairness";
 import { jackpotRouter } from "./routers/jackpot";
 import { adminRouter } from "./routers/admin";
+import { socialRouter } from "./routers/social";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
@@ -18,6 +19,7 @@ export const appRouter = createRouter({
   fairness: fairnessRouter,
   jackpot: jackpotRouter,
   admin: adminRouter,
+  social: socialRouter,
 });
 
 export type AppRouter = typeof appRouter;

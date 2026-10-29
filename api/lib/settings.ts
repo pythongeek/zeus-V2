@@ -151,6 +151,18 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----
+  ticker_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Live win ticker enabled (Step 9)", labelBn: "লাইভ জয়ের টিকার চালু (ধাপ ৯)",
+  },
+  ticker_min_multiplier: {
+    type: "number", scope: "public", def: 25, group: "features",
+    labelEn: "Ticker: minimum win multiplier to appear (x bet)", labelBn: "টিকার: দেখানোর সর্বনিম্ন জয়ের গুণক (বাজির ×)",
+  },
+  ticker_gold_multiplier: {
+    type: "number", scope: "public", def: 100, group: "features",
+    labelEn: "Ticker: gold highlight at or above (x bet)", labelBn: "টিকার: সোনালি হাইলাইট (বাজির × বা বেশি)",
+  },
   features: {
     type: "json", scope: "public", group: "features",
     def: { "freeSpins": true, "thunder": true, "jackpots": true },
