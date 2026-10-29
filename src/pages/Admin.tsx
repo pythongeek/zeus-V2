@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw,
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
+  Activity,
   FlaskConical, HeartPulse, BellRing, Download,
 } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -384,6 +385,135 @@ function PromotionsSection({ enabled }: { enabled: boolean }) {
           {(settlements.data?.settlements ?? []).length === 0 && <div className="text-slate-500">—</div>}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function OpsSection({ enabled }: { enabled: boolean }) {
+  const { t } = useLang();
+  const q = trpc.admin.getOpsDashboard.useQuery(undefined, { enabled, refetchInterval: 30000 });
+  const d: any = q.data;
+  if (!d) return <div className="text-slate-500 text-sm">…</div>;
+  const pct = (v: number | null) => (v === null || v === undefined ? "—" : `${v.toFixed(2)}%`);
+  return (
+    <div className="space-y-4">
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-amber-400">{t("opsTripwire")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {(d.tripwire ?? []).map((m: any) => (
+            <div key={m.modeId} className="border-b border-slate-800 pb-2 space-y-1">
+              <div className="flex justify-between flex-wrap gap-2">
+                <span className="text-slate-200 font-medium">{m.modeId}</span>
+                <span className="text-slate-400">
+                  μ₀ {(m.mu0 * 100).toFixed(2)}% · σ₀ {m.sigma0} · {t("opsProcesses")} {m.spinsSeen} · {t("opsSpinsPerDay")} {m.spinsPerDay}
+                </span>
+              </div>
+              <div className="text-slate-500 text-xs">
+                EWMA {m.ewma !== null && m.ewma !== undefined ? (m.ewma * 100).toFixed(2) + "%" : "—"} · CUSUM +{m.cusumPos} / −{m.cusumNeg} ·
+                L1 arms at {m.horizons.layer1MinSpins} ({m.horizons.layer1Days ?? "—"}d) · CUSUM 2pp ≈ {m.horizons.cusum2ppDays ?? "—"}d
+              </div>
+              <div className="text-slate-600 text-xs italic">{m.horizons.note}</div>
+              {(m.events ?? []).length > 0 && (
+                <div className="text-red-300 text-xs">
+                  {m.events.map((e: any) => (
+                    <div key={e.id}>⚠ {e.kind} · {e.detail} · {new Date(e.created_at * 1000).toLocaleString()}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-amber-400">{t("opsModes")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-sm">
+          {(d.modes ?? []).map((m: any) => (
+            <div key={m.modeId} className="flex justify-between border-b border-slate-800 py-1 flex-wrap gap-2">
+              <span className="text-slate-200">{m.modeId} · {m.paidSpins30d} spins</span>
+              <span className="text-slate-400">
+                ${m.wageredUsdt.toFixed(2)} → ${m.wonUsdt.toFixed(2)} · {t("opsActualRtp")} {pct(m.actualRtp)} / {t("opsDeclaredRtp")} {pct(m.declaredRtp)}
+              </span>
+            </div>
+          ))}
+          <div className="text-slate-600 text-xs italic pt-1">{t("opsCascadeNote")}</div>
+        </CardContent>
+      </Card>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card className="bg-slate-900/80 border-slate-800">
+          <CardHeader>
+            <CardTitle className="text-amber-400">{t("opsEngagement")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {(d.engagement.dau ?? []).map((r: any) => (
+              <div key={r.day} className="flex justify-between border-b border-slate-800 py-0.5">
+                <span className="text-slate-400">{r.day}</span>
+                <span className="text-slate-200">{r.users} players</span>
+              </div>
+            ))}
+            <div className="flex justify-between pt-1">
+              <span className="text-slate-400">{t("opsSessions")}</span>
+              <span className="text-slate-200">{d.engagement.sessions7d}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">{t("opsAvgSession")}</span>
+              <span className="text-slate-200">{d.engagement.avgSessionMinutes ?? "—"} min</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-900/80 border-slate-800">
+          <CardHeader>
+            <CardTitle className="text-amber-400">{t("opsBonus")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {(d.bonus.byKind ?? []).map((b: any) => (
+              <div key={b.kind} className="flex justify-between border-b border-slate-800 py-0.5">
+                <span className="text-slate-400">{b.kind} × {b.c}</span>
+                <span className="text-slate-200">{Number(b.total).toFixed(2)}</span>
+              </div>
+            ))}
+            <div className="flex justify-between pt-1">
+              <span className="text-slate-400">{t("opsConversion")}</span>
+              <span className="text-slate-200">{pct(d.bonus.conversionRate)}</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card className="bg-slate-900/80 border-slate-800">
+          <CardHeader>
+            <CardTitle className="text-amber-400">{t("opsMoney")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {(d.moneyMix ?? []).map((m: any, i: number) => (
+              <div key={i} className="flex justify-between border-b border-slate-800 py-0.5">
+                <span className="text-slate-400">{m.type} · {m.currency} × {m.c}</span>
+                <span className="text-slate-200">{Number(m.total).toFixed(2)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card className="bg-slate-900/80 border-slate-800">
+          <CardHeader>
+            <CardTitle className="text-amber-400">{t("opsSettlements")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            {(d.settlementTotals ?? []).map((s: any, i: number) => (
+              <div key={i} className="flex justify-between border-b border-slate-800 py-0.5">
+                <span className="text-slate-400">{s.kind} · {s.currency} × {s.c}</span>
+                <span className="text-slate-200">{Number(s.total).toFixed(2)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -1510,6 +1640,7 @@ const SECTIONS = [
   { id: "site", icon: Globe, labelKey: "navSite" },
   { id: "risk", icon: ShieldAlert, labelKey: "navRisk" },
   { id: "promotions", icon: Gift, labelKey: "navPromotions" },
+  { id: "ops", icon: Activity, labelKey: "navOps" },
   { id: "system", icon: ServerCog, labelKey: "navSystem" },
 ] as const;
 
@@ -2789,6 +2920,7 @@ export default function Admin() {
             />
           )}
           {section === "promotions" && <PromotionsSection enabled={isAuthenticated && isAdmin} />}
+          {section === "ops" && <OpsSection enabled={isAuthenticated && isAdmin} />}
 
           {section === "system" && (
             <>

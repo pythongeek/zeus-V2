@@ -1531,6 +1531,122 @@ export const adminRouter = createRouter({
     return result;
   }),
 
+  /* ===== Step 15: ops dashboard (tripwire + per-mode telemetry) ===== */
+  getOpsDashboard: adminQuery.query(async () => {
+    const { getTripwireStatus } = await import("../lib/tripwire");
+    const { tsSec, toUsdt } = await import("../lib/limits");
+    const client = getSqliteClient();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const since30 = nowSec - 30 * 86400;
+    const since7 = nowSec - 7 * 86400;
+
+    // Per-mode money truth (process semantics: paid bets wagered,
+    // ALL rows' wins returned — the same attribution as cashback).
+    const modeIds = new Set<string>(["classic"]);
+    for (const r of client.prepare("SELECT DISTINCT mode_id FROM spins").all() as Array<any>) modeIds.add(r.mode_id);
+    const modes = [...modeIds].map((modeId) => {
+      const wag = client
+        .prepare(
+          `SELECT currency, SUM(CAST(bet_amount AS REAL)) AS t FROM spins WHERE mode_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} >= ? GROUP BY currency`,
+        )
+        .all(modeId, since30) as Array<{ currency: string; t: number }>;
+      const won = client
+        .prepare(
+          `SELECT currency, SUM(CAST(win_amount AS REAL)) AS t FROM spins WHERE mode_id = ? AND ${tsSec("created_at")} >= ? GROUP BY currency`,
+        )
+        .all(modeId, since30) as Array<{ currency: string; t: number }>;
+      const paid = client
+        .prepare(
+          `SELECT COUNT(*) AS c FROM spins WHERE mode_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} >= ?`,
+        )
+        .get(modeId, since30) as any;
+      const wageredUsdt = wag.reduce((a, r) => a + toUsdt(r.t, r.currency), 0);
+      const wonUsdt = won.reduce((a, r) => a + toUsdt(r.t, r.currency), 0);
+      const bundle = client
+        .prepare("SELECT cert FROM math_bundles WHERE mode_id = ? AND status = 'active' LIMIT 1")
+        .get(modeId) as any;
+      let declaredRtp: number | null = null;
+      try {
+        declaredRtp = bundle?.cert ? Number(JSON.parse(bundle.cert).rtp) : null;
+      } catch { /* cert is JSON by construction */ }
+      return {
+        modeId,
+        paidSpins30d: Number(paid?.c ?? 0),
+        wageredUsdt,
+        wonUsdt,
+        actualRtp: wageredUsdt > 0 ? (wonUsdt / wageredUsdt) * 100 : null,
+        declaredRtp,
+      };
+    });
+
+    // Engagement: distinct spinners per Dhaka day (7d), sessions.
+    const dau = client
+      .prepare(
+        `SELECT date(${tsSec("created_at")} + 21600, 'unixepoch') AS day, COUNT(DISTINCT user_id) AS users
+         FROM spins WHERE ${tsSec("created_at")} >= ? GROUP BY day ORDER BY day`,
+      )
+      .all(since7) as Array<{ day: string; users: number }>;
+    const sessions7 = client
+      .prepare(`SELECT COUNT(*) AS c FROM game_sessions WHERE ${tsSec("started_at")} >= ?`)
+      .get(since7) as any;
+    const avgSess = client
+      .prepare(
+        `SELECT AVG(${tsSec("ended_at")} - ${tsSec("started_at")}) AS mins FROM game_sessions
+         WHERE ended_at IS NOT NULL AND ${tsSec("started_at")} >= ?`,
+      )
+      .get(since7) as any;
+
+    // Bonus funnel (30d): granted by kind; conversion outcome.
+    const bonusByKind = client
+      .prepare(
+        `SELECT kind, SUM(CAST(amount AS REAL)) AS total, COUNT(*) AS c FROM bonus_ledger
+         WHERE ${tsSec("created_at")} >= ? GROUP BY kind ORDER BY total DESC`,
+      )
+      .all(since30);
+    const bonusOutcomes = client
+      .prepare(
+        `SELECT status, SUM(CAST(amount AS REAL)) AS total FROM bonus_ledger
+         WHERE ${tsSec("created_at")} >= ? GROUP BY status`,
+      )
+      .all(since30) as Array<{ status: string; total: number }>;
+    const outcome = (s: string) => bonusOutcomes.find((o) => o.status === s)?.total ?? 0;
+    const settledBonus = outcome("completed") + outcome("expired");
+    const bonusConversionRate = settledBonus > 0 ? (outcome("completed") / settledBonus) * 100 : null;
+
+    // Money mix (30d, completed).
+    const moneyMix = client
+      .prepare(
+        `SELECT type, currency, SUM(CAST(amount AS REAL)) AS total, COUNT(*) AS c FROM transactions
+         WHERE status = 'completed' AND ${tsSec("created_at")} >= ? GROUP BY type, currency ORDER BY type, total DESC`,
+      )
+      .all(since30);
+
+    const settlementTotals = client
+      .prepare(
+        `SELECT kind, currency, SUM(CAST(amount AS REAL)) AS total, COUNT(*) AS c FROM promo_settlements
+         WHERE ${tsSec("created_at")} >= ? GROUP BY kind, currency ORDER BY kind`,
+      )
+      .all(since30);
+
+    return {
+      generatedAt: nowSec,
+      tripwire: getTripwireStatus(client),
+      modes,
+      engagement: {
+        dau,
+        sessions7d: Number(sessions7?.c ?? 0),
+        avgSessionMinutes: avgSess?.mins ? Math.round((avgSess.mins / 60) * 10) / 10 : null,
+      },
+      bonus: { byKind: bonusByKind, conversionRate: bonusConversionRate },
+      moneyMix,
+      settlementTotals,
+      cascade: {
+        note: "Cascade-mode telemetry (chain histogram, near-miss rate, buy share) fills in when the cascade mode ships in Phase 2.",
+        modesPresent: modes.filter((m) => m.modeId !== "classic").map((m) => m.modeId),
+      },
+    };
+  }),
+
   /* ===== Steps 10/13/14: weekly promo settlement (idempotent) ===== */
   runWeeklySettlement: adminQuery.mutation(async ({ ctx }) => {
     const { runCashback, runRakeback, runReferral } = await import("../lib/settlement");

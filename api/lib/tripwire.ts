@@ -41,6 +41,7 @@
  * nightly; keep the math in step.
  */
 import { getSqliteClient } from "../queries/connection";
+import { tsSec } from "./limits";
 import { getSetting, setSetting } from "./settings";
 
 type SqliteClient = ReturnType<typeof getSqliteClient>;
@@ -350,7 +351,7 @@ export function getTripwireStatus(sqlite: SqliteClient) {
     const state = sqlite.prepare("SELECT * FROM tripwire_state WHERE mode_id = ?").get(modeId) as StateRow | undefined;
     const rate = sqlite
       .prepare(
-        "SELECT COUNT(*) AS c FROM spins WHERE mode_id = ? AND is_free_spin = 0 AND created_at >= unixepoch() - 7 * 86400",
+        `SELECT COUNT(*) AS c FROM spins WHERE mode_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} >= unixepoch() - 7 * 86400`,
       )
       .get(modeId) as { c: number };
     const spinsPerDay = rate.c / 7;
