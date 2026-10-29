@@ -151,6 +151,39 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----
+  vip_tiers: {
+    type: "json", scope: "public", group: "features",
+    def: [
+      { id: "bronze", nameEn: "Bronze", nameBn: "ব্রোঞ্জ", thresholdBdt: 0, rakebackPct: 5, levelupBonusBdt: 0 },
+      { id: "silver", nameEn: "Silver", nameBn: "সিলভার", thresholdBdt: 50000, rakebackPct: 8, levelupBonusBdt: 50 },
+      { id: "gold", nameEn: "Gold", nameBn: "গোল্ড", thresholdBdt: 250000, rakebackPct: 11, levelupBonusBdt: 200 },
+      { id: "platinum", nameEn: "Platinum", nameBn: "প্লাটিনাম", thresholdBdt: 1000000, rakebackPct: 15, levelupBonusBdt: 1000 },
+    ],
+    labelEn: "VIP tiers (Step 13): lifetime BDT turnover thresholds, rakeback percent of theoretical loss, one-time level-up bonus BDT",
+    labelBn: "ভিআইপি টিয়ার (ধাপ ১৩)",
+  } as any,
+  wheel_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Lucky wheel enabled (Step 13)", labelBn: "লাকি হুইল চালু (ধাপ ১৩)",
+  },
+  wheel_prizes: {
+    type: "json", scope: "public", group: "features",
+    def: [
+      { labelEn: "৳5 bonus", labelBn: "৳৫ বোনাস", kind: "bonus", amount: 5, weight: 30 },
+      { labelEn: "৳10 bonus", labelBn: "৳১০ বোনাস", kind: "bonus", amount: 10, weight: 25 },
+      { labelEn: "৳25 bonus", labelBn: "৳২৫ বোনাস", kind: "bonus", amount: 25, weight: 18 },
+      { labelEn: "৳50 bonus", labelBn: "৳৫০ বোনাস", kind: "bonus", amount: 50, weight: 12 },
+      { labelEn: "5 free spins", labelBn: "৫টি ফ্রি স্পিন", kind: "freespins", spins: 5, weight: 8 },
+      { labelEn: "৳100 bonus", labelBn: "৳১০০ বোনাস", kind: "bonus", amount: 100, weight: 5 },
+      { labelEn: "৳500 bonus", labelBn: "৳৫০০ বোনাস", kind: "bonus", amount: 500, weight: 2 },
+    ],
+    labelEn: "Lucky wheel prizes (Step 13): weighted, server-drawn; bonus prizes are BDT at 1x wagering",
+    labelBn: "লাকি হুইলের পুরস্কার (ধাপ ১৩)",
+  } as any,
+  wheel_token_bet_bdt: {
+    type: "number", scope: "admin", def: 10, group: "features",
+    labelEn: "Free-spin token denomination (BDT bet per token spin)", labelBn: "ফ্রি-স্পিন টোকেনের মান (প্রতি স্পিনে টাকা বাজি)",
+  },
   reload_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Reload bonus enabled (Step 12)", labelBn: "রিলোড বোনাস চালু (ধাপ ১২)",

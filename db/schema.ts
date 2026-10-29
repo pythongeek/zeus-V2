@@ -164,6 +164,34 @@ export const tripwireState = sqliteTable("tripwire_state", {
   updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
 });
 
+export const vipLevelGrants = sqliteTable("vip_level_grants", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  tierId: text("tier_id").notNull(),
+  amount: text("amount").notNull(),
+  currency: text("currency").notNull().default("BDT"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
+export const wheelEntitlements = sqliteTable("wheel_entitlements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  source: text("source").notNull(),
+  periodStart: integer("period_start").notNull(),
+  rollNonce: text("roll_nonce").notNull(),
+  usedAt: integer("used_at"),
+  prizeLabel: text("prize_label"),
+  prizeKind: text("prize_kind"),
+  prizeAmount: text("prize_amount"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
+export const freeSpinTokens = sqliteTable("free_spin_tokens", {
+  userId: integer("user_id").primaryKey(),
+  spins: integer("spins").notNull().default(0),
+  updatedAt: integer("updated_at").default(sql`(unixepoch())`),
+});
+
 export const reloadOptins = sqliteTable("reload_optins", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id").notNull(),

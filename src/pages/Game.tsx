@@ -9,6 +9,7 @@ import { Celebration, type CelebrationData, type CelebrationTier } from "@/compo
 import { LiveTicker } from "@/components/LiveTicker";
 import { RedEnvelope } from "@/components/RedEnvelope";
 import { ReloadOffers } from "@/components/ReloadOffers";
+import { VipWheel } from "@/components/VipWheel";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
 import { toast } from "sonner";
@@ -1030,6 +1031,9 @@ export default function Game() {
 
       {/* Step 9: live win ticker (real settled wins only) */}
       <LiveTicker />
+
+      {/* Step 13: VIP strip + lucky wheel */}
+      <VipWheel />
 
       {/* Main Game Area */}
       <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">

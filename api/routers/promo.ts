@@ -5,6 +5,12 @@ import { getSetting } from "../lib/settings";
 import { fmtMoney, parseMoney } from "../lib/money";
 import { claimAmountFloat, envelopeStatus } from "../lib/envelopes";
 import { activeOffers, type ReloadOffer } from "../lib/reload";
+import {
+  saneTiers, tierFor, nextTier, lifetimeTurnoverBdt, ensureLevelGrants,
+  sanePrizes, drawPrize, ensureWeeklyEntitlement, availableWheelSpins,
+  addFreeSpinTokens, freeSpinTokenBalance,
+} from "../lib/vip";
+import { grantBonusCredit } from "../lib/settlement";
 import { maskName } from "./social";
 
 /**
@@ -172,6 +178,88 @@ export const promoRouter = createRouter({
       });
       return run();
     }),
+
+  /* ===== Step 13: VIP + rakeback status ===== */
+  getVipStatus: authedQuery.query(async ({ ctx }) => {
+    const client = getSqliteClient();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const tiers = saneTiers(getSetting("vip_tiers"));
+    const justGranted = ensureLevelGrants(client, ctx.user.id, tiers, nowSec);
+    const turnoverBdt = lifetimeTurnoverBdt(client, ctx.user.id);
+    const tier = tierFor(turnoverBdt, tiers);
+    const next = nextTier(turnoverBdt, tiers);
+    return {
+      turnoverBdt,
+      tier,
+      nextTier: next,
+      progressPct: next && tier
+        ? Math.min(100, Math.max(0, ((turnoverBdt - tier.thresholdBdt) / (next.thresholdBdt - tier.thresholdBdt)) * 100))
+        : 100,
+      justGranted,
+      tiers,
+    };
+  }),
+
+  /* ===== Step 13: lucky wheel ===== */
+  getWheel: authedQuery.query(async ({ ctx }) => {
+    const client = getSqliteClient();
+    const enabled = getSetting<boolean>("wheel_enabled") !== false;
+    if (enabled) ensureWeeklyEntitlement(client, ctx.user.id, Math.floor(Date.now() / 1000));
+    const history = client
+      .prepare(
+        "SELECT prize_label, prize_kind, prize_amount, used_at, roll_nonce FROM wheel_entitlements WHERE user_id = ? AND used_at IS NOT NULL ORDER BY used_at DESC LIMIT 10",
+      )
+      .all(ctx.user.id);
+    return {
+      enabled,
+      availableSpins: enabled ? availableWheelSpins(client, ctx.user.id) : 0,
+      prizes: sanePrizes(getSetting("wheel_prizes")),
+      tokenBalance: freeSpinTokenBalance(client, ctx.user.id),
+      tokenBetBdt: Number(getSetting<number>("wheel_token_bet_bdt") ?? 10),
+      history,
+    };
+  }),
+
+  spinWheel: authedQuery.mutation(async ({ ctx }) => {
+    if (getSetting<boolean>("wheel_enabled") === false) throw new Error("The wheel is disabled");
+    const client = getSqliteClient();
+    const nowSec = Math.floor(Date.now() / 1000);
+    ensureWeeklyEntitlement(client, ctx.user.id, nowSec);
+    const prizes = sanePrizes(getSetting("wheel_prizes"));
+    if (prizes.length === 0) throw new Error("No wheel prizes configured");
+    const run = client.transaction(() => {
+      const ent = client
+        .prepare(
+          "SELECT * FROM wheel_entitlements WHERE user_id = ? AND used_at IS NULL ORDER BY id ASC LIMIT 1",
+        )
+        .get(ctx.user.id) as any;
+      if (!ent) throw new Error("No wheel spins available — one free spin arrives every Monday");
+      const prize = drawPrize(ent.roll_nonce, prizes)!;
+      const prizeAmount = prize.kind === "bonus" ? String(prize.amount ?? 0) : String(prize.spins ?? 0);
+      client
+        .prepare("UPDATE wheel_entitlements SET used_at = ?, prize_label = ?, prize_kind = ?, prize_amount = ? WHERE id = ?")
+        .run(nowSec, prize.labelEn, prize.kind, prizeAmount, ent.id);
+      if (prize.kind === "bonus" && (prize.amount ?? 0) > 0) {
+        grantBonusCredit(client, {
+          userId: ctx.user.id,
+          currency: "BDT",
+          amountMicro: BigInt(Math.round((prize.amount ?? 0) * 1e8)),
+          kind: "wheel",
+          wageringMultiplier: 1,
+          expiresAt: nowSec + 7 * 86400,
+          nowSec,
+        });
+      } else if (prize.kind === "freespins" && (prize.spins ?? 0) > 0) {
+        addFreeSpinTokens(client, ctx.user.id, prize.spins ?? 0, nowSec);
+      }
+      return {
+        prize: { labelEn: prize.labelEn, labelBn: prize.labelBn, kind: prize.kind, amount: prize.amount, spins: prize.spins },
+        remaining: availableWheelSpins(client, ctx.user.id),
+        tokenBalance: freeSpinTokenBalance(client, ctx.user.id),
+      };
+    });
+    return run();
+  }),
 
   envelopeResult: publicQuery
     .input(z.object({ envelopeId: z.number() }))

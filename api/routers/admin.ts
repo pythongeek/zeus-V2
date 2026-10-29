@@ -1533,15 +1533,20 @@ export const adminRouter = createRouter({
 
   /* ===== Steps 10/13/14: weekly promo settlement (idempotent) ===== */
   runWeeklySettlement: adminQuery.mutation(async ({ ctx }) => {
-    const { runCashback } = await import("../lib/settlement");
+    const { runCashback, runRakeback } = await import("../lib/settlement");
     const result = runCashback(getSqliteClient(), {});
+    const rakeback = runRakeback(getSqliteClient(), {
+      periodStart: result.periodStart,
+      periodEnd: result.periodEnd,
+    });
     await writeAudit(ctx, "admin.runWeeklySettlement", {
       periodStart: result.periodStart,
       periodEnd: result.periodEnd,
       grants: result.grants.length,
       totalByCurrency: result.totalByCurrency,
+      rakebackGrants: rakeback.grants.length,
     });
-    return result;
+    return { ...result, rakeback };
   }),
 
   /* ===== Step 11: red envelopes ===== */

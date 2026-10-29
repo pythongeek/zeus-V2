@@ -1,6 +1,7 @@
 import { getSetting } from "./settings";
 import { fmtMoney, parseMoney } from "./money";
 import { tsSec, toUsdt } from "./limits";
+import { saneTiers, tierFor, lifetimeTurnoverBdt } from "./vip";
 
 /**
  * Weekly settlement engine (Steps 10/13/14 share the rails).
@@ -207,6 +208,113 @@ export function runCashback(
     grants,
     totalByCurrency: Object.fromEntries(Object.entries(totalByCurrency).map(([k, v]) => [k, fmtMoney(v)])),
   };
+}
+
+/**
+ * Grant a wagering bonus on the Step 4 rails (bonus bucket +
+ * bonus_ledger row + bonus_credit leg), inside the CALLER's
+ * transaction context — this helper does raw inserts only, no
+ * transaction of its own, mirroring the deposit-boost grant shape.
+ */
+export function grantBonusCredit(
+  client: SqliteDb,
+  args: {
+    userId: number;
+    currency: string;
+    amountMicro: bigint;
+    kind: string;
+    wageringMultiplier: number;
+    expiresAt: number | null;
+    nowSec: number;
+  },
+): void {
+  if (args.amountMicro <= 0n) return;
+  const bal = client
+    .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
+    .get(args.userId, args.currency) as { bonus: string } | undefined;
+  const bonus0 = parseMoney(bal?.bonus ?? "0");
+  const newBonus = bonus0 + args.amountMicro;
+  if (bal) {
+    client
+      .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
+      .run(fmtMoney(newBonus), args.userId, args.currency);
+  } else {
+    client
+      .prepare("INSERT INTO balances (user_id, currency, available, locked, bonus) VALUES (?, ?, '0', '0', ?)")
+      .run(args.userId, args.currency, fmtMoney(newBonus));
+  }
+  client
+    .prepare(
+      `INSERT INTO bonus_ledger (user_id, currency, kind, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, '0', 'active', NULL, ?, ?, ?)`,
+    )
+    .run(
+      args.userId,
+      args.currency,
+      args.kind,
+      fmtMoney(args.amountMicro),
+      fmtMoney(args.amountMicro),
+      args.wageringMultiplier,
+      args.expiresAt,
+      args.nowSec,
+      args.nowSec,
+    );
+  client
+    .prepare(
+      `INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket)
+       VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')`,
+    )
+    .run(args.userId, args.currency, fmtMoney(args.amountMicro), fmtMoney(newBonus));
+}
+
+/**
+ * Weekly rakeback (Step 13): tier% of THEORETICAL loss for the
+ * week — wagered x (1 - declared RTP) — credited wagering-free on
+ * the settlement rails. Tier comes from lifetime turnover.
+ */
+export function runRakeback(
+  client: SqliteDb,
+  opts: { nowSec?: number; periodStart?: number; periodEnd?: number } = {},
+): { periodStart: number; periodEnd: number; grants: Array<{ userId: number; currency: string; amountMicro: string; tier: string }> } {
+  const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
+  const period =
+    opts.periodStart !== undefined && opts.periodEnd !== undefined
+      ? { start: opts.periodStart, end: opts.periodEnd }
+      : previousWeekPeriod(nowSec);
+  const grants: Array<{ userId: number; currency: string; amountMicro: string; tier: string }> = [];
+  const tiers = saneTiers(getSetting("vip_tiers"));
+  const declaredRtp = Number(getSetting<number>("rtp_declared") ?? 95.95);
+  const theoLossFrac = Math.max(0, 1 - declaredRtp / 100);
+  if (theoLossFrac <= 0) return { periodStart: period.start, periodEnd: period.end, grants };
+
+  const wagered = client
+    .prepare(
+      `SELECT user_id, currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins
+       WHERE is_free_spin = 0 AND ${tsSec("created_at")} >= ? AND ${tsSec("created_at")} < ?
+       GROUP BY user_id, currency`,
+    )
+    .all(period.start, period.end) as Array<{ user_id: number; currency: string; total: number }>;
+
+  for (const w of wagered) {
+    if (!(w.total > 0)) continue;
+    const turnover = lifetimeTurnoverBdt(client, w.user_id);
+    const tier = tierFor(turnover, tiers);
+    if (!tier || tier.rakebackPct <= 0) continue;
+    const amountMicro = BigInt(Math.round(w.total * theoLossFrac * (tier.rakebackPct / 100) * 1e8));
+    if (amountMicro <= 0n) continue;
+    const credited = creditWageringFree(client, {
+      userId: w.user_id,
+      currency: w.currency,
+      amountMicro,
+      kind: "rakeback",
+      periodStart: period.start,
+      periodEnd: period.end,
+      basis: `wagered ${w.total.toFixed(8)} theoLossFrac ${theoLossFrac} tier ${tier.id} ${tier.rakebackPct}%`,
+      nowSec,
+    });
+    if (credited) grants.push({ userId: w.user_id, currency: w.currency, amountMicro: String(amountMicro), tier: tier.id });
+  }
+  return { periodStart: period.start, periodEnd: period.end, grants };
 }
 
 /**

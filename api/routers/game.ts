@@ -307,6 +307,30 @@ export const gameRouter = createRouter({
         status: "active",
       }).returning();
 
+      // Step 13: wheel free-spin tokens seed the new session — the
+      // tokens are spent here, played at the fixed token bet.
+      let freeSpinsGranted = 0;
+      {
+        const client = getSqliteClient();
+        const tok = client
+          .prepare("SELECT spins FROM free_spin_tokens WHERE user_id = ?")
+          .get(userId) as { spins: number } | undefined;
+        if (tok && tok.spins > 0) {
+          const tokenBet = Number(getSetting<number>("wheel_token_bet_bdt") ?? 10);
+          client
+            .prepare("UPDATE free_spin_tokens SET spins = 0, updated_at = ? WHERE user_id = ?")
+            .run(Math.floor(Date.now() / 1000), userId);
+          await db.update(gameSessions)
+            .set({
+              freeSpinsRemaining: tok.spins,
+              freeSpinsBet: String(tokenBet),
+              freeSpinsCurrency: "BDT" as any,
+            })
+            .where(eq(gameSessions.id, session.id));
+          freeSpinsGranted = tok.spins;
+        }
+      }
+
       const fullSession = await db.select().from(gameSessions)
         .where(eq(gameSessions.id, session.id))
         .then(rows => rows[0]);
@@ -316,6 +340,7 @@ export const gameRouter = createRouter({
         serverSeedHash: fullSession.serverSeedHash,
         clientSeed: fullSession.clientSeed,
         startingNonce: 0,
+        freeSpinsGranted,
       };
     }),
 

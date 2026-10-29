@@ -129,3 +129,70 @@ for (const w of wagered) {
   }
 }
 console.log(`SETTLE cashback period [${start}, ${end}): ${grants} grants, total ${fmt(totalMicro)} (mixed currencies)`);
+
+/* ---- Step 13 rakeback: tier% of theoretical loss, same rails ---- */
+const BDT_RATES = { BTC: 11000000, ETH: 550000, USDT: 110, BDT: 1 };
+const toUsdt = (amount, currency) => (amount * (BDT_RATES[currency] ?? 110)) / 110;
+const tiersRaw = setting("vip_tiers");
+const tiers = (Array.isArray(tiersRaw) ? tiersRaw : [
+  { id: "bronze", thresholdBdt: 0, rakebackPct: 5 },
+  { id: "silver", thresholdBdt: 50000, rakebackPct: 8 },
+  { id: "gold", thresholdBdt: 250000, rakebackPct: 11 },
+  { id: "platinum", thresholdBdt: 1000000, rakebackPct: 15 },
+]).slice().sort((a, b) => a.thresholdBdt - b.thresholdBdt);
+const declaredRtp = Number(setting("rtp_declared") ?? 95.95);
+const theoLossFrac = Math.max(0, 1 - declaredRtp / 100);
+let rbGrants = 0;
+if (theoLossFrac > 0) {
+  const creditRb = db.transaction((w, tier, amountMicro) => {
+    const existing = db
+      .prepare("SELECT id FROM promo_settlements WHERE kind = 'rakeback' AND user_id = ? AND currency = ? AND period_start = ?")
+      .get(w.user_id, w.currency, start);
+    if (existing) return false;
+    const bal = db.prepare("SELECT available, bonus FROM balances WHERE user_id = ? AND currency = ?").get(w.user_id, w.currency);
+    const avail0 = parse(bal?.available ?? "0");
+    const bonus0 = parse(bal?.bonus ?? "0");
+    const tx = db
+      .prepare(
+        `INSERT INTO transactions (user_id, type, currency, amount, status, to_address, payout_ref, created_at, updated_at)
+         VALUES (?, 'rakeback', ?, ?, 'completed', 'internal', ?, ?, ?)`,
+      )
+      .run(w.user_id, w.currency, fmt(amountMicro), `rakeback:${start}`, nowSec, nowSec);
+    const txId = Number(tx.lastInsertRowid);
+    db.prepare(
+      `INSERT INTO bonus_ledger (user_id, currency, kind, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at, created_at, updated_at)
+       VALUES (?, ?, 'rakeback', ?, '0', 0, '0', 'completed', ?, NULL, ?, ?)`,
+    ).run(w.user_id, w.currency, fmt(amountMicro), txId, nowSec, nowSec);
+    const leg = db.prepare(
+      `INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    leg.run(w.user_id, "bonus_credit", w.currency, fmt(amountMicro), fmt(bonus0 + amountMicro), "bonus");
+    leg.run(w.user_id, "bonus_convert", w.currency, fmt(-amountMicro), fmt(bonus0), "bonus");
+    leg.run(w.user_id, "bonus_convert", w.currency, fmt(amountMicro), fmt(avail0 + amountMicro), "available");
+    if (bal) {
+      db.prepare("UPDATE balances SET available = ? WHERE user_id = ? AND currency = ?").run(fmt(avail0 + amountMicro), w.user_id, w.currency);
+    } else {
+      db.prepare("INSERT INTO balances (user_id, currency, available, locked, bonus) VALUES (?, ?, ?, '0', '0')").run(w.user_id, w.currency, fmt(amountMicro));
+    }
+    db.prepare(
+      `INSERT INTO promo_settlements (kind, user_id, currency, period_start, period_end, amount, basis, tx_id, created_at)
+       VALUES ('rakeback', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(w.user_id, w.currency, start, end, fmt(amountMicro), `wagered ${w.total.toFixed(8)} theoLossFrac ${theoLossFrac} tier ${tier.id} ${tier.rakebackPct}%`, txId, nowSec);
+    return true;
+  });
+  for (const w of wagered) {
+    if (!(w.total > 0)) continue;
+    const lifeRows = db
+      .prepare("SELECT currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins WHERE user_id = ? AND is_free_spin = 0 GROUP BY currency")
+      .all(w.user_id);
+    const turnoverBdt = lifeRows.reduce((acc, r) => acc + toUsdt(r.total, r.currency) * 110, 0);
+    let tier = null;
+    for (const tr of tiers) if (turnoverBdt >= tr.thresholdBdt) tier = tr;
+    if (!tier || !(tier.rakebackPct > 0)) continue;
+    const amountMicro = BigInt(Math.round(w.total * theoLossFrac * (tier.rakebackPct / 100) * 1e8));
+    if (amountMicro <= 0n) continue;
+    if (creditRb(w, tier, amountMicro)) rbGrants += 1;
+  }
+}
+console.log(`SETTLE rakeback period [${start}, ${end}): ${rbGrants} grants`);
