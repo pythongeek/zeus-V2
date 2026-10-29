@@ -265,11 +265,18 @@ describe("deposit -> boost -> wager integration", () => {
     await depositAndApprove(user, "100");
     const sessionId = await makeSession(user.id);
     const caller = callerFor(gameRouter, user);
+    // Spin until five PAID spins have settled. A random seed can
+    // trigger free spins mid-sequence; free spins neither fund from
+    // bonus nor count toward wagering, so counting calls instead of
+    // paid spins made this test seed-dependent (flake class F6).
     let totalWin = 0;
-    for (let i = 0; i < 5; i++) {
+    let paidSpins = 0;
+    for (let guard = 0; paidSpins < 5 && guard < 40; guard++) {
       const r = await caller.spin({ sessionId, betAmount: "1", currency: "USDT" });
       totalWin += parseFloat(r.winAmount);
+      if (!r.isFreeSpin) paidSpins++;
     }
+    expect(paidSpins).toBe(5);
     const bal = balRow(user.id, "USDT");
     // All five 1-USDT bets were bonus-funded: cash only moved by wins.
     expect(parseFloat(bal.available)).toBeCloseTo(100 + totalWin, 8);
