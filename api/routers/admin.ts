@@ -1678,7 +1678,16 @@ export const adminRouter = createRouter({
   /* ================= Section I: system & ops ================= */
   getSystemHealth: adminQuery.query(async () => {
     const fsMod = await import("node:fs");
+    const pathMod = await import("node:path");
     const { execFile } = await import("node:child_process");
+    // Portable paths: everything resolves from the app directory
+    // (cwd) and the app's own DB setting, with env overrides for
+    // the ops locations — no hard-coded /opt/zeus-slot.
+    const appDir = process.env.ZEUS_APP_DIR || process.cwd();
+    const backupsDir = process.env.ZEUS_BACKUPS_DIR || "/var/backups/apps";
+    const monitorStateDir = process.env.ZEUS_MONITOR_DIR || "/var/lib/zeus-monitor";
+    const monitorLog = process.env.ZEUS_MONITOR_LOG || "/var/log/zeus-monitor.log";
+    const serviceName = process.env.ZEUS_SERVICE_NAME || "zeus-slot";
     const run = (cmd: string, args: string[], timeout = 5000): Promise<string> =>
       new Promise((resolve) => {
         execFile(cmd, args, { timeout, maxBuffer: 1024 * 1024 }, (err, stdout) =>
@@ -1689,7 +1698,7 @@ export const adminRouter = createRouter({
     // Version: the live git commit of the deployed tree.
     let commit: string | null = null;
     let commitDate: string | null = null;
-    const gitOut = await run("git", ["-C", "/opt/zeus-slot", "log", "-1", "--format=%h|%cI"]);
+    const gitOut = await run("git", ["-C", appDir, "log", "-1", "--format=%h|%cI"]);
     if (gitOut.trim()) {
       const [h, d] = gitOut.trim().split("|");
       commit = h ?? null;
@@ -1698,9 +1707,11 @@ export const adminRouter = createRouter({
 
     // DB size (main file + WAL + shm).
     let dbSizeBytes = 0;
+    const dbFile =
+      process.env.ZEUS_DB_PATH || pathMod.resolve(appDir, "data", "zeus.sqlite");
     for (const suffix of ["", "-wal", "-shm"]) {
       try {
-        dbSizeBytes += fsMod.statSync(`/opt/zeus-slot/data/zeus.sqlite${suffix}`).size;
+        dbSizeBytes += fsMod.statSync(`${dbFile}${suffix}`).size;
       } catch { /* file may not exist */ }
     }
 
@@ -1714,7 +1725,7 @@ export const adminRouter = createRouter({
     // Last backup (file + log line).
     let backup: { file: string; at: number; sizeBytes: number; logLine: string } | null = null;
     try {
-      const dir = "/var/backups/apps";
+      const dir = backupsDir;
       const files = fsMod
         .readdirSync(dir)
         .filter((f) => f.startsWith("zeus-nightly-") && f.endsWith(".tar.gz"))
@@ -1734,11 +1745,11 @@ export const adminRouter = createRouter({
     // Monitor status (fail counter + recent log lines).
     let monitor: { failCount: number; recent: string[] } = { failCount: 0, recent: [] };
     try {
-      const fc = fsMod.readFileSync("/var/lib/zeus-monitor/failcount", "utf8").trim();
+      const fc = fsMod.readFileSync(pathMod.join(monitorStateDir, "failcount"), "utf8").trim();
       monitor.failCount = parseInt(fc, 10) || 0;
     } catch { /* no state yet */ }
     try {
-      const lines = fsMod.readFileSync("/var/log/zeus-monitor.log", "utf8").trim().split("\n");
+      const lines = fsMod.readFileSync(monitorLog, "utf8").trim().split("\n");
       monitor.recent = lines.slice(-5);
     } catch { /* no log yet */ }
 
@@ -1747,7 +1758,7 @@ export const adminRouter = createRouter({
     let errors: string[] = [];
     const journal = await run(
       "journalctl",
-      ["-u", "zeus-slot", "--since", "24 hours ago", "--no-pager", "-n", "400"],
+      ["-u", serviceName, "--since", "24 hours ago", "--no-pager", "-n", "400"],
       8000,
     );
     if (journal) {
