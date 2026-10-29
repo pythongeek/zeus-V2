@@ -8,6 +8,7 @@ import { toUsdt, getLimits, getUsage, dhakaDayStartSec, tsSec } from "../lib/lim
 import { getMathConfig } from "./game";
 import { certifyMath as certifyBundle, type MathBundle } from "../lib/certify";
 import { runReconciliation as executeReconciliation } from "../lib/reconcile";
+import { depositBoostFor, computeBoostMicro } from "../lib/boosts";
 import { hashPassword } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
@@ -543,8 +544,14 @@ export const adminRouter = createRouter({
         },
         balances: bals.map((b) => ({
           currency: b.currency, available: b.available, locked: b.locked,
+          bonus: (b as any).bonus ?? "0",
           totalDeposited: b.totalDeposited, totalWithdrawn: b.totalWithdrawn,
         })),
+        bonuses: getSqliteClient()
+          .prepare(
+            "SELECT id, kind, currency, amount, remaining, wagered, wagering_multiplier, status, expires_at FROM bonus_ledger WHERE user_id = ? AND status = 'active' ORDER BY id",
+          )
+          .all(input.userId),
         stats: {
           depositedUsdt: Math.round(depositedUsdt * 100) / 100,
           withdrawnUsdt: Math.round(withdrawnUsdt * 100) / 100,
@@ -836,8 +843,50 @@ export const adminRouter = createRouter({
         )
         .run(tx.userId, tx.currency, fmtMoney(amountMicro), fmtMoney(newAvailable));
 
+      // Step 4: deposit boost. When a boost is active for this
+      // currency/amount, grant a bonus-bucket credit recorded in
+      // bonus_ledger; wagering and conversion happen on spins.
+      let boostGranted: bigint | null = null;
+      const boostCfg = depositBoostFor(tx.currency, amountMicro);
+      if (boostCfg) {
+        const bonusMicro = computeBoostMicro(amountMicro, boostCfg.pct);
+        if (bonusMicro > 0n) {
+          const client = getSqliteClient();
+          const brow = client
+            .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
+            .get(tx.userId, tx.currency) as any;
+          const newBonus = (brow ? parseMoney(brow.bonus || "0") : 0n) + bonusMicro;
+          const nowSec = Math.floor(Date.now() / 1000);
+          client
+            .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
+            .run(fmtMoney(newBonus), tx.userId, tx.currency);
+          client
+            .prepare(
+              "INSERT INTO bonus_ledger (user_id, kind, currency, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at) VALUES (?, 'deposit_boost', ?, ?, ?, ?, '0', 'active', ?, ?)",
+            )
+            .run(
+              tx.userId,
+              tx.currency,
+              fmtMoney(bonusMicro),
+              fmtMoney(bonusMicro),
+              boostCfg.wageringMultiplier,
+              tx.id,
+              nowSec + boostCfg.expiryDays * 86400,
+            );
+          client
+            .prepare(
+              "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')",
+            )
+            .run(tx.userId, tx.currency, fmtMoney(bonusMicro), fmtMoney(newBonus));
+          boostGranted = bonusMicro;
+        }
+      }
+
       await writeAudit(ctx, "admin.approveDeposit", {
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency,
+        ...(boostGranted !== null
+          ? { boostGranted: fmtMoney(boostGranted), boostPct: boostCfg?.pct }
+          : {}),
       });
       return { success: true, txId: tx.id };
     }),

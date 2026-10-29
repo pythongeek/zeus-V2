@@ -58,6 +58,10 @@ export const balances = sqliteTable("balances", {
   currency: text("currency", { enum: ["BTC", "ETH", "USDT", "BDT"] }).notNull(),
   available: text("available").default("0").notNull(),
   locked: text("locked").default("0").notNull(),
+  // Step 4: bonus bucket (bonus engine) — not withdrawable; funded by
+  // bonus_ledger grants, spent before cash on spins, converts to
+  // available when wagering completes.
+  bonus: text("bonus").default("0").notNull(),
   totalDeposited: text("total_deposited").default("0").notNull(),
   totalWithdrawn: text("total_withdrawn").default("0").notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
@@ -180,12 +184,17 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
   userId: integer("user_id", { mode: "number" }).notNull(),
   spinId: integer("spin_id", { mode: "number" }),
   // spin_debit | spin_credit | free_spin_credit | deposit_credit |
-  // withdraw_lock | withdraw_refund | admin_adjust (kept as free text so new
+  // withdraw_lock | withdraw_refund | admin_adjust | bonus_credit |
+  // bonus_debit | bonus_convert | bonus_expire (kept as free text so new
   // kinds never need a schema migration)
   kind: text("kind").notNull(),
   currency: text("currency").notNull(),
   amount: text("amount").notNull(), // signed: credits positive, debits negative
   balanceAfter: text("balance_after").notNull(),
+  // Step 4: which balance bucket this leg's chain belongs to
+  // ('available' | 'bonus'); reconciliation verifies each chain
+  // against its own bucket.
+  bucket: text("bucket").default("available").notNull(),
   createdAt: integer("createdAt", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
 }, (table) => ({
   idxLedgerUser: index("idx_ledger_user").on(table.userId, table.createdAt),
@@ -193,6 +202,29 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
 }));
 
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
+
+// Step 4 (migration 0019): one bonus ledger for every bonus kind —
+// deposit_boost now; cashback / reload / red_envelope / referral /
+// vip_wheel later. A grant is spent before cash when betting its
+// currency, accrues wagering from bets in that currency, and any
+// remainder converts to available once wagering completes.
+export const bonusLedger = sqliteTable("bonus_ledger", {
+  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+  userId: integer("user_id", { mode: "number" }).notNull(),
+  kind: text("kind").notNull(),
+  currency: text("currency").notNull(),
+  amount: text("amount").notNull(),
+  remaining: text("remaining").notNull(),
+  wageringMultiplier: integer("wagering_multiplier", { mode: "number" }).default(1).notNull(),
+  wagered: text("wagered").default("0").notNull(),
+  status: text("status").default("active").notNull(), // active | completed | expired
+  refTxId: integer("ref_tx_id", { mode: "number" }),
+  expiresAt: integer("expires_at", { mode: "number" }),
+  createdAt: integer("created_at", { mode: "number" }).default(sql`(unixepoch())`).notNull(),
+  updatedAt: integer("updated_at", { mode: "number" }).default(sql`(unixepoch())`).notNull(),
+});
+
+export type BonusLedgerEntry = typeof bonusLedger.$inferSelect;
 
 // Section C: internal admin notes about a player (migration 0015).
 export const playerNotes = sqliteTable("player_notes", {

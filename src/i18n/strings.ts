@@ -56,6 +56,11 @@ export const strings = {
     curNameETH: "Ethereum (ETH)",
     curNameUSDT: "Tether (USDT)",
     curNameBDT: "Bangladesh Taka (BDT)",
+    bonusBalance: "Bonus",
+    depositBoostBanner: "Deposit bonus: +{pct}% on {cur} deposits",
+    depositPremiumRate: "Premium rate: 1 USDT = ৳{rate}",
+    activeBonuses: "Active bonuses",
+    bonusWagered: "wagered",
 
     // Win display
     bigWin: "BIG WIN!",
@@ -568,6 +573,11 @@ export const strings = {
     curNameETH: "ইথেরিয়াম (ETH)",
     curNameUSDT: "টেথার (USDT)",
     curNameBDT: "বাংলাদেশ টাকা (BDT)",
+    bonusBalance: "বোনাস",
+    depositBoostBanner: "ডিপোজিট বোনাস: {cur} ডিপোজিটে +{pct}%",
+    depositPremiumRate: "প্রিমিয়াম রেট: ১ USDT = ৳{rate}",
+    activeBonuses: "সক্রিয় বোনাস",
+    bonusWagered: "বাজি হয়েছে",
 
     // Win display
     bigWin: "বড় জয়!",

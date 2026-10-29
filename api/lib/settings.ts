@@ -215,6 +215,43 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: { "USDT": "10000", "BDT": "1000000" },
     labelEn: "Maximum deposit per currency", labelBn: "প্রতি মুদ্রায় সর্বোচ্চ ডিপোজিট",
   },
+  // Step 4 (BD plan): USDT deposit boost + premium display rate.
+  // The boost is OFF until the operator enables it here.
+  deposit_boost_enabled: {
+    type: "boolean", scope: "public", group: "currencies",
+    def: false,
+    labelEn: "Deposit boost enabled", labelBn: "ডিপোজিট বুস্ট চালু",
+  },
+  deposit_boost_pct: {
+    type: "number", scope: "public", group: "currencies",
+    def: 5,
+    labelEn: "Deposit boost % (e.g. 5 = +5%)", labelBn: "ডিপোজিট বুস্ট % (যেমন ৫ = +৫%)",
+  },
+  deposit_boost_currency: {
+    type: "string", scope: "public", group: "currencies",
+    def: "USDT",
+    labelEn: "Boost applies to this currency", labelBn: "বুস্ট এই মুদ্রায় প্রযোজ্য",
+  },
+  deposit_boost_min_amount: {
+    type: "money", scope: "admin", group: "currencies",
+    def: "10",
+    labelEn: "Minimum deposit for the boost", labelBn: "বুস্টের জন্য সর্বনিম্ন ডিপোজিট",
+  },
+  deposit_boost_wagering: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 1,
+    labelEn: "Boost wagering multiplier (1 = wager the bonus once)", labelBn: "বুস্ট ওয়েজারিং গুণক (১ = বোনাস একবার বাজি)",
+  },
+  deposit_boost_expiry_days: {
+    type: "number", scope: "admin", group: "currencies",
+    def: 30,
+    labelEn: "Boost expires after (days)", labelBn: "বুস্টের মেয়াদ (দিন)",
+  },
+  usdt_bdt_premium: {
+    type: "number", scope: "public", group: "currencies",
+    def: 0,
+    labelEn: "Premium BDT per USDT added to the display rate", labelBn: "ডিসপ্লে রেটে প্রতি USDT-তে প্রিমিয়াম টাকা",
+  },
   deposit_daily_cap_usdt: {
     type: "number", scope: "admin", group: "currencies",
     def: 5000,

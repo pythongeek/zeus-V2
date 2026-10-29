@@ -2178,10 +2178,16 @@ export default function Admin() {
                   <div className="flex flex-wrap gap-2">
                     {playerDetail.balances.map((b: any) => (
                       <span key={b.currency} className="text-xs font-mono bg-slate-800/80 border border-slate-700 rounded px-2 py-1">
-                        {b.currency}: {b.available}{b.locked !== "0" ? ` (+${b.locked} locked)` : ""}
+                        {b.currency}: {b.available}{b.locked !== "0" ? ` (+${b.locked} locked)` : ""}{b.bonus && b.bonus !== "0" ? ` · ${t("bonusBalance")} ${b.bonus}` : ""}
                       </span>
                     ))}
                   </div>
+                  {(playerDetail.bonuses ?? []).length > 0 && (
+                    <div className="text-xs text-slate-400 bg-slate-950/60 border border-slate-800 rounded p-3">
+                      <span className="text-slate-300 font-medium">{t("activeBonuses")}: </span>
+                      {(playerDetail.bonuses as any[]).map((g) => `${g.kind} · ${g.currency} ${g.remaining}/${g.amount} · ${t("bonusWagered")} ${g.wagered}`).join("  |  ")}
+                    </div>
+                  )}
                   {playerDetail.rg && (
                     <div className="text-xs text-slate-400 bg-slate-950/60 border border-slate-800 rounded p-3">
                       <span className="text-slate-300 font-medium">{t("rgState")}: </span>

@@ -39,6 +39,14 @@ const CURRENCY_NAMES: Record<string, string> = {
   BDT: "Bangladesh Taka (BDT)",
 };
 
+// Step 4: display rate = base FX + the USDT premium when set.
+function fxRate(currency: string, config: Record<string, any> | null | undefined): number {
+  const base = BDT_RATES[currency] || 1;
+  if (currency !== "USDT") return base;
+  const premium = Number(config?.usdt_bdt_premium ?? 0);
+  return premium ? base + premium : base;
+}
+
 const CURRENCY_SYMBOLS: Record<string, string> = {
   BTC: "\u20BF",
   ETH: "\u039E",
@@ -679,7 +687,7 @@ export default function Game() {
 
     // Sync active currency balance with result.newBalance
     const updatedNewBal = parseFloat(result.newBalance);
-    const bdtRate = BDT_RATES[store.activeCurrency] || 1;
+    const bdtRate = fxRate(store.activeCurrency, store.config);
     const hasCurrency = store.balances.some(b => b.currency === store.activeCurrency);
     if (hasCurrency) {
       store.setBalances(
@@ -696,6 +704,7 @@ export default function Game() {
           currency: store.activeCurrency,
           available: updatedNewBal,
           locked: 0,
+          bonus: 0,
           bdtEquivalent: updatedNewBal * bdtRate,
         },
       ]);
@@ -751,7 +760,7 @@ export default function Game() {
 
       // Big win detection — tiered celebrations
       const cur = store.activeCurrency;
-      const rate = BDT_RATES[cur] || 1;
+      const rate = fxRate(cur, store.config);
       const amountText = (n: number) => `${CURRENCY_SYMBOLS[cur]}${n.toFixed(4)}`;
       const bdtText = (n: number) => `৳${(n * rate).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}`;
       const ratio = store.betAmount > 0 ? winAmount / store.betAmount : 0;
@@ -1495,7 +1504,7 @@ for (let i = 0; i < 5; i++) {
                 <div>
                   <div className="text-sm font-semibold text-white">{balance.currency}</div>
                   <div className="text-xs text-[#5E5E6E]">
-                    ৳{(balance.available * (BDT_RATES[balance.currency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
+                    ৳{(balance.available * fxRate(balance.currency, store.config)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
                   </div>
                 </div>
                 <div className="text-right">
@@ -1503,6 +1512,11 @@ for (let i = 0; i < 5; i++) {
                     {balance.available.toFixed(4)}
                   </div>
                   <div className="text-xs text-[#5E5E6E]">{balance.currency}</div>
+                  {(balance.bonus ?? 0) > 0 && (
+                    <div className="text-xs text-[#D4AF37]">
+                      {t("bonusBalance")}: {balance.bonus.toFixed(4)}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -1520,6 +1534,23 @@ for (let i = 0; i < 5; i++) {
             {walletMode === "deposit" && (
               <div className="bg-[#1A1A25] rounded-lg p-4 space-y-3">
                 <div className="text-sm font-semibold text-[#D4AF37]">{t("requestDepositTitle")}</div>
+                {(store.config as any)?.deposit_boost_enabled && (
+                  <div className="text-xs bg-[#D4AF37]/10 border border-[#D4AF37]/40 text-[#F4D03F] rounded p-3 space-y-1">
+                    <div>
+                      {t("depositBoostBanner", {
+                        pct: num(Number((store.config as any)?.deposit_boost_pct ?? 0)),
+                        cur: String((store.config as any)?.deposit_boost_currency ?? "USDT"),
+                      })}
+                    </div>
+                    {Number((store.config as any)?.usdt_bdt_premium ?? 0) > 0 && (
+                      <div>
+                        {t("depositPremiumRate", {
+                          rate: num((BDT_RATES.USDT || 110) + Number((store.config as any)?.usdt_bdt_premium ?? 0)),
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {!store.config?.binance_pay_id ? (
                   <div className="text-xs text-[#9E9EAC]">{t("depositsUnavailable")}</div>
                 ) : (

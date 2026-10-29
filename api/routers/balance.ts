@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "../middleware";
-import { getDb } from "../queries/connection";
+import { getDb, getSqliteClient } from "../queries/connection";
+import { materialiseExpiries } from "../lib/boosts";
 import { balances, transactions } from "../../db/schema";
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getSetting } from "../lib/settings";
@@ -20,6 +21,17 @@ export function getFxRates(): Record<string, number> {
   return { ...BDT_RATES, ...(cfg && typeof cfg === "object" ? cfg : {}) };
 }
 
+// Step 4: display-only premium on the USDT→BDT rate (the premium
+// USDT rate players see). Money itself never converts at this rate
+// — deposits and withdrawals settle 1:1 in their own currency, and
+// RG/limit maths keeps the base rate.
+export function displayFxRates(): Record<string, number> {
+  const rates = getFxRates();
+  const premium = getSetting<number>("usdt_bdt_premium") || 0;
+  if (premium) rates.USDT = (rates.USDT || 110) + premium;
+  return rates;
+}
+
 function assertCurrencyEnabled(currency: string) {
   const enabled = getSetting<string[]>("currencies_enabled");
   if (Array.isArray(enabled) && !enabled.includes(currency)) {
@@ -33,6 +45,12 @@ export const balanceRouter = createRouter({
 
     try {
       const db = getDb();
+      // Step 4: never display a bonus whose time has run out.
+      try {
+        materialiseExpiries(getSqliteClient(), ctx.user.id, Math.floor(Date.now() / 1000));
+      } catch {
+        // Expiry display must never break the balance read itself.
+      }
       let userBalances = await db.select()
         .from(balances)
         .where(eq(balances.userId, ctx.user.id));
@@ -61,11 +79,13 @@ export const balanceRouter = createRouter({
         const existing = userBalances.find(b => b.currency === currency);
         const avail = existing ? parseFloat(existing.available) : 0;
         const locked = existing ? parseFloat(existing.locked) : 0;
-        const cryptoRate = getFxRates()[currency] || 1;
+        const bonus = existing ? parseFloat((existing as any).bonus || "0") : 0;
+        const cryptoRate = displayFxRates()[currency] || 1;
         return {
           currency,
           available: avail,
           locked: locked,
+          bonus,
           bdtEquivalent: avail * cryptoRate,
         };
       });

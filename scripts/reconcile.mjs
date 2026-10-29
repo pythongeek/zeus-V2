@@ -37,9 +37,9 @@ const run = db
   .get();
 const runId = run.id;
 
-const balances = db.prepare("SELECT user_id, currency, available, locked FROM balances").all();
+const balances = db.prepare("SELECT user_id, currency, available, locked, bonus FROM balances").all();
 const legs = db
-  .prepare("SELECT user_id, currency, amount, balance_after FROM ledger_entries ORDER BY user_id, currency, id")
+  .prepare("SELECT user_id, currency, amount, balance_after, bucket FROM ledger_entries ORDER BY user_id, currency, id")
   .all();
 const openWd = db
   .prepare("SELECT user_id, currency, amount FROM transactions WHERE type = 'withdrawal' AND status IN ('pending', 'confirming')")
@@ -47,7 +47,7 @@ const openWd = db
 
 const legsByKey = new Map();
 for (const leg of legs) {
-  const k = `${leg.user_id}|${leg.currency}`;
+  const k = `${leg.user_id}|${leg.currency}|${leg.bucket || "available"}`;
   if (!legsByKey.has(k)) legsByKey.set(k, []);
   legsByKey.get(k).push(leg);
 }
@@ -62,40 +62,54 @@ for (const bal of balances) {
   const key = `${bal.user_id}|${bal.currency}`;
   const available = parseMoney(bal.available || "0");
   const locked = parseMoney(bal.locked || "0");
-  const rows = legsByKey.get(key) ?? [];
-  if (rows.length === 0) {
-    if (available !== 0n) {
-      findings.push({
-        userId: bal.user_id, currency: bal.currency, kind: "no_ledger",
-        expected: "0", actual: fmtMoney(available),
-        detail: "Balance exists with no ledger history (predates the ledger or was credited outside it)",
-      });
+  const bonus = parseMoney(bal.bonus || "0");
+  const checkChain = (rows, target, kinds, noneDetail, tailDetail) => {
+    if (rows.length === 0) {
+      if (target !== 0n) {
+        findings.push({
+          userId: bal.user_id, currency: bal.currency, kind: kinds.none,
+          expected: "0", actual: fmtMoney(target),
+          detail: noneDetail,
+        });
+      }
+      return;
     }
-  } else {
     let prev = null;
-    let broke = false;
     for (const leg of rows) {
       const amount = parseMoney(leg.amount);
       const after = parseMoney(leg.balance_after);
       if (prev !== null && after !== prev + amount) {
         findings.push({
-          userId: bal.user_id, currency: bal.currency, kind: "chain_break",
+          userId: bal.user_id, currency: bal.currency, kind: kinds.brk,
           expected: fmtMoney(prev + amount), actual: fmtMoney(after),
           detail: "A ledger leg's balance_after does not continue the chain",
         });
-        broke = true;
-        break;
+        return;
       }
       prev = after;
     }
-    if (!broke && prev !== null && prev !== available) {
+    if (prev !== null && prev !== target) {
       findings.push({
-        userId: bal.user_id, currency: bal.currency, kind: "tail_mismatch",
-        expected: fmtMoney(prev), actual: fmtMoney(available),
-        detail: "Ledger chain tail does not equal the current available balance",
+        userId: bal.user_id, currency: bal.currency, kind: kinds.tail,
+        expected: fmtMoney(prev), actual: fmtMoney(target),
+        detail: tailDetail,
       });
     }
-  }
+  };
+  checkChain(
+    legsByKey.get(`${key}|available`) ?? [],
+    available,
+    { none: "no_ledger", brk: "chain_break", tail: "tail_mismatch" },
+    "Balance exists with no ledger history (predates the ledger or was credited outside it)",
+    "Ledger chain tail does not equal the current available balance",
+  );
+  checkChain(
+    legsByKey.get(`${key}|bonus`) ?? [],
+    bonus,
+    { none: "bonus_no_ledger", brk: "bonus_chain_break", tail: "bonus_tail_mismatch" },
+    "Bonus balance exists with no bonus ledger history",
+    "Bonus ledger chain tail does not equal the current bonus balance",
+  );
   const openMicro = openByKey.get(key) ?? 0n;
   if (locked !== openMicro) {
     findings.push({

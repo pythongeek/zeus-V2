@@ -36,6 +36,7 @@ interface Balance {
   currency: Currency;
   available: number;
   locked: number;
+  bonus: number;
   bdtEquivalent: number;
 }
 

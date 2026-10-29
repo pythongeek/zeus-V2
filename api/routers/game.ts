@@ -3,6 +3,7 @@ import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { ladderFor, isOnLadder } from "../lib/betting";
+import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
 import { getSetting, getPublicConfig } from "../lib/settings";
 import { toUsdt } from "../lib/limits";
 import { checkSpinPace } from "../lib/rate-limit";
@@ -396,7 +397,43 @@ export const gameRouter = createRouter({
           .prepare("SELECT * FROM balances WHERE user_id = ? AND currency = ?")
           .get(ctx.user.id, spinCurrency) as any;
         const availableMicro = balRow ? parseMoney(balRow.available) : 0n;
-        if (!isFreeSpin && (!balRow || availableMicro < spinBetMicro)) {
+        const bonusMicro0 = balRow ? parseMoney((balRow as any).bonus || "0") : 0n;
+
+        // Step 4: bonus engine planning for paid spins. Active
+        // grants in this currency may fund the bet (bonus first),
+        // accrue wagering, expire, or complete and convert — all
+        // planned purely here; legs and grant updates are written
+        // in chain order further down, inside this transaction.
+        let bonusPlan: SpinBonusPlan | null = null;
+        if (!isFreeSpin) {
+          const grantRows = client
+            .prepare(
+              "SELECT id, amount, remaining, wagering_multiplier, wagered, expires_at FROM bonus_ledger WHERE user_id = ? AND currency = ? AND status = 'active' ORDER BY id",
+            )
+            .all(ctx.user.id, spinCurrency) as any[];
+          if (grantRows.length > 0 || bonusMicro0 > 0n) {
+            bonusPlan = planSpinBonus({
+              grants: grantRows.map((g) => ({
+                id: g.id,
+                amount: g.amount,
+                remaining: g.remaining,
+                wageringMultiplier: g.wagering_multiplier,
+                wagered: g.wagered,
+                expiresAt: g.expires_at,
+              })),
+              betMicro: spinBetMicro,
+              bonusMicro: bonusMicro0,
+              nowSec: Math.floor(Date.now() / 1000),
+            });
+          }
+        }
+        const bonusAfterExpiry = bonusPlan
+          ? bonusPlan.expiryLegs.reduce((acc, l) => acc + l.amountMicro, bonusMicro0)
+          : bonusMicro0;
+        if (
+          !isFreeSpin &&
+          (!balRow || availableMicro + bonusAfterExpiry < spinBetMicro)
+        ) {
           throw new Error("Insufficient balance");
         }
 
@@ -550,22 +587,31 @@ export const gameRouter = createRouter({
         const fsCurrencyStored =
           fsRemainingAfter > 0 ? spinCurrency : null;
 
-        const updatedMicro = isFreeSpin
+        // Step 4: a paid spin debits only its cash part from
+        // available (the bonus bucket funds the rest); a completed
+        // grant's conversion credits available after the win.
+        const cashPart = bonusPlan ? bonusPlan.cashPart : spinBetMicro;
+        const conversionMicro = bonusPlan?.conversion?.amountMicro ?? 0n;
+        const availableAfterWin = isFreeSpin
           ? availableMicro + winMicro
-          : availableMicro - spinBetMicro + winMicro;
+          : availableMicro - cashPart + winMicro;
+        const updatedMicro = isFreeSpin
+          ? availableAfterWin
+          : availableAfterWin + conversionMicro;
+        const finalBonusMicro = bonusPlan ? bonusPlan.finalBonusMicro : bonusMicro0;
         const nowSec = Math.floor(Date.now() / 1000);
 
         if (balRow) {
           client
-            .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE id = ?")
-            .run(fmtMoney(updatedMicro), nowSec, balRow.id);
+            .prepare("UPDATE balances SET available = ?, bonus = ?, updated_at = ? WHERE id = ?")
+            .run(fmtMoney(updatedMicro), fmtMoney(finalBonusMicro), nowSec, balRow.id);
         } else {
           // Only reachable on a free spin whose balance row never existed.
           client
             .prepare(
-              "INSERT INTO balances (user_id, currency, available, locked, total_deposited, total_withdrawn, updated_at) VALUES (?, ?, ?, '0', '0', '0', ?)",
+              "INSERT INTO balances (user_id, currency, available, locked, bonus, total_deposited, total_withdrawn, updated_at) VALUES (?, ?, ?, '0', ?, '0', '0', ?)",
             )
-            .run(ctx.user.id, spinCurrency, fmtMoney(updatedMicro), nowSec);
+            .run(ctx.user.id, spinCurrency, fmtMoney(updatedMicro), fmtMoney(finalBonusMicro), nowSec);
         }
 
         client
@@ -612,17 +658,44 @@ export const gameRouter = createRouter({
 
         // Ledger: paid spins write a debit leg (then a credit leg on a
         // win); free spins write only a free_spin_credit leg on a win.
+        // Step 4: bonus legs carry bucket='bonus' and thread the bonus
+        // chain; the available chain stays debit -> credit -> convert.
         const insLedger = client.prepare(
-          "INSERT INTO ledger_entries (user_id, spin_id, kind, currency, amount, balance_after) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO ledger_entries (user_id, spin_id, kind, currency, amount, balance_after, bucket) VALUES (?, ?, ?, ?, ?, ?, ?)",
         );
+        if (!isFreeSpin && bonusPlan) {
+          for (const leg of bonusPlan.expiryLegs) {
+            insLedger.run(
+              ctx.user.id,
+              spinId,
+              leg.kind,
+              spinCurrency,
+              fmtMoney(leg.amountMicro),
+              fmtMoney(leg.balanceAfter),
+              "bonus",
+            );
+          }
+          if (bonusPlan.debitLeg) {
+            insLedger.run(
+              ctx.user.id,
+              spinId,
+              "bonus_debit",
+              spinCurrency,
+              fmtMoney(bonusPlan.debitLeg.amountMicro),
+              fmtMoney(bonusPlan.debitLeg.balanceAfter),
+              "bonus",
+            );
+          }
+        }
         if (!isFreeSpin) {
           insLedger.run(
             ctx.user.id,
             spinId,
             "spin_debit",
             spinCurrency,
-            fmtMoney(-spinBetMicro),
-            fmtMoney(availableMicro - spinBetMicro),
+            fmtMoney(-cashPart),
+            fmtMoney(availableMicro - cashPart),
+            "available",
           );
         }
         if (winMicro > 0n) {
@@ -632,8 +705,38 @@ export const gameRouter = createRouter({
             isFreeSpin ? "free_spin_credit" : "spin_credit",
             spinCurrency,
             fmtMoney(winMicro),
-            fmtMoney(updatedMicro),
+            fmtMoney(availableAfterWin),
+            "available",
           );
+        }
+        if (!isFreeSpin && bonusPlan?.conversion) {
+          insLedger.run(
+            ctx.user.id,
+            spinId,
+            "bonus_convert",
+            spinCurrency,
+            fmtMoney(-bonusPlan.conversion.amountMicro),
+            fmtMoney(bonusPlan.conversion.leg.balanceAfter),
+            "bonus",
+          );
+          insLedger.run(
+            ctx.user.id,
+            spinId,
+            "bonus_convert",
+            spinCurrency,
+            fmtMoney(bonusPlan.conversion.amountMicro),
+            fmtMoney(updatedMicro),
+            "available",
+          );
+        }
+        if (!isFreeSpin && bonusPlan) {
+          for (const u of bonusPlan.grantUpdates) {
+            client
+              .prepare(
+                "UPDATE bonus_ledger SET remaining = ?, wagered = ?, status = ?, updated_at = ? WHERE id = ?",
+              )
+              .run(u.remaining, u.wagered, u.status, nowSec, u.id);
+          }
         }
 
         // A6 pool movement: paid spins contribute 1% of the bet, split

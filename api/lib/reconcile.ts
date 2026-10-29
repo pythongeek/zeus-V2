@@ -22,7 +22,8 @@ import { parseMoney, fmtMoney } from "./money";
 export interface ReconFinding {
   userId: number;
   currency: string;
-  kind: "chain_break" | "tail_mismatch" | "locked_mismatch" | "no_ledger";
+  kind: "chain_break" | "tail_mismatch" | "locked_mismatch" | "no_ledger"
+    | "bonus_chain_break" | "bonus_tail_mismatch" | "bonus_no_ledger";
   expected: string;
   actual: string;
   detail: string;
@@ -33,11 +34,11 @@ export function computeReconFindings(): { findings: ReconFinding[]; accountsChec
   const findings: ReconFinding[] = [];
 
   const balances = client
-    .prepare("SELECT user_id, currency, available, locked FROM balances")
+    .prepare("SELECT user_id, currency, available, locked, bonus FROM balances")
     .all() as any[];
   const legs = client
     .prepare(
-      "SELECT user_id, currency, amount, balance_after FROM ledger_entries ORDER BY user_id, currency, id",
+      "SELECT user_id, currency, amount, balance_after, bucket FROM ledger_entries ORDER BY user_id, currency, id",
     )
     .all() as any[];
   const openWithdrawals = client
@@ -48,7 +49,7 @@ export function computeReconFindings(): { findings: ReconFinding[]; accountsChec
 
   const legsByKey = new Map<string, any[]>();
   for (const leg of legs) {
-    const key = `${leg.user_id}|${leg.currency}`;
+    const key = `${leg.user_id}|${leg.currency}|${leg.bucket || "available"}`;
     if (!legsByKey.has(key)) legsByKey.set(key, []);
     legsByKey.get(key)!.push(leg);
   }
@@ -65,23 +66,31 @@ export function computeReconFindings(): { findings: ReconFinding[]; accountsChec
     accountsChecked++;
     const available = parseMoney(bal.available || "0");
     const locked = parseMoney(bal.locked || "0");
-    const rows = legsByKey.get(key) ?? [];
+    const bonus = parseMoney(bal.bonus || "0");
 
-    if (rows.length === 0) {
-      if (available !== 0n) {
-        findings.push({
-          userId: bal.user_id,
-          currency: bal.currency,
-          kind: "no_ledger",
-          expected: "0",
-          actual: fmtMoney(available),
-          detail: "Balance exists with no ledger history (predates the ledger or was credited outside it)",
-        });
+    // Chain check for one bucket: continuity of balance_after across
+    // the bucket's legs, and the tail must equal the bucket balance.
+    const checkChain = (
+      rows: any[],
+      target: bigint,
+      kinds: { none: ReconFinding["kind"]; brk: ReconFinding["kind"]; tail: ReconFinding["kind"] },
+      noneDetail: string,
+      tailDetail: string,
+    ) => {
+      if (rows.length === 0) {
+        if (target !== 0n) {
+          findings.push({
+            userId: bal.user_id,
+            currency: bal.currency,
+            kind: kinds.none,
+            expected: "0",
+            actual: fmtMoney(target),
+            detail: noneDetail,
+          });
+        }
+        return;
       }
-    } else {
-      // Chain continuity.
       let prev: bigint | null = null;
-      let broke = false;
       for (const leg of rows) {
         const amount = parseMoney(leg.amount);
         const after = parseMoney(leg.balance_after);
@@ -89,27 +98,42 @@ export function computeReconFindings(): { findings: ReconFinding[]; accountsChec
           findings.push({
             userId: bal.user_id,
             currency: bal.currency,
-            kind: "chain_break",
+            kind: kinds.brk,
             expected: fmtMoney(prev + amount),
             actual: fmtMoney(after),
             detail: "A ledger leg's balance_after does not continue the chain",
           });
-          broke = true;
-          break;
+          return;
         }
         prev = after;
       }
-      if (!broke && prev !== null && prev !== available) {
+      if (prev !== null && prev !== target) {
         findings.push({
           userId: bal.user_id,
           currency: bal.currency,
-          kind: "tail_mismatch",
+          kind: kinds.tail,
           expected: fmtMoney(prev),
-          actual: fmtMoney(available),
-          detail: "Ledger chain tail does not equal the current available balance",
+          actual: fmtMoney(target),
+          detail: tailDetail,
         });
       }
-    }
+    };
+
+    checkChain(
+      legsByKey.get(`${key}|available`) ?? [],
+      available,
+      { none: "no_ledger", brk: "chain_break", tail: "tail_mismatch" },
+      "Balance exists with no ledger history (predates the ledger or was credited outside it)",
+      "Ledger chain tail does not equal the current available balance",
+    );
+    // Step 4: the bonus bucket reconciles as its own chain.
+    checkChain(
+      legsByKey.get(`${key}|bonus`) ?? [],
+      bonus,
+      { none: "bonus_no_ledger", brk: "bonus_chain_break", tail: "bonus_tail_mismatch" },
+      "Bonus balance exists with no bonus ledger history",
+      "Bonus ledger chain tail does not equal the current bonus balance",
+    );
 
     // Locked vs open withdrawals.
     const openMicro = openWdByKey.get(key) ?? 0n;

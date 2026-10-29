@@ -2,7 +2,7 @@ import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { jackpotPool, spins, users } from "../../db/schema";
 import { desc, eq } from "drizzle-orm";
-import { BDT_RATES, getFxRates } from "./balance";
+import { BDT_RATES, getFxRates, displayFxRates } from "./balance";
 
 export const jackpotRouter = createRouter({
   getPools: publicQuery.query(async () => {
@@ -40,7 +40,7 @@ export const jackpotRouter = createRouter({
           amount: parseFloat(p.currentAmount),
           // A6: pools are USDT — the BDT figure uses the USDT rate (this
           // previously multiplied by the BTC rate, showing ৳117 million).
-          bdtEquivalent: parseFloat(p.currentAmount) * (getFxRates().USDT || 1),
+          bdtEquivalent: parseFloat(p.currentAmount) * (displayFxRates().USDT || 1),
           seedAmount: parseFloat(p.seedAmount),
           contributionRate: parseFloat(p.contributionRate),
           hitCount: p.hitCount,
@@ -51,7 +51,7 @@ export const jackpotRouter = createRouter({
       return pools.map(p => ({
         tier: p.tier,
         amount: parseFloat(p.currentAmount),
-        bdtEquivalent: parseFloat(p.currentAmount) * (getFxRates().USDT || 1),
+        bdtEquivalent: parseFloat(p.currentAmount) * (displayFxRates().USDT || 1),
         seedAmount: parseFloat(p.seedAmount),
         contributionRate: parseFloat(p.contributionRate),
         hitCount: p.hitCount,
