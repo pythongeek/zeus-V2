@@ -59,6 +59,15 @@ if [ "$(cat "$RECON_STATE" 2>/dev/null)" != "$TODAY" ]; then
   fi
 fi
 
+# Step 15 (playbook 4.1): nightly RTP-drift tripwire on the first
+# monitor run of the day (two-layer monitor + bundle-hash audit).
+TRIPWIRE_STATE="/var/lib/zeus-monitor/last-tripwire-date"
+if [ "$(cat "$TRIPWIRE_STATE" 2>/dev/null)" != "$TODAY" ]; then
+  if /opt/zeus-slot/runtime/bin/node /opt/zeus-slot/scripts/tripwire.mjs >> "$LOG_FILE" 2>&1; then
+    echo "$TODAY" > "$TRIPWIRE_STATE"
+  fi
+fi
+
 COUNT=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
 if [ "$fail" -eq 0 ]; then
   if [ "$COUNT" != "0" ]; then

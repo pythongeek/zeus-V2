@@ -3,6 +3,7 @@ import {
   sqliteTable,
   integer,
   text,
+  real,
   uniqueIndex,
   index,
 } from "drizzle-orm/sqlite-core";
@@ -145,6 +146,27 @@ export const mathBundles = sqliteTable("math_bundles", {
 });
 
 export type MathBundle = typeof mathBundles.$inferSelect;
+
+// Step 15 (playbook §4.1): RTP-drift tripwire state + events.
+export const tripwireState = sqliteTable("tripwire_state", {
+  modeId: text("mode_id").primaryKey(),
+  lastSpinId: integer("last_spin_id").default(0).notNull(),
+  ewma: real("ewma"),
+  cusumPos: real("cusum_pos").default(0).notNull(),
+  cusumNeg: real("cusum_neg").default(0).notNull(),
+  spinsSeen: integer("spins_seen").default(0).notNull(),
+  updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
+});
+
+export const tripwireEvents = sqliteTable("tripwire_events", {
+  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+  modeId: text("mode_id").notNull(),
+  layer: integer("layer").notNull(),
+  kind: text("kind").notNull(),
+  detail: text("detail"),
+  spinId: integer("spin_id"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`).notNull(),
+});
 
 export const transactions = sqliteTable("transactions", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),

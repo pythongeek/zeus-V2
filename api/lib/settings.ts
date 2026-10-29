@@ -142,6 +142,14 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "number", scope: "admin", def: 0, group: "math",
     labelEn: "Max win cap (x bet, 0 = off; jackpots excluded)", labelBn: "সর্বোচ্চ জয়ের সীমা (বাজির ×, ০ = বন্ধ; জ্যাকপট বাদে)",
   },
+  tripwire_enabled: {
+    type: "boolean", scope: "admin", def: true, group: "math",
+    labelEn: "RTP-drift tripwire enabled (Step 15)", labelBn: "RTP ড্রিফট ট্রিপওয়্যার চালু (ধাপ ১৫)",
+  },
+  tripwire_sigma_classic: {
+    type: "number", scope: "admin", def: 6.5, group: "math",
+    labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
+  },
   // ---- B2: features, currencies, presentation (public) ----
   features: {
     type: "json", scope: "public", group: "features",
