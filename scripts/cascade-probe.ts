@@ -22,7 +22,8 @@ const chainP = (k: number) =>
 console.log(JSON.stringify({
   n: res.n,
   rtp: Math.round(res.mean * 10000) / 100,
-  sigma: Math.round(res.sigma * 100) / 100,
+  sigma: Math.round(s.rawSigma * 100) / 100,
+  sigmaAdj: Math.round(res.sigma * 100) / 100,
   kappa: Math.round(res.kappa * 100) / 100,
   hit: Math.round(s.hitRate * 10000) / 100,
   pGe3: Math.round(chainP(3) * 10000) / 100,

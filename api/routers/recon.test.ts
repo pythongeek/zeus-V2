@@ -42,6 +42,7 @@ async function makeUser(role = "user") {
       email: `g-${suffix}@test.local`,
       phone: `+880174${Math.floor(1000000 + Math.random() * 8999999)}`,
       role,
+      kycStatus: "verified",
       passwordHash: passwordLib.hashPassword("GPw2026!"),
     })
     .returning();

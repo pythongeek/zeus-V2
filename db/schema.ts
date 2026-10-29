@@ -30,6 +30,8 @@ export const users = sqliteTable("users", {
   // admin is the day-to-day operations tier.
   role: text("role", { enum: ["user", "admin", "super_admin"] }).default("user").notNull(),
   walletAddress: text("wallet_address").unique(),
+  country: text("country"),
+  kycStatus: text("kyc_status").default("none"),
   username: text("username").unique(),
   nonce: text("nonce").notNull().default(""),
   isActive: integer("is_active", { mode: "boolean" }).default(true).notNull(),

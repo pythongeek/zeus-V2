@@ -117,6 +117,8 @@ export const balanceRouter = createRouter({
     .input(
       z.object({
         depositLimitDaily: z.string().regex(/^\d+\.?\d*$/).nullable().optional(),
+        depositLimitWeekly: z.string().regex(/^\d+\.?\d*$/).nullable().optional(),
+        depositLimitMonthly: z.string().regex(/^\d+\.?\d*$/).nullable().optional(),
         lossLimitDaily: z.string().regex(/^\d+\.?\d*$/).nullable().optional(),
         sessionLimitMinutes: z.number().int().min(5).max(1440).nullable().optional(),
         selfExcludeDays: z.number().int().min(1).max(3650).optional(),
@@ -126,6 +128,8 @@ export const balanceRouter = createRouter({
       const { setLimits } = await import("../lib/limits");
       const patch: Record<string, unknown> = {};
       if (input.depositLimitDaily !== undefined) patch.depositLimitDaily = input.depositLimitDaily;
+      if (input.depositLimitWeekly !== undefined) patch.depositLimitWeekly = input.depositLimitWeekly;
+      if (input.depositLimitMonthly !== undefined) patch.depositLimitMonthly = input.depositLimitMonthly;
       if (input.lossLimitDaily !== undefined) patch.lossLimitDaily = input.lossLimitDaily;
       if (input.sessionLimitMinutes !== undefined) patch.sessionLimitMinutes = input.sessionLimitMinutes;
       if (input.selfExcludeDays !== undefined) {
@@ -233,6 +237,26 @@ export const balanceRouter = createRouter({
       const { getSqliteClient } = await import("../queries/connection");
       const sqlite = getSqliteClient();
       const amountUsdt = toUsdt(parseFloat(input.amount), input.currency);
+
+      // Step 17: KYC gate — cumulative withdrawals above the BDT
+      // threshold require a verified kyc_status.
+      {
+        const thresholdBdt = getSetting<number>("kyc_withdrawal_threshold_bdt") ?? 10000;
+        const prior = sqlite
+          .prepare(
+            `SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM transactions
+             WHERE user_id = ? AND type = 'withdrawal' AND status NOT IN ('pending', 'failed', 'cancelled', 'rejected')
+             GROUP BY currency`,
+          )
+          .all(ctx.user.id) as Array<{ currency: string; total: number }>;
+        const priorBdt = prior.reduce((a, r) => a + toUsdt(r.total || 0, r.currency) * 110, 0);
+        const me = sqlite.prepare("SELECT kyc_status FROM users WHERE id = ?").get(ctx.user.id) as any;
+        if (priorBdt + amountUsdt * 110 > thresholdBdt && (me?.kyc_status ?? "none") !== "verified") {
+          throw new Error(
+            "KYC verification is required for withdrawals above ৳10,000 cumulative — please contact support to verify your account",
+          );
+        }
+      }
       const dailyCapW = getSetting<number>("withdrawal_daily_cap_usdt") ?? 0;
       if (dailyCapW > 0) {
         const rows = sqlite

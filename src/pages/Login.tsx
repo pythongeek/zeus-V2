@@ -51,9 +51,10 @@ function AuthForm() {
       return;
     }
     const isEmail = identifier.includes("@");
+    const country = String(fd.get("country") || "BD");
     const payload = isEmail
-      ? { name, email: identifier, password, ageConfirmed: true as const }
-      : { name, phone: identifier, password, ageConfirmed: true as const };
+      ? { name, email: identifier, password, ageConfirmed: true as const, country }
+      : { name, phone: identifier, password, ageConfirmed: true as const, country };
 
     try {
       await register.mutateAsync(payload);
@@ -225,6 +226,19 @@ function AuthForm() {
               />
             </div>
             <p className="text-xs text-[#8A8AA0]">{t("secretHint")}</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="reg-country" className={labelCls}>{t("countryLabel")}</Label>
+            <select
+              id="reg-country"
+              name="country"
+              defaultValue="BD"
+              className="w-full bg-[#12121A] border border-[#2A2A35] rounded-md h-9 px-2 text-sm text-white"
+            >
+              {["BD", "IN", "PK", "NP", "LK", "US", "GB", "AE", "SA", "QA", "MY", "SG", "AU", "CA", "DE", "FR", "IT", "ES", "BR", "NG", "KE", "ZA", "CU", "IR", "KP", "SY"].map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
           </div>
           <label className="flex items-start gap-2 text-xs text-[#8A8AA0] cursor-pointer">
             <input

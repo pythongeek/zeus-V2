@@ -57,6 +57,8 @@ export interface CascadeMath {
   ladder: number[];
   /** Free spins by initial scatter count: { "4": 10, "5": 12, "6": 15 } (6 = 6+). */
   fsTable: Record<string, number>;
+  /** Scatter count that triggers free spins (§7.1 free parameter; default 4). */
+  scatterThreshold?: number;
   fsRetrigger: number;
   capX: number;
 }
@@ -188,12 +190,16 @@ export function resolveCascade(args: {
     if (stepIndex > 200) break; // unreachable safety: chains are finite in practice
   }
 
+  const threshold = math.scatterThreshold ?? 4;
   let freeSpinsAwarded = 0;
   if (!args.isFreeSpin) {
-    if (scattersInitial >= 4) {
-      freeSpinsAwarded = math.fsTable[String(Math.min(scattersInitial, 6))] ?? math.fsTable["4"] ?? 0;
+    if (scattersInitial >= threshold) {
+      freeSpinsAwarded =
+        math.fsTable[String(Math.min(scattersInitial, threshold + 2))] ??
+        math.fsTable[String(threshold)] ??
+        0;
     }
-  } else if (scattersInitial >= 4) {
+  } else if (scattersInitial >= threshold) {
     freeSpinsAwarded = math.fsRetrigger;
   }
 

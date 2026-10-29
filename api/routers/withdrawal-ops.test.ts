@@ -37,6 +37,7 @@ async function makeUser(role = "user", available = "0") {
       name: "W Player",
       email: `wops-${Math.random().toString(36).slice(2)}@test.local`,
       role,
+      kycStatus: "verified",
     })
     .returning();
   await db.insert(schema.balances).values({

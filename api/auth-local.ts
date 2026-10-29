@@ -111,6 +111,7 @@ export const authLocalRouter = createRouter({
           .string()
           .regex(/^\+?\d{10,15}$/, "Phone must be 10-15 digits, optionally with +")
           .optional(),
+        country: z.string().length(2).optional(),
         // F3: 18+ confirmation is mandatory at registration.
         ageConfirmed: z.literal(true, {
           message: "You must confirm you are 18 or older to register",
@@ -128,6 +129,18 @@ export const authLocalRouter = createRouter({
       }
       const email = normalizeEmail(input.email);
       const phone = normalizePhone(input.phone);
+
+      // Step 17: jurisdiction gate — self-declared residence; only
+      // sanctioned jurisdictions are blocked (owner's worldwide
+      // launch decision; Bangladesh is NOT blocked).
+      const country = input.country?.toUpperCase();
+      {
+        const { getSetting } = await import("./lib/settings");
+        const blocked = getSetting<string[]>("blocked_jurisdictions") ?? [];
+        if (country && Array.isArray(blocked) && blocked.includes(country)) {
+          throw new Error("Registration is not available in your jurisdiction");
+        }
+      }
 
       if (!email && !phone) {
         throw new Error("Email or phone is required");
@@ -168,6 +181,7 @@ export const authLocalRouter = createRouter({
           phone: phone ?? null,
           passwordHash: hashPassword(input.password),
           role: "user",
+          country: country ?? null,
           lastSignInAt: new Date(),
         })
         .returning();
@@ -218,6 +232,16 @@ export const authLocalRouter = createRouter({
           });
         } catch { /* audit is best-effort on the failure path */ }
         throw failed;
+      }
+
+      // Step 17: a declared residence in a blocked jurisdiction
+      // cannot sign in (sanctioned list only).
+      if ((row as any).country) {
+        const { getSetting } = await import("./lib/settings");
+        const blocked = getSetting<string[]>("blocked_jurisdictions") ?? [];
+        if (Array.isArray(blocked) && blocked.includes(String((row as any).country).toUpperCase())) {
+          throw new Error("Sign-in is not available in your jurisdiction");
+        }
       }
       if (!row.isActive) throw new Error("Account disabled");
       try {

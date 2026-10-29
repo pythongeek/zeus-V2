@@ -1707,6 +1707,17 @@ export const adminRouter = createRouter({
     };
   }),
 
+  /* ===== Step 17: KYC status ===== */
+  setKycStatus: adminQuery
+    .input(z.object({ userId: z.number(), status: z.enum(["none", "pending", "verified", "rejected"]) }))
+    .mutation(async ({ ctx, input }) => {
+      getSqliteClient()
+        .prepare("UPDATE users SET kyc_status = ? WHERE id = ?")
+        .run(input.status, input.userId);
+      await writeAudit(ctx, "admin.setKycStatus", { userId: input.userId, status: input.status });
+      return { success: true };
+    }),
+
   /* ===== Step 11: red envelopes ===== */
   scheduleEnvelope: adminQuery
     .input(
