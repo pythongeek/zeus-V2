@@ -196,3 +196,96 @@ if (theoLossFrac > 0) {
   }
 }
 console.log(`SETTLE rakeback period [${start}, ${end}): ${rbGrants} grants`);
+
+/* ---- Step 14 referral: 10% of referee GGR, 90d window, capped,
+   minimum-activity gate, vested at >= 50 BDT equivalent ---- */
+if (setting("referral_enabled") !== false) {
+  const pct = Number(setting("referral_pct") ?? 10);
+  const capBdt = Number(setting("referral_cap_bdt") ?? 5000);
+  const minWageredBdt = Number(setting("referral_min_wagered_bdt") ?? 1000);
+  const vestMinBdt = Number(setting("referral_vest_min_bdt") ?? 50);
+  const binds = db.prepare("SELECT * FROM referrals WHERE expires_at > ?").all(start);
+  let accruedCount = 0;
+  for (const bind of binds) {
+    const winStart = Math.max(start, bind.bound_at);
+    const winEnd = Math.min(end, bind.expires_at);
+    if (winEnd <= winStart) continue;
+    const lifeRows = db
+      .prepare(`SELECT currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins WHERE user_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} < ? GROUP BY currency`)
+      .all(bind.referee_id, end);
+    const lifeBdt = lifeRows.reduce((a, r) => a + toUsdt(r.total, r.currency) * 110, 0);
+    if (lifeBdt < minWageredBdt) continue;
+    const wag = db
+      .prepare(`SELECT currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins WHERE user_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} >= ? AND ${tsSec("created_at")} < ? GROUP BY currency`)
+      .all(bind.referee_id, winStart, winEnd);
+    const wonRows = db
+      .prepare(`SELECT currency, SUM(CAST(win_amount AS REAL)) AS total FROM spins WHERE user_id = ? AND ${tsSec("created_at")} >= ? AND ${tsSec("created_at")} < ? GROUP BY currency`)
+      .all(bind.referee_id, winStart, winEnd);
+    const wonByCur = new Map(wonRows.map((r) => [r.currency, r.total]));
+    const prior = db.prepare("SELECT currency, amount FROM referral_earnings WHERE referee_id = ?").all(bind.referee_id);
+    let accruedBdt = prior.reduce((a, r) => a + toUsdt(parseFloat(r.amount), r.currency) * 110, 0);
+    for (const w of wag) {
+      const ggr = w.total - (wonByCur.get(w.currency) ?? 0);
+      if (!(ggr > 0)) continue;
+      let earnMicro = BigInt(Math.round(ggr * (pct / 100) * 1e8));
+      if (earnMicro <= 0n) continue;
+      const earnBdt = toUsdt(Number(earnMicro) / 1e8, w.currency) * 110;
+      if (accruedBdt + earnBdt > capBdt) {
+        const remaining = capBdt - accruedBdt;
+        if (remaining <= 0) continue;
+        earnMicro = BigInt(Math.floor(Number(earnMicro) * (remaining / earnBdt)));
+        if (earnMicro <= 0n) continue;
+      }
+      const ins = db
+        .prepare(`INSERT OR IGNORE INTO referral_earnings (referrer_id, referee_id, currency, period_start, amount, ggr, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(bind.referrer_id, bind.referee_id, w.currency, start, fmt(earnMicro), ggr.toFixed(8), nowSec);
+      if (Number(ins.changes) === 1) {
+        accruedCount += 1;
+        accruedBdt += toUsdt(Number(earnMicro) / 1e8, w.currency) * 110;
+        const cur = db.prepare("SELECT pending FROM referral_pending WHERE referrer_id = ? AND currency = ?").get(bind.referrer_id, w.currency);
+        const newPending = (cur ? parse(cur.pending) : 0n) + earnMicro;
+        if (cur) {
+          db.prepare("UPDATE referral_pending SET pending = ?, updated_at = ? WHERE referrer_id = ? AND currency = ?").run(fmt(newPending), nowSec, bind.referrer_id, w.currency);
+        } else {
+          db.prepare("INSERT INTO referral_pending (referrer_id, currency, pending, updated_at) VALUES (?, ?, ?, ?)").run(bind.referrer_id, w.currency, fmt(newPending), nowSec);
+        }
+      }
+    }
+  }
+  // Vesting payouts (same wagering-free credit shape, kind referral).
+  let vestedCount = 0;
+  const pendings = db.prepare("SELECT * FROM referral_pending WHERE pending != '0'").all();
+  for (const p of pendings) {
+    const pendingMicro = parse(p.pending);
+    if (pendingMicro <= 0n) continue;
+    const bdtEq = toUsdt(Number(pendingMicro) / 1e8, p.currency) * 110;
+    if (bdtEq < vestMinBdt) continue;
+    const existing = db
+      .prepare("SELECT id FROM promo_settlements WHERE kind = 'referral' AND user_id = ? AND currency = ? AND period_start = ?")
+      .get(p.referrer_id, p.currency, start);
+    if (existing) continue;
+    const bal = db.prepare("SELECT available, bonus FROM balances WHERE user_id = ? AND currency = ?").get(p.referrer_id, p.currency);
+    const avail0 = parse(bal?.available ?? "0");
+    const bonus0 = parse(bal?.bonus ?? "0");
+    db.transaction(() => {
+      const tx = db
+        .prepare(`INSERT INTO transactions (user_id, type, currency, amount, status, to_address, payout_ref, created_at, updated_at) VALUES (?, 'referral', ?, ?, 'completed', 'internal', ?, ?, ?)`)
+        .run(p.referrer_id, p.currency, fmt(pendingMicro), `referral:${start}`, nowSec, nowSec);
+      const txId = Number(tx.lastInsertRowid);
+      db.prepare(`INSERT INTO bonus_ledger (user_id, currency, kind, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at, created_at, updated_at) VALUES (?, ?, 'referral', ?, '0', 0, '0', 'completed', ?, NULL, ?, ?)`).run(p.referrer_id, p.currency, fmt(pendingMicro), txId, nowSec, nowSec);
+      const leg = db.prepare(`INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, ?, ?, ?, ?, ?)`);
+      leg.run(p.referrer_id, "bonus_credit", p.currency, fmt(pendingMicro), fmt(bonus0 + pendingMicro), "bonus");
+      leg.run(p.referrer_id, "bonus_convert", p.currency, fmt(-pendingMicro), fmt(bonus0), "bonus");
+      leg.run(p.referrer_id, "bonus_convert", p.currency, fmt(pendingMicro), fmt(avail0 + pendingMicro), "available");
+      if (bal) {
+        db.prepare("UPDATE balances SET available = ? WHERE user_id = ? AND currency = ?").run(fmt(avail0 + pendingMicro), p.referrer_id, p.currency);
+      } else {
+        db.prepare("INSERT INTO balances (user_id, currency, available, locked, bonus) VALUES (?, ?, ?, '0', '0')").run(p.referrer_id, p.currency, fmt(pendingMicro));
+      }
+      db.prepare(`INSERT INTO promo_settlements (kind, user_id, currency, period_start, period_end, amount, basis, tx_id, created_at) VALUES ('referral', ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.referrer_id, p.currency, start, end, fmt(pendingMicro), `vested referral earnings (${bdtEq.toFixed(2)} BDT eq)`, txId, nowSec);
+      db.prepare("UPDATE referral_pending SET pending = '0', updated_at = ? WHERE referrer_id = ? AND currency = ?").run(nowSec, p.referrer_id, p.currency);
+    })();
+    vestedCount += 1;
+  }
+  console.log(`SETTLE referral period [${start}, ${end}): ${accruedCount} accruals, ${vestedCount} vested`);
+}

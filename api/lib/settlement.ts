@@ -318,6 +318,144 @@ export function runRakeback(
 }
 
 /**
+ * Weekly referral settlement (Step 14, playbook §4.3): the
+ * referrer earns referral_pct (10%) of each referee's GGR —
+ * wagered minus won over the week, floored at zero per
+ * referee/currency — for referral_window_days (90) from binding.
+ * Guards: the referee must first reach a lifetime-wagered
+ * threshold (minimum activity), and lifetime earnings per referee
+ * are capped (BDT equivalent). Earnings accrue to
+ * referral_pending and VEST to cash once they reach
+ * referral_vest_min_bdt (BDT equivalent), via creditWageringFree.
+ * Idempotent at every layer (unique accrual rows + settlement
+ * rows), so re-running a period changes nothing.
+ */
+export function runReferral(
+  client: SqliteDb,
+  opts: { nowSec?: number; periodStart?: number; periodEnd?: number } = {},
+): { periodStart: number; periodEnd: number; accrued: number; vested: number } {
+  const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
+  const period =
+    opts.periodStart !== undefined && opts.periodEnd !== undefined
+      ? { start: opts.periodStart, end: opts.periodEnd }
+      : previousWeekPeriod(nowSec);
+  let accrued = 0;
+  let vested = 0;
+  if (getSetting<boolean>("referral_enabled") === false) {
+    return { periodStart: period.start, periodEnd: period.end, accrued, vested };
+  }
+  const pct = Number(getSetting<number>("referral_pct") ?? 10);
+  const capBdt = Number(getSetting<number>("referral_cap_bdt") ?? 5000);
+  const minWageredBdt = Number(getSetting<number>("referral_min_wagered_bdt") ?? 1000);
+  const vestMinBdt = Number(getSetting<number>("referral_vest_min_bdt") ?? 50);
+
+  const binds = client
+    .prepare("SELECT * FROM referrals WHERE expires_at > ?")
+    .all(period.start) as Array<any>;
+
+  for (const bind of binds) {
+    const winStart = Math.max(period.start, bind.bound_at);
+    const winEnd = Math.min(period.end, bind.expires_at);
+    if (winEnd <= winStart) continue;
+    // Minimum-activity gate: lifetime wagered (BDT eq) by period end.
+    const lifeRows = client
+      .prepare(
+        `SELECT currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins
+         WHERE user_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} < ? GROUP BY currency`,
+      )
+      .all(bind.referee_id, period.end) as Array<{ currency: string; total: number }>;
+    const lifeBdt = lifeRows.reduce((a, r) => a + toUsdt(r.total, r.currency) * 110, 0);
+    if (lifeBdt < minWageredBdt) continue;
+
+    const wagered = client
+      .prepare(
+        `SELECT currency, SUM(CAST(bet_amount AS REAL)) AS total FROM spins
+         WHERE user_id = ? AND is_free_spin = 0 AND ${tsSec("created_at")} >= ? AND ${tsSec("created_at")} < ?
+         GROUP BY currency`,
+      )
+      .all(bind.referee_id, winStart, winEnd) as Array<{ currency: string; total: number }>;
+    const won = client
+      .prepare(
+        `SELECT currency, SUM(CAST(win_amount AS REAL)) AS total FROM spins
+         WHERE user_id = ? AND ${tsSec("created_at")} >= ? AND ${tsSec("created_at")} < ?
+         GROUP BY currency`,
+      )
+      .all(bind.referee_id, winStart, winEnd) as Array<{ currency: string; total: number }>;
+    const wonByCur = new Map(won.map((r) => [r.currency, r.total]));
+
+    // Lifetime accrued (BDT eq) for the per-referee cap.
+    const prior = client
+      .prepare("SELECT currency, amount FROM referral_earnings WHERE referee_id = ?")
+      .all(bind.referee_id) as Array<{ currency: string; amount: string }>;
+    let accruedBdt = prior.reduce((a, r) => a + toUsdt(parseFloat(r.amount), r.currency) * 110, 0);
+
+    for (const w of wagered) {
+      const ggr = w.total - (wonByCur.get(w.currency) ?? 0);
+      if (!(ggr > 0)) continue;
+      let earnMicro = BigInt(Math.round(ggr * (pct / 100) * 1e8));
+      if (earnMicro <= 0n) continue;
+      const earnBdt = toUsdt(Number(earnMicro) / 1e8, w.currency) * 110;
+      if (accruedBdt + earnBdt > capBdt) {
+        const remaining = capBdt - accruedBdt;
+        if (remaining <= 0) continue;
+        earnMicro = BigInt(Math.floor(Number(earnMicro) * (remaining / earnBdt)));
+        if (earnMicro <= 0n) continue;
+      }
+      const ins = client
+        .prepare(
+          `INSERT OR IGNORE INTO referral_earnings (referrer_id, referee_id, currency, period_start, amount, ggr, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(bind.referrer_id, bind.referee_id, w.currency, period.start, fmtMoney(earnMicro), ggr.toFixed(8), nowSec);
+      if (Number((ins as any).changes) === 1) {
+        accrued += 1;
+        accruedBdt += toUsdt(Number(earnMicro) / 1e8, w.currency) * 110;
+        client
+          .prepare(
+            `INSERT INTO referral_pending (referrer_id, currency, pending, updated_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(referrer_id, currency) DO UPDATE SET pending = ?, updated_at = excluded.updated_at`,
+          )
+          .run(
+            bind.referrer_id,
+            w.currency,
+            fmtMoney(earnMicro),
+            nowSec,
+            fmtMoney(parseMoney(
+              (client.prepare("SELECT pending FROM referral_pending WHERE referrer_id = ? AND currency = ?").get(bind.referrer_id, w.currency) as any)?.pending ?? "0",
+            ) + earnMicro),
+          );
+      }
+    }
+  }
+
+  // Vesting: pending balances at/above the threshold pay out.
+  const pendings = client.prepare("SELECT * FROM referral_pending WHERE pending != '0'").all() as Array<any>;
+  for (const p of pendings) {
+    const pendingMicro = parseMoney(p.pending);
+    if (pendingMicro <= 0n) continue;
+    const bdtEq = toUsdt(Number(pendingMicro) / 1e8, p.currency) * 110;
+    if (bdtEq < vestMinBdt) continue;
+    const credited = creditWageringFree(client, {
+      userId: p.referrer_id,
+      currency: p.currency,
+      amountMicro: pendingMicro,
+      kind: "referral",
+      periodStart: period.start,
+      periodEnd: period.end,
+      basis: `vested referral earnings (${bdtEq.toFixed(2)} BDT eq)`,
+      nowSec,
+    });
+    if (credited) {
+      client
+        .prepare("UPDATE referral_pending SET pending = '0', updated_at = ? WHERE referrer_id = ? AND currency = ?")
+        .run(nowSec, p.referrer_id, p.currency);
+      vested += 1;
+    }
+  }
+  return { periodStart: period.start, periodEnd: period.end, accrued, vested };
+}
+
+/**
  * Turnover rebate conversion check (Step 10): pending rebate in a
  * currency converts to cash once its BDT equivalent reaches the
  * threshold. BDT equivalent uses the BASE rate (110 BDT/USDT list

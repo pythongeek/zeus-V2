@@ -1533,9 +1533,13 @@ export const adminRouter = createRouter({
 
   /* ===== Steps 10/13/14: weekly promo settlement (idempotent) ===== */
   runWeeklySettlement: adminQuery.mutation(async ({ ctx }) => {
-    const { runCashback, runRakeback } = await import("../lib/settlement");
+    const { runCashback, runRakeback, runReferral } = await import("../lib/settlement");
     const result = runCashback(getSqliteClient(), {});
     const rakeback = runRakeback(getSqliteClient(), {
+      periodStart: result.periodStart,
+      periodEnd: result.periodEnd,
+    });
+    const referral = runReferral(getSqliteClient(), {
       periodStart: result.periodStart,
       periodEnd: result.periodEnd,
     });
@@ -1545,8 +1549,40 @@ export const adminRouter = createRouter({
       grants: result.grants.length,
       totalByCurrency: result.totalByCurrency,
       rakebackGrants: rakeback.grants.length,
+      referralAccrued: referral.accrued,
+      referralVested: referral.vested,
     });
-    return { ...result, rakeback };
+    return { ...result, rakeback, referral };
+  }),
+
+  /* ===== Step 14: referral review (fraud signals surfaced, never auto-blocked) ===== */
+  listReferrals: adminQuery.query(async () => {
+    const client = getSqliteClient();
+    const rows = client
+      .prepare(
+        `SELECT r.*, ru.email AS referrer_email, fe.email AS referee_email, fe."createdAt" AS referee_created,
+                (SELECT ip_address FROM audit_log WHERE user_id = r.referrer_id AND ip_address IS NOT NULL ORDER BY id DESC LIMIT 1) AS referrer_last_ip,
+                COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM referral_earnings WHERE referee_id = r.referee_id), 0) AS earned_total
+         FROM referrals r
+         JOIN users ru ON ru.id = r.referrer_id
+         JOIN users fe ON fe.id = r.referee_id
+         ORDER BY r.id DESC LIMIT 200`,
+      )
+      .all() as Array<any>;
+    return {
+      referrals: rows.map((r) => ({
+        id: r.id,
+        referrerEmail: r.referrer_email,
+        refereeEmail: r.referee_email,
+        boundAt: r.bound_at,
+        expiresAt: r.expires_at,
+        earnedTotal: r.earned_total,
+        sameIp: !!(r.ip && r.referrer_last_ip && r.ip === r.referrer_last_ip),
+        refereeIp: r.ip,
+        referrerLastIp: r.referrer_last_ip,
+        userAgent: r.user_agent,
+      })),
+    };
   }),
 
   /* ===== Step 11: red envelopes ===== */

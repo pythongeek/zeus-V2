@@ -10,6 +10,7 @@ import { LiveTicker } from "@/components/LiveTicker";
 import { RedEnvelope } from "@/components/RedEnvelope";
 import { ReloadOffers } from "@/components/ReloadOffers";
 import { VipWheel } from "@/components/VipWheel";
+import { ReferralCard } from "@/components/ReferralCard";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
 import { toast } from "sonner";
@@ -1034,6 +1035,9 @@ export default function Game() {
 
       {/* Step 13: VIP strip + lucky wheel */}
       <VipWheel />
+
+      {/* Step 14: referral card */}
+      <ReferralCard />
 
       {/* Main Game Area */}
       <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">

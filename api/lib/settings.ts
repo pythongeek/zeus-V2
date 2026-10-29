@@ -151,6 +151,30 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----
+  referral_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Referral programme enabled (Step 14)", labelBn: "রেফারেল প্রোগ্রাম চালু (ধাপ ১৪)",
+  },
+  referral_pct: {
+    type: "number", scope: "admin", def: 10, group: "features",
+    labelEn: "Referral: percent of referee GGR", labelBn: "রেফারেল: রেফারির GGR-এর শতাংশ",
+  },
+  referral_cap_bdt: {
+    type: "number", scope: "admin", def: 5000, group: "features",
+    labelEn: "Referral: lifetime cap per referee (BDT equivalent)", labelBn: "রেফারেল: প্রতি রেফারির lifetime ক্যাপ (টাকা সমমূল্য)",
+  },
+  referral_min_wagered_bdt: {
+    type: "number", scope: "admin", def: 1000, group: "features",
+    labelEn: "Referral: referee must wager this much (BDT eq) before earnings start", labelBn: "রেফারেল: আয় শুরু হতে রেফারির ন্যূনতম বাজি (টাকা সমমূল্য)",
+  },
+  referral_vest_min_bdt: {
+    type: "number", scope: "admin", def: 50, group: "features",
+    labelEn: "Referral: pending earnings vest to cash at this BDT equivalent", labelBn: "রেফারেল: এই টাকা সমমূল্যে জমা আয় ক্যাশ হয়",
+  },
+  referral_window_days: {
+    type: "number", scope: "admin", def: 90, group: "features",
+    labelEn: "Referral: earning window after binding (days)", labelBn: "রেফারেল: বাইন্ডের পর আয়ের সময়সীমা (দিন)",
+  },
   vip_tiers: {
     type: "json", scope: "public", group: "features",
     def: [

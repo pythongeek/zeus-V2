@@ -164,6 +164,36 @@ export const tripwireState = sqliteTable("tripwire_state", {
   updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
 });
 
+export const referrals = sqliteTable("referrals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  referrerId: integer("referrer_id").notNull(),
+  refereeId: integer("referee_id").notNull().unique(),
+  code: text("code").notNull(),
+  boundAt: integer("bound_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
+export const referralEarnings = sqliteTable("referral_earnings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  referrerId: integer("referrer_id").notNull(),
+  refereeId: integer("referee_id").notNull(),
+  currency: text("currency").notNull(),
+  periodStart: integer("period_start").notNull(),
+  amount: text("amount").notNull(),
+  ggr: text("ggr").notNull(),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
+export const referralPending = sqliteTable("referral_pending", {
+  referrerId: integer("referrer_id").notNull(),
+  currency: text("currency").notNull(),
+  pending: text("pending").notNull().default("0"),
+  updatedAt: integer("updated_at").default(sql`(unixepoch())`),
+});
+
 export const vipLevelGrants = sqliteTable("vip_level_grants", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id").notNull(),

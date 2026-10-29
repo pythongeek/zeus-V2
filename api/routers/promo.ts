@@ -11,6 +11,8 @@ import {
   addFreeSpinTokens, freeSpinTokenBalance,
 } from "../lib/vip";
 import { grantBonusCredit } from "../lib/settlement";
+import { encodeReferralCode, decodeReferralCode } from "../lib/referral";
+import { tsSec } from "../lib/limits";
 import { maskName } from "./social";
 
 /**
@@ -260,6 +262,91 @@ export const promoRouter = createRouter({
     });
     return run();
   }),
+
+  /* ===== Step 14: referral ===== */
+  getReferral: authedQuery.query(async ({ ctx }) => {
+    const client = getSqliteClient();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const code = encodeReferralCode(ctx.user.id);
+    client
+      .prepare("UPDATE users SET referral_code = ? WHERE id = ? AND (referral_code IS NULL OR referral_code != ?)")
+      .run(code, ctx.user.id, code);
+    const myBind = client
+      .prepare("SELECT referrer_id, bound_at FROM referrals WHERE referee_id = ?")
+      .get(ctx.user.id) as any;
+    const createdSec = client
+      .prepare(`SELECT ${tsSec('"createdAt"')} AS sec FROM users WHERE id = ?`)
+      .get(ctx.user.id) as any;
+    const ageSec = nowSec - Number(createdSec?.sec ?? nowSec);
+    const referees = client
+      .prepare(
+        `SELECT r.referee_id, r.bound_at, r.expires_at, u.name, u.email
+         FROM referrals r JOIN users u ON u.id = r.referee_id
+         WHERE r.referrer_id = ? ORDER BY r.bound_at DESC`,
+      )
+      .all(ctx.user.id) as Array<any>;
+    const earnedRows = client
+      .prepare("SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM referral_earnings WHERE referrer_id = ? GROUP BY currency")
+      .all(ctx.user.id) as Array<any>;
+    const pending = client
+      .prepare("SELECT currency, pending FROM referral_pending WHERE referrer_id = ? AND pending != '0'")
+      .all(ctx.user.id) as Array<any>;
+    const paidRows = client
+      .prepare("SELECT currency, SUM(CAST(amount AS REAL)) AS total FROM promo_settlements WHERE user_id = ? AND kind = 'referral' GROUP BY currency")
+      .all(ctx.user.id) as Array<any>;
+    return {
+      enabled: getSetting<boolean>("referral_enabled") !== false,
+      code,
+      boundReferrerId: myBind?.referrer_id ?? null,
+      canBind: !myBind && ageSec <= 86400,
+      accountAgeSeconds: ageSec,
+      referees: referees.map((r) => ({
+        maskedName: maskName(r.name, r.email),
+        boundAt: r.bound_at,
+        expiresAt: r.expires_at,
+      })),
+      earned: earnedRows.map((e) => ({ currency: e.currency, total: String(e.total) })),
+      pending: pending.map((p) => ({ currency: p.currency, amount: p.pending })),
+      paid: paidRows.map((p) => ({ currency: p.currency, total: String(p.total) })),
+      terms: {
+        pct: Number(getSetting<number>("referral_pct") ?? 10),
+        windowDays: Number(getSetting<number>("referral_window_days") ?? 90),
+        capBdt: Number(getSetting<number>("referral_cap_bdt") ?? 5000),
+        vestMinBdt: Number(getSetting<number>("referral_vest_min_bdt") ?? 50),
+      },
+    };
+  }),
+
+  bindReferral: authedQuery
+    .input(z.object({ code: z.string().min(8).max(8) }))
+    .mutation(async ({ ctx, input }) => {
+      if (getSetting<boolean>("referral_enabled") === false) throw new Error("Referral programme is disabled");
+      const referrerId = decodeReferralCode(input.code);
+      if (referrerId === null) throw new Error("Invalid referral code");
+      if (referrerId === ctx.user.id) throw new Error("You cannot refer yourself");
+      const client = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
+      const referrer = client.prepare("SELECT id FROM users WHERE id = ?").get(referrerId);
+      if (!referrer) throw new Error("Referral code not recognised");
+      const existing = client.prepare("SELECT id FROM referrals WHERE referee_id = ?").get(ctx.user.id);
+      if (existing) throw new Error("This account already has a referrer");
+      const created = client
+        .prepare(
+          `SELECT ${tsSec('"createdAt"')} AS sec FROM users WHERE id = ?`,
+        )
+        .get(ctx.user.id) as any;
+      if (nowSec - Number(created?.sec ?? nowSec) > 86400) {
+        throw new Error("Referral codes can only be applied within 24 hours of sign-up");
+      }
+      const days = Number(getSetting<number>("referral_window_days") ?? 90);
+      const ip = (ctx.req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || null;
+      client
+        .prepare(
+          "INSERT INTO referrals (referrer_id, referee_id, code, bound_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(referrerId, ctx.user.id, input.code.toUpperCase(), nowSec, nowSec + days * 86400, ip, ctx.req.headers.get("user-agent"));
+      return { bound: true, referrerId, expiresAt: nowSec + days * 86400 };
+    }),
 
   envelopeResult: publicQuery
     .input(z.object({ envelopeId: z.number() }))
