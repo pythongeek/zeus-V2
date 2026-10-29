@@ -64,6 +64,7 @@ export const fairnessRouter = createRouter({
           math: cmath,
           betMicro: parseMoney(spin.betAmount as string),
           isFreeSpin: !!(spin as any).isFreeSpin,
+          rungIn: (spin as any).isFreeSpin ? Number((spin as any).ladderRung ?? 0) : 0,
         });
         const storedSteps = typeof (spin as any).winLines === "string"
           ? JSON.parse((spin as any).winLines)

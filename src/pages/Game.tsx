@@ -10,6 +10,7 @@ import { LiveTicker } from "@/components/LiveTicker";
 import { RedEnvelope } from "@/components/RedEnvelope";
 import { ReloadOffers } from "@/components/ReloadOffers";
 import { VipWheel } from "@/components/VipWheel";
+import { CascadeBoard, type CascadeStepData } from "@/components/CascadeBoard";
 import { ReferralCard } from "@/components/ReferralCard";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
@@ -320,6 +321,12 @@ export default function Game() {
   // U4: Lite-board stop progress — reels below this count show finals
   const [liteStopped, setLiteStopped] = useState(5);
   const fsWinTotalRef = useRef(0);
+  // Step 6: cascade playback state.
+  const [cascadeSteps, setCascadeSteps] = useState<CascadeStepData[] | null>(null);
+  const [cascadeFinal, setCascadeFinal] = useState<number[] | null>(null);
+  const [cascadePlayKey, setCascadePlayKey] = useState(0);
+  const cascadeDoneRef = useRef<(() => void) | null>(null);
+  const lastModeRef = useRef<"classic" | "cascade">("classic");
   const [bigWinText, setBigWinText] = useState("");
   const [lightningFlash, setLightningFlash] = useState(false);
   const [celebration, setCelebration] = useState<CelebrationData | null>(null);
@@ -599,6 +606,54 @@ export default function Game() {
       }
     }
 
+    // Step 6: cascade path — server resolves, board plays back.
+    const wantCascade =
+      store.freeSpinsRemaining > 0 ? lastModeRef.current === "cascade" : store.mode === "cascade";
+    if (wantCascade) {
+      store.setGameState("spinning");
+      store.setLastWin(0);
+      setLastResult(null);
+      audio.unlock();
+      audio.play("ui-click");
+      try {
+        const result = await spin.mutateAsync({
+          sessionId: store.session.sessionId,
+          betAmount: String(store.betAmount),
+          currency: store.activeCurrency,
+          mode: "cascade",
+        });
+        store.setSession({ ...store.session, startingNonce: result.nonce });
+        lastModeRef.current = (result.mode as "classic" | "cascade") ?? "cascade";
+        if (result.mode === "cascade" && result.cascade) {
+          setCascadeSteps(result.cascade.steps as CascadeStepData[]);
+          setCascadeFinal(result.cascade.finalGrid as number[]);
+          setCascadePlayKey((k) => k + 1);
+          await new Promise<void>((resolve) => {
+            cascadeDoneRef.current = resolve;
+            setTimeout(resolve, 30000); // playback can never hang the game
+          });
+          cascadeDoneRef.current = null;
+          if (
+            typeof window !== "undefined" &&
+            window.matchMedia?.("(prefers-reduced-motion: reduce)").matches &&
+            parseFloat(result.winAmount) > 0
+          ) {
+            toast.success(
+              t("cascadeSummary")
+                .replace("{chains}", String(result.cascade.chainLength))
+                .replace("{amount}", `${result.winAmount} ${result.currencyUsed}`),
+            );
+          }
+        }
+        handleSpinComplete(result);
+      } catch (e: any) {
+        console.error("Cascade spin failed:", e);
+        toast.error(e?.message || t("spinFailed"));
+        store.setGameState("idle");
+      }
+      return;
+    }
+
     store.setGameState("spinning");
     store.setLastWin(0);
     setLiteStopped(0);
@@ -646,6 +701,12 @@ export default function Game() {
 
       const baseDelays: number[] = store.turboMode ? (store.config?.turbo_delays ?? [120, 180, 240, 300, 360]) : (store.config?.normal_delays ?? [350, 500, 650, 800, 950]);
       const engine = engineRef.current;
+      // Step 7: near-miss tease — presentation ONLY, on the server's
+      // settled-outcome flag (exactly 2 scatters). The result is
+      // already final; the last reel simply lands later (1,800ms
+      // tease; 900ms in turbo). Kill-flagged by near_miss_enabled.
+      const nearMissTease =
+        !!(result as any).nearMiss && (store.config as any)?.near_miss_enabled !== false;
 
       baseDelays.forEach((delay, i) => {
         const elapsed = performance.now() - spinStartedAt;
@@ -654,9 +715,13 @@ export default function Game() {
           // Dramatic slow-down: engine already slows reel 5; extend its stop
           at += store.turboMode ? 400 : 700;
         }
+        if (nearMissTease && i === 4) {
+          const target = store.turboMode ? 900 : 1800;
+          at = Math.max(at, target - elapsed);
+        }
         setTimeout(() => {
           setLiteStopped(i + 1);
-          if (anticipate && i === 3) {
+          if ((anticipate || nearMissTease) && i === 3) {
             engine?.setAnticipation(4);
             audio.startLoop("anticipation", "anticipation-loop.wav", "sfx", 0.9);
           }
@@ -1068,6 +1133,38 @@ export default function Game() {
           <p className="text-xs text-[#B8B8C8] tracking-widest mt-1">{t("tagline")}</p>
         </div>
 
+        {/* Step 6: mode selector (classic default) + disclosure */}
+        {(store.config as any)?.cascade_enabled ? (
+          <div className="w-full max-w-[520px] mx-auto mb-3 space-y-2">
+            <div className="flex rounded-full overflow-hidden border border-[#D4AF37]/40">
+              {(["classic", "cascade"] as const).map((m) => (
+                <button
+                  key={m}
+                  disabled={store.gameState === "spinning" || store.freeSpinsRemaining > 0}
+                  onClick={() => store.setMode(m)}
+                  className={`flex-1 py-1.5 text-xs sm:text-sm font-semibold disabled:opacity-60 ${
+                    store.mode === m ? "bg-[#D4AF37] text-black" : "bg-black/40 text-[#B8B8C8]"
+                  }`}
+                >
+                  {m === "classic" ? t("modeClassic") : `⚡ ${t("modeCascade")}`}
+                </button>
+              ))}
+            </div>
+            {store.mode === "cascade" && (
+              <p className="text-[11px] leading-snug text-[#9E9EAC] text-center px-1">
+                {t("cascadeDisclosure").replace(
+                  "{rtp}",
+                  (() => {
+                    const modes = (store.config as any)?.modes as Array<any> | undefined;
+                    const rtp = modes?.find((x) => x.modeId === "cascade")?.certRtp;
+                    return typeof rtp === "number" ? (rtp * 100).toFixed(1) : "96.5";
+                  })(),
+                )}
+              </p>
+            )}
+          </div>
+        ) : null}
+
         {/* Zeus Character (decorative) */}
         <div className="absolute right-8 top-20 w-48 h-72 opacity-40 pointer-events-none hidden lg:block">
           <img src="/assets/zeus-character.webp" alt="Zeus" className="w-full h-full object-contain" />
@@ -1084,7 +1181,16 @@ export default function Game() {
 
           {/* Reels Container — Pixi-powered reel engine (with CSS fallback) */}
           <div className="bg-[#0A0A0F] rounded-xl p-2">
-            {engineFailed || store.liteMode ? (
+            {store.mode === "cascade" ? (
+              <CascadeBoard
+                steps={cascadeSteps}
+                finalGrid={cascadeFinal}
+                playKey={cascadePlayKey}
+                turbo={store.turboMode}
+                currencySymbol={CURRENCY_SYMBOLS[store.activeCurrency] ?? ""}
+                onDone={() => cascadeDoneRef.current?.()}
+              />
+            ) : engineFailed || store.liteMode ? (
               <div className="grid grid-cols-5 gap-1">
                 {reelSymbols.map((reel, reelIndex) => (
                   <div key={reelIndex} className="relative overflow-hidden bg-[#0D0D14] rounded-lg">

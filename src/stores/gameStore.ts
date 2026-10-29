@@ -85,6 +85,11 @@ interface GameStore {
   isAutoSpinning: boolean;
   setIsAutoSpinning: (spinning: boolean) => void;
 
+  // Step 6: selected game mode (classic default; cascade is the
+  // certified second mode). Free spins override this server-side.
+  mode: "classic" | "cascade";
+  setMode: (mode: "classic" | "cascade") => void;
+
   // Turbo mode
   turboMode: boolean;
   setTurboMode: (turbo: boolean) => void;
@@ -163,6 +168,8 @@ export const useGameStore = create<GameStore>((set) => ({
   isAutoSpinning: false,
   setIsAutoSpinning: (spinning) => set({ isAutoSpinning: spinning }),
 
+  mode: "classic",
+  setMode: (mode) => set({ mode }),
   turboMode: false,
   setTurboMode: (turbo) => set({ turboMode: turbo }),
   liteMode: typeof localStorage !== "undefined" && localStorage.getItem("zeus.lite") === "1",

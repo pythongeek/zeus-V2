@@ -630,11 +630,18 @@ export const gameRouter = createRouter({
         const fsCurrencyStored =
           fsRemainingAfter > 0 ? spinCurrency : null;
 
+        // Step 7: near-miss FACT on the settled outcome (exactly 2
+        // scatters). Presentation may tease it; the outcome itself
+        // is already final and never influenced by the flag.
+        const finalSymbolsFlat = symbols.flat();
+        const scatterTotal = finalSymbolsFlat.filter((s) => s === SYMBOLS.SCATTER).length;
         return {
           newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
           isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
           poolRows, poolMicroByTier, math, features, cascade: null, cascadeBundleRow: null,
+          fsRungStored: 0, ladderRungStart: null,
+          nearMiss: scatterTotal === 2 ? 1 : 0,
         };
         })();
         } else {
@@ -648,11 +655,13 @@ export const gameRouter = createRouter({
             .createHash("sha256")
             .update(session.server_seed + session.client_seed + String(newNonce))
             .digest("hex");
+          const rungIn = isFreeSpin ? Number((session as any).free_spins_rung ?? 0) : 0;
           const res = resolveCascade({
             draw: makeCascadeDraw(session.server_seed, session.client_seed, newNonce),
             math: cmath,
             betMicro: spinBetMicro,
             isFreeSpin,
+            rungIn,
           });
           const winMicro = res.cappedWinMicro;
           const freeSpinsAwarded = res.freeSpinsAwarded;
@@ -709,12 +718,25 @@ export const gameRouter = createRouter({
             poolMicroByTier: {} as Record<string, bigint>,
             math: null,
             features: { freeSpins: true, thunder: false, jackpots: false },
+            fsRungStored: fsRemainingAfter > 0 ? (isFreeSpin ? res.rungOut : 0) : 0,
+            ladderRungStart: rungIn,
+            nearMiss: (() => {
+              const counts = new Map<number, number>();
+              for (const s of res.finalGrid) {
+                if (s === cmath.scatterId) continue;
+                counts.set(s, (counts.get(s) ?? 0) + 1);
+              }
+              return Math.max(0, ...counts.values()) === 7 ? 1 : 0;
+            })(),
             cascade: {
               steps: res.steps,
+              finalGrid: res.finalGrid,
               chainLength: res.chainLength,
               scatters: res.scattersInitial,
               wasCapped: res.wasCapped,
               drawsUsed: res.drawsUsed,
+              rungIn,
+              rungOut: res.rungOut,
             },
             cascadeBundleRow: bundleRowC,
           };
@@ -725,6 +747,9 @@ export const gameRouter = createRouter({
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
           poolRows, poolMicroByTier, math, features,
         } = outcome;
+        const fsRungStored = (outcome as any).fsRungStored ?? 0;
+        const ladderRungStart = (outcome as any).ladderRungStart ?? null;
+        const nearMissFlag = (outcome as any).nearMiss ?? 0;
         const cascadePayload = outcome.cascade as any;
 
         // Step 4: a paid spin debits only its cash part from
@@ -756,7 +781,7 @@ export const gameRouter = createRouter({
 
         client
           .prepare(
-            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ? WHERE id = ?",
+            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ?, free_spins_rung = ? WHERE id = ?",
           )
           .run(
             newNonce,
@@ -770,6 +795,7 @@ export const gameRouter = createRouter({
             fsBetStored,
             fsCurrencyStored,
             fsRemainingAfter > 0 ? effectiveMode : "classic",
+            fsRungStored,
             session.id,
           );
 
@@ -789,8 +815,8 @@ export const gameRouter = createRouter({
 
         const spinRow = client
           .prepare(
-            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin, mode_id, bundle_id, bundle_sha256)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin, mode_id, bundle_id, bundle_sha256, ladder_rung, near_miss)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
           )
           .get(
             session.id,
@@ -811,6 +837,8 @@ export const gameRouter = createRouter({
             effectiveMode,
             bundleRow.bundle_id,
             bundleRow.sha256,
+            ladderRungStart,
+            nearMissFlag,
           ) as any;
         const spinId = spinRow.id as number;
 
@@ -993,6 +1021,7 @@ export const gameRouter = createRouter({
           spinCurrency,
           mode: effectiveMode,
           cascade: cascadePayload,
+          nearMiss: nearMissFlag === 1,
         };
       });
 
@@ -1035,6 +1064,7 @@ export const gameRouter = createRouter({
         isFreeSpin: out.isFreeSpin,
         mode: (out as any).mode ?? "classic",
         cascade: (out as any).cascade ?? null,
+        nearMiss: (out as any).nearMiss ?? false,
         freeSpinsRemaining: out.fsRemainingAfter,
         betUsed: fmtMoney(out.spinBetMicro),
         currencyUsed: out.spinCurrency,

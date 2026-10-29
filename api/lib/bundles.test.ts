@@ -105,7 +105,7 @@ describe("registry lifecycle", () => {
     expect(byHash.bundle_id).toBe("zeus-classic-v2");
     const modes = bundles.listModes(sqlite);
     expect(modes).toEqual([
-      { modeId: "classic", status: "active", bundleId: "zeus-classic-v2", sha256: v2.sha256, engine: "lines-5x3" },
+      { modeId: "classic", status: "active", bundleId: "zeus-classic-v2", sha256: v2.sha256, engine: "lines-5x3", certRtp: 0.96 },
     ]);
   });
 });

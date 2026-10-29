@@ -24,6 +24,18 @@ import crypto from "crypto";
  * stream. Initial grid consumes slots 0..29 (column-major);
  * refills consume subsequent slots, per step, column-major over
  * the cells that need new symbols (top of each column first).
+ * After each refill exactly ONE attach draw decides whether the
+ * multiplier ladder advances a rung (playbook §7.1: the ladder
+ * attach probabilities are a free tuning parameter).
+ *
+ * FREE-SPIN LADDER (the Gates-of-Olympus excitement model the
+ * playbook adopts): during a free-spin round the ladder PERSISTS
+ * across spins — a round starts at rung 0 and each spin resumes
+ * where the last one ended (rungIn/rungOut), so a long round
+ * compounds toward the 10x rung. Paid spins always start at 0.
+ *
+ * Weights are PER-COLUMN reel strips (§7.1's primary free
+ * parameter): weights[col][symbolId].
  */
 
 export const CASCADE_COLS = 6;
@@ -35,9 +47,11 @@ export const CLUSTER_MIN = 8;
 export interface CascadeMath {
   /** Paying symbol ids in draw order (scatter handled separately). */
   symbols: number[];
-  /** Relative draw weight per symbol id (scatter included). */
-  weights: Record<string, number>;
+  /** Per-column reel strips: weights[col][symbolId] (scatter included). */
+  weights: Record<string, number>[];
   scatterId: number;
+  /** attach[rung] = probability the ladder advances from that rung after a paying step. */
+  attach: number[];
   /** Per paying symbol: [pay@8-9, pay@10-11, pay@12-14, pay@15+] in bet multipliers. */
   paytable: Record<string, [number, number, number, number]>;
   ladder: number[];
@@ -62,6 +76,8 @@ export interface CascadeStep {
 }
 
 export interface CascadeResult {
+  rungOut: number;
+  finalGrid: number[];
   initialGrid: number[];
   steps: CascadeStep[];
   totalWinMicro: bigint;
@@ -80,13 +96,14 @@ export function bracketIndex(count: number): number {
   return 0;
 }
 
-export function pickSymbol(r: number, math: CascadeMath): number {
+export function pickSymbol(r: number, math: CascadeMath, col: number): number {
   const ids = [...math.symbols, math.scatterId];
+  const strip = math.weights[col] ?? math.weights[0];
   let total = 0;
-  for (const id of ids) total += math.weights[String(id)] ?? 0;
+  for (const id of ids) total += strip[String(id)] ?? 0;
   let x = r * total;
   for (const id of ids) {
-    x -= math.weights[String(id)] ?? 0;
+    x -= strip[String(id)] ?? 0;
     if (x < 0) return id;
   }
   return ids[ids.length - 1];
@@ -97,19 +114,24 @@ export function resolveCascade(args: {
   math: CascadeMath;
   betMicro: bigint;
   isFreeSpin: boolean;
+  /** Ladder rung the resolution starts at (free-spin rounds only). */
+  rungIn?: number;
 }): CascadeResult {
   const { draw, math, betMicro } = args;
   let slot = 0;
-  const nextSymbol = () => pickSymbol(draw(slot++), math);
+  const nextSymbol = (col: number) => pickSymbol(draw(slot++), math, col);
 
   // Initial grid, column-major.
   let grid: number[] = [];
-  for (let i = 0; i < CASCADE_CELLS; i++) grid.push(nextSymbol());
+  for (let col = 0; col < CASCADE_COLS; col++) {
+    for (let row = 0; row < CASCADE_ROWS; row++) grid.push(nextSymbol(col));
+  }
   const scattersInitial = grid.filter((s) => s === math.scatterId).length;
 
   const steps: CascadeStep[] = [];
   let total = 0n;
   let stepIndex = 0;
+  let rung = args.isFreeSpin ? Math.max(0, Math.min(args.rungIn ?? 0, math.ladder.length - 1)) : 0;
 
   for (;;) {
     // Count clusters.
@@ -122,7 +144,7 @@ export function resolveCascade(args: {
     });
     const clusters: CascadeCluster[] = [];
     let stepWin = 0n;
-    const multiplier = math.ladder[Math.min(stepIndex, math.ladder.length - 1)];
+    const multiplier = math.ladder[Math.min(rung, math.ladder.length - 1)];
     for (const [sym, positions] of counts) {
       if (positions.length < CLUSTER_MIN) continue;
       const pay = math.paytable[String(sym)]?.[bracketIndex(positions.length)] ?? 0;
@@ -152,13 +174,16 @@ export function resolveCascade(args: {
       }
       const missing = CASCADE_ROWS - survivors.length;
       const column: number[] = [];
-      for (let i = 0; i < missing; i++) column.push(nextSymbol());
+      for (let i = 0; i < missing; i++) column.push(nextSymbol(col));
       column.push(...survivors);
       for (let row = 0; row < CASCADE_ROWS; row++) {
         nextGrid[col * CASCADE_ROWS + row] = column[row];
       }
     }
     grid = nextGrid;
+    // Ladder attach: exactly one draw per transition, after refills.
+    const attachP = math.attach[Math.min(rung, math.attach.length - 1)] ?? 1;
+    if (draw(slot++) < attachP && rung < math.ladder.length - 1) rung += 1;
     stepIndex += 1;
     if (stepIndex > 200) break; // unreachable safety: chains are finite in practice
   }
@@ -175,6 +200,8 @@ export function resolveCascade(args: {
   const capMicro = betMicro * BigInt(math.capX);
   const capped = total > capMicro ? capMicro : total;
   return {
+    rungOut: rung,
+    finalGrid: grid,
     initialGrid: steps.length > 0 ? steps[0].grid : grid,
     steps,
     totalWinMicro: total,
@@ -200,10 +227,10 @@ export function makeCascadeDraw(serverSeed: string, clientSeed: string, nonce: n
   };
 }
 
-/** Default v1 math — the tuning rig adjusts WEIGHTS only. */
+/** Default v1 math — the tuning rig adjusts weights/attach only. */
 export const CASCADE_DEFAULT_MATH: CascadeMath = {
   symbols: [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  weights: {
+  weights: [0, 1, 2, 3, 4, 5].map(() => ({
     "0": 4, // ZEUS scatter
     "1": 10, // thunderbolt
     "2": 14, // pegasus
@@ -214,7 +241,8 @@ export const CASCADE_DEFAULT_MATH: CascadeMath = {
     "7": 24, // shield
     "8": 26, // ace
     "9": 28, // king
-  },
+  })),
+  attach: [1, 1, 1, 1, 1],
   scatterId: 0,
   paytable: {
     "1": [10, 25, 50, 150],

@@ -90,6 +90,7 @@ export const gameSessions = sqliteTable("game_sessions", {
   // award time); awards during free spins add to the remaining count.
   freeSpinsRemaining: integer("free_spins_remaining", { mode: "number" }).default(0).notNull(),
   freeSpinsMode: text("free_spins_mode").default("classic"),
+  freeSpinsRung: integer("free_spins_rung").default(0),
   freeSpinsBet: text("free_spins_bet"),
   freeSpinsCurrency: text("free_spins_currency"),
 }, (table) => ({
@@ -121,6 +122,8 @@ export const spins = sqliteTable("spins", {
   modeId: text("mode_id").default("classic").notNull(),
   bundleId: text("bundle_id"),
   bundleSha256: text("bundle_sha256"),
+  ladderRung: integer("ladder_rung"),
+  nearMiss: integer("near_miss").default(0),
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
 }, (table) => ({
   ukSessionNonce: uniqueIndex("uk_session_nonce").on(table.sessionId, table.nonce),

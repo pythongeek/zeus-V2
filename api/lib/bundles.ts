@@ -127,8 +127,9 @@ export function ensureActiveClassicBundle(
 
 export interface CascadeBundleMath {
   symbols: number[];
-  weights: Record<string, number>;
+  weights: Record<string, number>[];
   scatterId: number;
+  attach: number[];
   paytable: Record<string, [number, number, number, number]>;
   ladder: number[];
   fsTable: Record<string, number>;
@@ -209,13 +210,30 @@ export function listModes(sqlite: SqliteClient): Array<{
     const cur = byMode.get(r.mode_id);
     if (!cur || r.status === "active" || cur.status !== "active") byMode.set(r.mode_id, r);
   }
-  return [...byMode.values()].map((r) => ({
-    modeId: r.mode_id,
-    status: r.status,
-    bundleId: r.bundle_id,
-    sha256: r.sha256,
-    engine: r.engine,
-  }));
+  return [...byMode.values()].map((r) => {
+    let certRtp: number | null = null;
+    try {
+      if (r.cert) {
+        const cert = JSON.parse(r.cert);
+        if (typeof cert.rtp === "number") certRtp = cert.rtp;
+        else if (cert.run && typeof cert.run.rtp === "number") certRtp = cert.run.rtp;
+      }
+      if (certRtp === null && r.bundle) {
+        const bundleCert = JSON.parse(r.bundle)?.cert;
+        if (bundleCert && typeof bundleCert.rtp_percent === "number") {
+          certRtp = bundleCert.rtp_percent / 100;
+        }
+      }
+    } catch { /* certs are JSON by construction */ }
+    return {
+      modeId: r.mode_id,
+      status: r.status,
+      bundleId: r.bundle_id,
+      sha256: r.sha256,
+      engine: r.engine,
+      certRtp,
+    };
+  });
 }
 
 /** Convenience wrapper on the shared connection (non-transactional reads). */
