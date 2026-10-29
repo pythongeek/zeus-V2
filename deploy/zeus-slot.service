@@ -1,0 +1,27 @@
+# Zeus Slot — systemd unit (production copy).
+# Install: cp deploy/zeus-slot.service /etc/systemd/system/ &&
+#          systemctl daemon-reload && systemctl enable --now zeus-slot
+# Notes:
+# - EnvironmentFile points at the app's .env (secrets live there,
+#   NEVER in this unit or in git).
+# - ExecStart uses the bundled Node runtime at runtime/bin/node.
+#   To use a system Node instead, provision Node >= 20 and change
+#   ExecStart to /usr/bin/env node (same dist/server.js path).
+[Unit]
+Description=Zeus Slot Game (Hono/Node)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/zeus-slot
+EnvironmentFile=/opt/zeus-slot/.env
+ExecStart=/opt/zeus-slot/runtime/bin/node dist/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zeus-slot
+
+[Install]
+WantedBy=multi-user.target

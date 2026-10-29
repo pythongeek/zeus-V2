@@ -1,0 +1,12 @@
+# Zeus Slot — cron entries (production copies).
+# The scripts themselves live in the repo (scripts/backup.sh,
+# scripts/monitor.sh) and are installed to /usr/local/bin:
+#   cp scripts/backup.sh  /usr/local/bin/zeus-backup.sh
+#   cp scripts/monitor.sh /usr/local/bin/zeus-monitor.sh
+#   chmod +x /usr/local/bin/zeus-backup.sh /usr/local/bin/zeus-monitor.sh
+# Nightly backup at 03:15 (server time):
+15 3 * * * /usr/local/bin/zeus-backup.sh >> /var/backups/apps/zeus-backup.log 2>&1
+# Health monitor every 5 minutes (also snapshots jackpot pools,
+# raises low-pool alerts and runs the nightly reconciliation once
+# per day):
+*/5 * * * * /usr/local/bin/zeus-monitor.sh
