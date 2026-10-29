@@ -951,7 +951,7 @@ export default function Game() {
             className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-[#D4AF37] max-w-[148px] sm:max-w-none"
           >
             {enabledCurrencies.map((c) => (
-              <option key={c} value={c}>{CURRENCY_NAMES[c]}</option>
+              <option key={c} value={c}>{t(`curName${c}` as "curNameUSDT")}</option>
             ))}
           </select>
 
@@ -1025,7 +1025,7 @@ export default function Game() {
                 jp.tier === "major" ? "border-[#C0C0C0]" : "border-[#CD7F32]"
               }`}
             >
-              <div className="text-[10px] sm:text-xs uppercase tracking-wider text-[#9E9EAC]">{jp.tier}</div>
+              <div className="text-[10px] sm:text-xs uppercase tracking-wider text-[#9E9EAC]">{jp.tier === "mega" ? t("jackpotTierMega") : jp.tier === "major" ? t("jackpotTierMajor") : t("jackpotTierMini")}</div>
               <div className="text-sm sm:text-lg font-mono font-bold text-[#D4AF37] whitespace-nowrap">
                 {num(jp.amount.toFixed(2))} {jp.currency ?? "USDT"}
               </div>
@@ -1170,7 +1170,7 @@ export default function Game() {
                   onClick={() => { const l = ladderFor(store.config, store.activeCurrency); store.setBetAmount(l[0]); }}
                   className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs h-6"
                 >
-                  MIN
+                  {t("betMin")}
                 </Button>
                 <Button
                   variant="outline"
@@ -1178,7 +1178,7 @@ export default function Game() {
                   onClick={() => { const l = ladderFor(store.config, store.activeCurrency); store.setBetAmount(l[l.length - 1]); }}
                   className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs h-6"
                 >
-                  MAX
+                  {t("betMax")}
                 </Button>
               </div>
             </div>

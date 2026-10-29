@@ -47,6 +47,15 @@ export const strings = {
     noWin: "NO WIN — TRY AGAIN",
     paylinesLabel: "PAYLINES",
     recentSpins: "Recent Spins",
+    betMin: "MIN",
+    betMax: "MAX",
+    jackpotTierMini: "Mini",
+    jackpotTierMajor: "Major",
+    jackpotTierMega: "Mega",
+    curNameBTC: "Bitcoin (BTC)",
+    curNameETH: "Ethereum (ETH)",
+    curNameUSDT: "Tether (USDT)",
+    curNameBDT: "Bangladesh Taka (BDT)",
 
     // Win display
     bigWin: "BIG WIN!",
@@ -550,6 +559,15 @@ export const strings = {
     noWin: "জিত হয়নি — আবার চেষ্টা করুন",
     paylinesLabel: "পেলাইন",
     recentSpins: "সাম্প্রতিক স্পিন",
+    betMin: "সর্বনিম্ন",
+    betMax: "সর্বোচ্চ",
+    jackpotTierMini: "মিনি",
+    jackpotTierMajor: "মেজর",
+    jackpotTierMega: "মেগা",
+    curNameBTC: "বিটকয়েন (BTC)",
+    curNameETH: "ইথেরিয়াম (ETH)",
+    curNameUSDT: "টেথার (USDT)",
+    curNameBDT: "বাংলাদেশ টাকা (BDT)",
 
     // Win display
     bigWin: "বড় জয়!",
