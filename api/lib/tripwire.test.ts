@@ -29,14 +29,15 @@ let sessionId = 0;
 let nonce = 0;
 let classicSha = "";
 
-function insertSpin(x: number, sha: string | null = classicSha) {
+function insertSpin(x: number, sha: string | null = classicSha, free = false) {
   nonce += 1;
-  getSqliteClient()
+  const info = getSqliteClient()
     .prepare(
       `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, hash, is_free_spin, mode_id, bundle_sha256)
-       VALUES (?, 1, ?, '1', 'USDT', '[]', '[]', ?, ?, 0, 'classic', ?)`,
+       VALUES (?, 1, ?, '1', 'USDT', '[]', '[]', ?, ?, ?, 'classic', ?)`,
     )
-    .run(sessionId, nonce, String(x), crypto.createHash("sha256").update(`t${nonce}`).digest("hex"), sha);
+    .run(sessionId, nonce, String(x), crypto.createHash("sha256").update(`t${nonce}`).digest("hex"), free ? 1 : 0, sha);
+  return Number(info.lastInsertRowid);
 }
 
 beforeAll(async () => {
@@ -108,7 +109,21 @@ describe("tripwire", () => {
   it("resumes without recounting", () => {
     const r = tripwire.evaluateMode(getSqliteClient(), "classic", PARAMS(), true);
     expect(r.processed).toBe(0);
-    expect(r.spinsSeen).toBe(3000);
+    // 3000 paid rows = 2999 flushed processes + 1 still open.
+    expect(r.spinsSeen).toBe(2999);
+  });
+
+  it("free-spin rows fold into their triggering paid spin's process", () => {
+    const triggerId = insertSpin(0);
+    insertSpin(0.96, classicSha, true);
+    insertSpin(0.96, classicSha, true);
+    insertSpin(0); // next paid spin flushes the chain
+    tripwire.evaluateMode(getSqliteClient(), "classic", PARAMS(), true);
+    const proc = getSqliteClient()
+      .prepare("SELECT x FROM tripwire_processes WHERE spin_id = ?")
+      .get(triggerId) as any;
+    expect(proc).toBeTruthy();
+    expect(proc.x).toBeCloseTo(1.92, 10);
   });
 
   it("an unregistered bundle hash is a hard-stop event", () => {

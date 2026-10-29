@@ -155,7 +155,21 @@ export const tripwireState = sqliteTable("tripwire_state", {
   cusumPos: real("cusum_pos").default(0).notNull(),
   cusumNeg: real("cusum_neg").default(0).notNull(),
   spinsSeen: integer("spins_seen").default(0).notNull(),
+  // The open (not yet flushed) paid-spin process: its free-spin rows
+  // keep adding wins until the next paid spin of the session arrives.
+  pendingSession: integer("pending_session"),
+  pendingBet: real("pending_bet"),
+  pendingWin: real("pending_win").default(0).notNull(),
+  pendingSpinId: integer("pending_spin_id"),
   updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
+});
+
+export const tripwireProcesses = sqliteTable("tripwire_processes", {
+  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+  modeId: text("mode_id").notNull(),
+  spinId: integer("spin_id").notNull(),
+  x: real("x").notNull(),
+  createdAt: integer("created_at").default(sql`(unixepoch())`).notNull(),
 });
 
 export const tripwireEvents = sqliteTable("tripwire_events", {

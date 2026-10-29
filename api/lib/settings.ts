@@ -147,7 +147,7 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "RTP-drift tripwire enabled (Step 15)", labelBn: "RTP ড্রিফট ট্রিপওয়্যার চালু (ধাপ ১৫)",
   },
   tripwire_sigma_classic: {
-    type: "number", scope: "admin", def: 6.5, group: "math",
+    type: "number", scope: "admin", def: 4.7, group: "math",
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----

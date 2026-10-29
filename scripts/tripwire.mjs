@@ -3,9 +3,16 @@
  * Step 15 — RTP-drift tripwire (plain-node mirror of api/lib/tripwire.ts;
  * keep the math in step). Invoked by the 5-minute monitor on its first
  * run of each day. Two layers (gross-error window stop + EWMA/CUSUM
- * drift) plus the bundle-hash audit, per playbook §4.1. A Layer-1
- * breach on classic flips maintenance_mode on; on any other mode it
- * parks the mode's active bundle. Alerts dedupe while open.
+ * drift) plus the bundle-hash audit, per playbook §4.1.
+ *
+ * Observation unit is a PROCESS: one paid spin plus its whole
+ * free-spin chain, total payout / paid bet — the quantity the
+ * declared RTP describes. Completed processes land in
+ * tripwire_processes; the open process rides in tripwire_state.
+ *
+ * A Layer-1 breach on classic flips maintenance_mode on; on any
+ * other mode it parks the mode's active bundle. Alerts dedupe
+ * while open.
  */
 import Database from "/opt/zeus-slot/node_modules/better-sqlite3/lib/index.js";
 
@@ -30,7 +37,7 @@ function setting(key, fallback) {
 
 function modeParams(modeId) {
   if (modeId === "classic") {
-    return { mu0: (setting("rtp_declared", 95.95)) / 100, sigma0: setting("tripwire_sigma_classic", 6.5) };
+    return { mu0: setting("rtp_declared", 95.95) / 100, sigma0: setting("tripwire_sigma_classic", 4.7) };
   }
   const row = db.prepare("SELECT cert FROM math_bundles WHERE mode_id = ? AND status = 'active'").get(modeId);
   if (row?.cert) {
@@ -63,7 +70,10 @@ function evaluateMode(modeId) {
   let state = db.prepare("SELECT * FROM tripwire_state WHERE mode_id = ?").get(modeId);
   if (!state) {
     db.prepare("INSERT INTO tripwire_state (mode_id) VALUES (?)").run(modeId);
-    state = { mode_id: modeId, last_spin_id: 0, ewma: null, cusum_pos: 0, cusum_neg: 0, spins_seen: 0 };
+    state = {
+      mode_id: modeId, last_spin_id: 0, ewma: null, cusum_pos: 0, cusum_neg: 0, spins_seen: 0,
+      pending_session: null, pending_bet: null, pending_win: 0, pending_spin_id: null,
+    };
   }
   const bundleModeBySha = new Map();
   for (const b of db.prepare("SELECT sha256, mode_id FROM math_bundles").all()) bundleModeBySha.set(b.sha256, b.mode_id);
@@ -73,33 +83,67 @@ function evaluateMode(modeId) {
   let firstBadHashSpin = null;
   let firstMismatchSpin = null;
 
+  const flushProcess = () => {
+    if (state.pending_spin_id === null || state.pending_bet === null || state.pending_bet <= 0) return;
+    const x = state.pending_win / state.pending_bet;
+    state.ewma = state.ewma === null ? x : state.ewma + PARAMS.ewmaAlpha * (x - state.ewma);
+    if (sigma0 > 0) {
+      const z = (x - mu0) / sigma0;
+      state.cusum_pos = Math.max(0, state.cusum_pos + z - kZ);
+      state.cusum_neg = Math.min(0, state.cusum_neg + z + kZ);
+    }
+    db.prepare("INSERT INTO tripwire_processes (mode_id, spin_id, x) VALUES (?, ?, ?)").run(modeId, state.pending_spin_id, x);
+    state.spins_seen += 1;
+    state.pending_session = null;
+    state.pending_bet = null;
+    state.pending_win = 0;
+    state.pending_spin_id = null;
+  };
+
+  const saveState = () => {
+    db.prepare(
+      `UPDATE tripwire_state SET last_spin_id = ?, ewma = ?, cusum_pos = ?, cusum_neg = ?, spins_seen = ?,
+       pending_session = ?, pending_bet = ?, pending_win = ?, pending_spin_id = ?, updated_at = unixepoch()
+       WHERE mode_id = ?`,
+    ).run(
+      state.last_spin_id, state.ewma, state.cusum_pos, state.cusum_neg, state.spins_seen,
+      state.pending_session, state.pending_bet, state.pending_win, state.pending_spin_id, modeId,
+    );
+  };
+
   for (;;) {
     const batch = db.prepare(
-      `SELECT id, bet_amount, win_amount, bundle_sha256 FROM spins
-       WHERE mode_id = ? AND is_free_spin = 0 AND CAST(bet_amount AS REAL) > 0 AND id > ?
+      `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
+       WHERE mode_id = ? AND id > ?
        ORDER BY id ASC LIMIT ?`,
     ).all(modeId, state.last_spin_id, PARAMS.batchSize);
     if (batch.length === 0) break;
     for (const s of batch) {
-      const bet = parseFloat(s.bet_amount);
-      const x = bet > 0 ? parseFloat(s.win_amount) / bet : 0;
       if (s.bundle_sha256) {
         const owner = bundleModeBySha.get(s.bundle_sha256);
         if (owner === undefined && firstBadHashSpin === null) firstBadHashSpin = s.id;
         else if (owner !== undefined && owner !== modeId && firstMismatchSpin === null) firstMismatchSpin = s.id;
       }
-      state.ewma = state.ewma === null ? x : state.ewma + PARAMS.ewmaAlpha * (x - state.ewma);
-      if (sigma0 > 0) {
-        const z = (x - mu0) / sigma0;
-        state.cusum_pos = Math.max(0, state.cusum_pos + z - kZ);
-        state.cusum_neg = Math.min(0, state.cusum_neg + z + kZ);
+      const win = parseFloat(s.win_amount);
+      if (!s.is_free_spin) {
+        flushProcess();
+        state.pending_session = s.session_id;
+        state.pending_bet = parseFloat(s.bet_amount);
+        state.pending_win = win;
+        state.pending_spin_id = s.id;
+      } else if (state.pending_spin_id !== null && state.pending_session === s.session_id) {
+        state.pending_win += win;
+      } else {
+        flushProcess();
+        state.pending_session = s.session_id;
+        state.pending_bet = parseFloat(s.bet_amount);
+        state.pending_win = win;
+        state.pending_spin_id = s.id;
       }
-      state.spins_seen += 1;
       state.last_spin_id = s.id;
       processed += 1;
     }
-    db.prepare("UPDATE tripwire_state SET last_spin_id = ?, ewma = ?, cusum_pos = ?, cusum_neg = ?, spins_seen = ?, updated_at = unixepoch() WHERE mode_id = ?")
-      .run(state.last_spin_id, state.ewma, state.cusum_pos, state.cusum_neg, state.spins_seen, modeId);
+    saveState();
     if (batch.length < PARAMS.batchSize) break;
   }
 
@@ -114,10 +158,7 @@ function evaluateMode(modeId) {
 
   const agg = db.prepare(
     `SELECT COUNT(*) AS c, AVG(x) AS mean, AVG(x * x) AS mean2 FROM (
-       SELECT CAST(win_amount AS REAL) / CAST(bet_amount AS REAL) AS x
-       FROM spins
-       WHERE mode_id = ? AND is_free_spin = 0 AND CAST(bet_amount AS REAL) > 0
-       ORDER BY id DESC LIMIT ?
+       SELECT x FROM tripwire_processes WHERE mode_id = ? ORDER BY id DESC LIMIT ?
      )`,
   ).get(modeId, PARAMS.layer1Window);
   const windowSpins = agg.c;
@@ -164,6 +205,6 @@ for (const r of db.prepare("SELECT DISTINCT mode_id FROM math_bundles").all()) m
 for (const modeId of modes) {
   const r = evaluateMode(modeId);
   console.log(
-    `TRIPWIRE ${r.modeId}: +${r.processed} spins (seen ${r.spinsSeen}), window ${r.windowSpins}, mean ${r.mean === null ? "n/a" : (r.mean * 100).toFixed(2) + "%"}, L1 ${r.breach ? "BREACH" : r.armed ? "ok" : "unarmed"}, EWMA ${r.ewmaDrift ? "DRIFT" : "ok"}, CUSUM ${r.cusumDrift ? "DRIFT" : "ok"}`,
+    `TRIPWIRE ${r.modeId}: +${r.processed} rows (${r.spinsSeen} processes), window ${r.windowSpins}, mean ${r.mean === null ? "n/a" : (r.mean * 100).toFixed(2) + "%"}, L1 ${r.breach ? "BREACH" : r.armed ? "ok" : "unarmed"}, EWMA ${r.ewmaDrift ? "DRIFT" : "ok"}, CUSUM ${r.cusumDrift ? "DRIFT" : "ok"}`,
   );
 }

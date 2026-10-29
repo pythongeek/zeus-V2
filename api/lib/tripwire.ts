@@ -9,13 +9,22 @@
  * must stay inside mu0 ± 3*sigma/sqrt(W). A wrong bundle, a mispay
  * bug or a duplicated multiplier shifts RTP by ~10pp and trips this
  * quickly; honest noise essentially never does. Armed only once the
- * window holds >= layer1MinSpins paid spins.
+ * window holds >= layer1MinSpins completed processes.
  *
- * Layer 2 — slow drift. An EWMA of per-spin payout (warning tier)
- * plus a two-sided tabular CUSUM tuned to a 2pp shift (critical
- * tier). Detection horizons are long by mathematical necessity —
- * the ops dashboard prints them from the actual spin rate so nobody
- * expects lab precision from an ops signal.
+ * Layer 2 — slow drift. An EWMA of per-process payout (warning
+ * tier) plus a two-sided tabular CUSUM tuned to a 2pp shift
+ * (critical tier). Detection horizons are long by mathematical
+ * necessity — the ops dashboard prints them from the actual spin
+ * rate so nobody expects lab precision from an ops signal.
+ *
+ * OBSERVATION UNIT — a PROCESS, not a spin row: the total payout of
+ * one paid spin including its whole free-spin chain, divided by the
+ * paid bet. That is the quantity the declared RTP describes. (The
+ * first version observed paid rows only; free-spin wins live on
+ * their own rows, so the row mean sits ~24pp below the declared
+ * RTP and would have false-tripped Layer 1 the day it armed. The
+ * Phase 0 MC harness caught this — see mc.ts, sigma 4.71 measured
+ * at process level for the classic game.)
  *
  * Bundle-hash audit rides the same pass: every spin stamped with a
  * bundle hash that is not in the registry (or whose bundle belongs
@@ -67,7 +76,7 @@ function modeParams(sqlite: SqliteClient, modeId: string): ModeParams {
   if (modeId === "classic") {
     return {
       mu0: (getSetting<number>("rtp_declared") ?? 95.95) / 100,
-      sigma0: getSetting<number>("tripwire_sigma_classic") ?? 6.5,
+      sigma0: getSetting<number>("tripwire_sigma_classic") ?? 4.7,
     };
   }
   const row = sqlite
@@ -91,21 +100,33 @@ interface StateRow {
   cusum_pos: number;
   cusum_neg: number;
   spins_seen: number;
+  pending_session: number | null;
+  pending_bet: number | null;
+  pending_win: number;
+  pending_spin_id: number | null;
 }
 
 function loadState(sqlite: SqliteClient, modeId: string): StateRow {
   const row = sqlite.prepare("SELECT * FROM tripwire_state WHERE mode_id = ?").get(modeId) as StateRow | undefined;
   if (row) return row;
   sqlite.prepare("INSERT INTO tripwire_state (mode_id) VALUES (?)").run(modeId);
-  return { mode_id: modeId, last_spin_id: 0, ewma: null, cusum_pos: 0, cusum_neg: 0, spins_seen: 0 };
+  return {
+    mode_id: modeId, last_spin_id: 0, ewma: null, cusum_pos: 0, cusum_neg: 0, spins_seen: 0,
+    pending_session: null, pending_bet: null, pending_win: 0, pending_spin_id: null,
+  };
 }
 
 function saveState(sqlite: SqliteClient, s: StateRow) {
   sqlite
     .prepare(
-      "UPDATE tripwire_state SET last_spin_id = ?, ewma = ?, cusum_pos = ?, cusum_neg = ?, spins_seen = ?, updated_at = unixepoch() WHERE mode_id = ?",
+      `UPDATE tripwire_state SET last_spin_id = ?, ewma = ?, cusum_pos = ?, cusum_neg = ?, spins_seen = ?,
+       pending_session = ?, pending_bet = ?, pending_win = ?, pending_spin_id = ?, updated_at = unixepoch()
+       WHERE mode_id = ?`,
     )
-    .run(s.last_spin_id, s.ewma, s.cusum_pos, s.cusum_neg, s.spins_seen, s.mode_id);
+    .run(
+      s.last_spin_id, s.ewma, s.cusum_pos, s.cusum_neg, s.spins_seen,
+      s.pending_session, s.pending_bet, s.pending_win, s.pending_spin_id, s.mode_id,
+    );
 }
 
 function recordEvent(
@@ -158,7 +179,6 @@ export function evaluateMode(
   const { mu0, sigma0 } = modeParams(sqlite, modeId);
   const state = loadState(sqlite, modeId);
 
-  // Registry lookup for the hash audit (sha -> owning mode).
   const bundleModeBySha = new Map<string, string>();
   for (const b of sqlite.prepare("SELECT sha256, mode_id FROM math_bundles").all() as Array<{ sha256: string; mode_id: string }>) {
     bundleModeBySha.set(b.sha256, b.mode_id);
@@ -170,23 +190,43 @@ export function evaluateMode(
   let firstBadHashSpin: number | null = null;
   let firstMismatchSpin: number | null = null;
 
+  /** Flush the open process as one observation. */
+  const flushProcess = () => {
+    if (state.pending_spin_id === null || state.pending_bet === null || state.pending_bet <= 0) return;
+    const x = state.pending_win / state.pending_bet;
+    state.ewma = state.ewma === null ? x : state.ewma + params.ewmaAlpha * (x - state.ewma);
+    if (sigma0 > 0) {
+      const z = (x - mu0) / sigma0;
+      state.cusum_pos = Math.max(0, state.cusum_pos + z - kZ);
+      state.cusum_neg = Math.min(0, state.cusum_neg + z + kZ);
+    }
+    sqlite
+      .prepare("INSERT INTO tripwire_processes (mode_id, spin_id, x) VALUES (?, ?, ?)")
+      .run(modeId, state.pending_spin_id, x);
+    state.spins_seen += 1;
+    state.pending_session = null;
+    state.pending_bet = null;
+    state.pending_win = 0;
+    state.pending_spin_id = null;
+  };
+
   for (;;) {
     const batch = sqlite
       .prepare(
-        `SELECT id, bet_amount, win_amount, bundle_sha256 FROM spins
-         WHERE mode_id = ? AND is_free_spin = 0 AND CAST(bet_amount AS REAL) > 0 AND id > ?
+        `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
+         WHERE mode_id = ? AND id > ?
          ORDER BY id ASC LIMIT ?`,
       )
       .all(modeId, state.last_spin_id, params.batchSize) as Array<{
       id: number;
+      session_id: number;
       bet_amount: string;
       win_amount: string;
       bundle_sha256: string | null;
+      is_free_spin: number;
     }>;
     if (batch.length === 0) break;
     for (const s of batch) {
-      const bet = parseFloat(s.bet_amount);
-      const x = bet > 0 ? parseFloat(s.win_amount) / bet : 0;
       if (s.bundle_sha256) {
         const owner = bundleModeBySha.get(s.bundle_sha256);
         if (owner === undefined) {
@@ -197,13 +237,27 @@ export function evaluateMode(
           if (firstMismatchSpin === null) firstMismatchSpin = s.id;
         }
       }
-      state.ewma = state.ewma === null ? x : state.ewma + params.ewmaAlpha * (x - state.ewma);
-      if (sigma0 > 0) {
-        const z = (x - mu0) / sigma0;
-        state.cusum_pos = Math.max(0, state.cusum_pos + z - kZ);
-        state.cusum_neg = Math.min(0, state.cusum_neg + z + kZ);
+      const win = parseFloat(s.win_amount);
+      if (!s.is_free_spin) {
+        // A new paid spin closes the previous process (chains never
+        // span two paid spins) and opens its own.
+        flushProcess();
+        state.pending_session = s.session_id;
+        state.pending_bet = parseFloat(s.bet_amount);
+        state.pending_win = win;
+        state.pending_spin_id = s.id;
+      } else if (state.pending_spin_id !== null && state.pending_session === s.session_id) {
+        state.pending_win += win;
+      } else {
+        // Orphan free-spin row (its trigger predates tracking): it
+        // forms a one-row process at its locked bet so its payout is
+        // still observed.
+        flushProcess();
+        state.pending_session = s.session_id;
+        state.pending_bet = parseFloat(s.bet_amount);
+        state.pending_win = win;
+        state.pending_spin_id = s.id;
       }
-      state.spins_seen += 1;
       state.last_spin_id = s.id;
       processed += 1;
     }
@@ -220,15 +274,12 @@ export function evaluateMode(
     if (actions) raiseAlert(sqlite, modeId, 0, "critical", `Tripwire: bundle/mode mismatch on ${modeId} spins`, { firstSpinId: firstMismatchSpin });
   }
 
-  // Layer 1 — window aggregate (statistical monitor; REAL arithmetic
-  // is fine here, this never moves money).
+  // Layer 1 — window aggregate over completed processes (statistical
+  // monitor; REAL arithmetic is fine here, this never moves money).
   const agg = sqlite
     .prepare(
       `SELECT COUNT(*) AS c, AVG(x) AS mean, AVG(x * x) AS mean2 FROM (
-         SELECT CAST(win_amount AS REAL) / CAST(bet_amount AS REAL) AS x
-         FROM spins
-         WHERE mode_id = ? AND is_free_spin = 0 AND CAST(bet_amount AS REAL) > 0
-         ORDER BY id DESC LIMIT ?
+         SELECT x FROM tripwire_processes WHERE mode_id = ? ORDER BY id DESC LIMIT ?
        )`,
     )
     .get(modeId, params.layer1Window) as { c: number; mean: number | null; mean2: number | null };
@@ -251,9 +302,6 @@ export function evaluateMode(
     if (actions) {
       raiseAlert(sqlite, modeId, 1, "critical", `Tripwire LAYER 1 BREACH on ${modeId}: RTP ${(mean! * 100).toFixed(2)}% vs ${(mu0 * 100).toFixed(2)}%`, { mean, mu0, band, windowSpins });
       if (modeId === "classic") {
-        // The classic park equivalent: maintenance mode (one click to
-        // reverse in Game Config). A Layer-1 breach on proven math
-        // means a bug or a mis-pointed bundle, not drift.
         if (!getSetting<boolean>("maintenance_mode")) setSetting("maintenance_mode", true, null);
       } else {
         sqlite.prepare("UPDATE math_bundles SET status = 'parked' WHERE mode_id = ? AND status = 'active'").run(modeId);
