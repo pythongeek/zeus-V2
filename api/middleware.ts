@@ -64,6 +64,7 @@ const USER_FACING_EXACT = new Set([
 const USER_FACING_PREFIXES = [
   "Your account is self-excluded until",
   "Bet must be between ",
+  "Bet must be one of the allowed bet steps for ",
   "Transaction is ",
   "Locked balance ",
 ];

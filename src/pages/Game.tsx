@@ -7,6 +7,7 @@ import { ReelEngine, type WinLine } from "@/game/ReelEngine";
 import { useLang, LanguageToggle } from "@/i18n";
 import { Celebration, type CelebrationData, type CelebrationTier } from "@/components/Celebration";
 import { audio } from "@/lib/audio";
+import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -528,6 +529,12 @@ export default function Game() {
     if (typeof cfg.min_bet === "string") patch.minBet = parseFloat(cfg.min_bet);
     if (typeof cfg.max_bet === "string") patch.maxBet = parseFloat(cfg.max_bet);
     if (Object.keys(patch).length) useGameStore.setState(patch);
+    // Step 1: if the current bet sits off the active currency's ladder
+    // (e.g. a USDT-scale amount while BDT is selected), snap it on.
+    const activeLadder = ladderFor(cfg, store.activeCurrency);
+    if (!activeLadder.some((s) => Math.abs(s - store.betAmount) < 1e-9)) {
+      store.setBetAmount(snapToLadder(store.betAmount, activeLadder));
+    }
     if (!localStorage.getItem("zeus-audio-init")) {
       if (typeof cfg.sfx_volume_default === "number") store.setSfxVolume(cfg.sfx_volume_default);
       if (typeof cfg.music_volume_default === "number") store.setMusicVolume(cfg.music_volume_default);
@@ -936,7 +943,11 @@ export default function Game() {
           {/* Currency selector */}
           <select
             value={store.activeCurrency}
-            onChange={(e) => store.setActiveCurrency(e.target.value as any)}
+            onChange={(e) => {
+              const next = e.target.value as typeof store.activeCurrency;
+              store.setActiveCurrency(next);
+              store.setBetAmount(snapToLadder(store.betAmount, ladderFor(store.config, next)));
+            }}
             className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-[#D4AF37] max-w-[148px] sm:max-w-none"
           >
             {enabledCurrencies.map((c) => (
@@ -1130,10 +1141,10 @@ export default function Game() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { const steps = (store.config?.bet_steps as number[] | undefined) ?? []; const below = steps.filter((s) => s < store.betAmount - 1e-9); store.setBetAmount(below.length ? below[below.length - 1] : store.minBet); }}
+                    onClick={() => store.setBetAmount(stepBet(store.betAmount, ladderFor(store.config, store.activeCurrency), "down"))}
                     className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs"
                   >
-                    ½
+                    −
                   </Button>
                   <div className="flex items-baseline justify-center gap-1.5 bg-[#0A0A0F] border border-[#2A2A35] rounded-lg px-3 py-2 min-w-[128px]">
                     <span className="text-[10px] font-bold tracking-wider text-[#D4AF37]">{store.activeCurrency}</span>
@@ -1144,10 +1155,10 @@ export default function Game() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { const steps = (store.config?.bet_steps as number[] | undefined) ?? []; const above = steps.filter((s) => s > store.betAmount + 1e-9); store.setBetAmount(above.length ? above[0] : store.maxBet); }}
+                    onClick={() => store.setBetAmount(stepBet(store.betAmount, ladderFor(store.config, store.activeCurrency), "up"))}
                     className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs"
                   >
-                    2×
+                    +
                   </Button>
                 </div>
               </div>
@@ -1156,7 +1167,7 @@ export default function Game() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => store.setBetAmount(store.minBet)}
+                  onClick={() => { const l = ladderFor(store.config, store.activeCurrency); store.setBetAmount(l[0]); }}
                   className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs h-6"
                 >
                   MIN
@@ -1164,7 +1175,7 @@ export default function Game() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => store.setBetAmount(store.maxBet)}
+                  onClick={() => { const l = ladderFor(store.config, store.activeCurrency); store.setBetAmount(l[l.length - 1]); }}
                   className="border-[#2A2A35] bg-[#1A1A25] hover:bg-[#D4AF37]/20 text-xs h-6"
                 >
                   MAX

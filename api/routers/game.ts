@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
+import { ladderFor, isOnLadder } from "../lib/betting";
 import { getSetting, getPublicConfig } from "../lib/settings";
 import { toUsdt } from "../lib/limits";
 import { checkSpinPace } from "../lib/rate-limit";
@@ -399,6 +400,23 @@ export const gameRouter = createRouter({
           throw new Error("Insufficient balance");
         }
 
+        // Step 1 (BD plan): per-currency bet ladders are enforced
+        // server-side — a paid spin's bet must sit exactly on the
+        // ladder for its currency (BDT micro-stakes ৳1–৳100; USDT
+        // keeps its long-standing ladder). Free spins are exempt:
+        // they play at the bet locked when the spins were awarded.
+        if (!isFreeSpin) {
+          const ladder = ladderFor(
+            getSetting<Record<string, number[]>>("bet_ladders"),
+            spinCurrency,
+          );
+          if (ladder && !isOnLadder(ladder, spinBetMicro)) {
+            throw new Error(
+              `Bet must be one of the allowed bet steps for ${spinCurrency}`,
+            );
+          }
+        }
+
         // Provably fair outcome for this spin (math + feature toggles
         // are read per spin from admin settings — B2)
         const math = getMathConfig();
@@ -677,10 +695,15 @@ export const gameRouter = createRouter({
       try {
         out = runSpin.immediate();
       } catch (e: any) {
-        const userFacing = [
-          "Insufficient balance",
-          "Active session not found for this user",
-        ].includes(e?.message);
+        const userFacing =
+          [
+            "Insufficient balance",
+            "Active session not found for this user",
+          ].includes(e?.message) ||
+          (typeof e?.message === "string" &&
+            e.message.startsWith(
+              "Bet must be one of the allowed bet steps for ",
+            ));
         if (userFacing) throw e;
         // The transaction rolled back: no money moved, no spin recorded.
         console.error("[spin] transaction failed", e);

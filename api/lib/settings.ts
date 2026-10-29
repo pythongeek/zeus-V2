@@ -267,6 +267,11 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000],
     labelEn: "Bet step ladder (for +/- controls)", labelBn: "বেট স্টেপ (＋/－ নিয়ন্ত্রণের জন্য)",
   },
+  bet_ladders: {
+    type: "json", scope: "public", group: "bets",
+    def: { BDT: [1, 2, 5, 10, 20, 50, 100], USDT: [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000] },
+    labelEn: "Bet ladders per currency (stepper + enforced on spin)", labelBn: "কারেন্সি অনুযায়ী বেট ল্যাডার (স্পিনে যাচাই হয়)",
+  },
   auto_spin_options: {
     type: "json", scope: "public", group: "presentation",
     def: [10, 25, 50, 100],

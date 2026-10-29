@@ -134,10 +134,10 @@ export const useGameStore = create<GameStore>((set) => ({
 
   balances: [],
   setBalances: (balances) => set({ balances }),
-  activeCurrency: "USDT",
+  activeCurrency: "BDT",
   setActiveCurrency: (currency) => set({ activeCurrency: currency }),
 
-  betAmount: 1.0,
+  betAmount: 1,
   setBetAmount: (amount) => set({ betAmount: amount }),
   minBet: 0.1,
   maxBet: 1000,
