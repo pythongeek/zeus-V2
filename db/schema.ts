@@ -164,6 +164,17 @@ export const tripwireState = sqliteTable("tripwire_state", {
   updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
 });
 
+export const reloadOptins = sqliteTable("reload_optins", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  offerId: text("offer_id").notNull(),
+  status: text("status").notNull().default("armed"),
+  depositTxId: integer("deposit_tx_id"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+  expiresAt: integer("expires_at").notNull(),
+  consumedAt: integer("consumed_at"),
+});
+
 export const redEnvelopes = sqliteTable("red_envelopes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   scheduledAt: integer("scheduled_at").notNull(),

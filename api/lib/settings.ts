@@ -151,6 +151,22 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----
+  reload_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Reload bonus enabled (Step 12)", labelBn: "রিলোড বোনাস চালু (ধাপ ১২)",
+  },
+  reload_offers: {
+    type: "json", scope: "admin", group: "features",
+    def: [
+      { id: "reload-15", nameEn: "Reload +15%", nameBn: "রিলোড +১৫%", pct: 15, wagering: 2, minDepositUsdt: 20, maxBonus: 50, currency: "USDT", expiryDays: 30, active: true },
+    ],
+    labelEn: "Reload offers (Step 12): pct 10-20, wagering 1-3, min deposit (USDT-equiv), max bonus in deposit currency",
+    labelBn: "রিলোড অফার (ধাপ ১২)",
+  } as any,
+  reload_optin_days: {
+    type: "number", scope: "admin", def: 7, group: "features",
+    labelEn: "Reload opt-in validity (days before the approved deposit)", labelBn: "রিলোড অপ্ট-ইনের মেয়াদ (দিন)",
+  },
   red_envelope_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Red envelopes enabled (Step 11)", labelBn: "লাল খাম চালু (ধাপ ১১)",

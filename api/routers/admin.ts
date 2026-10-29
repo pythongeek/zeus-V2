@@ -882,11 +882,58 @@ export const adminRouter = createRouter({
         }
       }
 
+      // Step 12: reload bonus. If the player armed an opt-in and
+      // this approved deposit matches the offer, grant the bonus on
+      // the same rails and consume the opt-in. (Binance deposits are
+      // approved asynchronously, so the bonus attaches here — at
+      // approval — rather than on a countdown card.)
+      let reloadGranted: bigint | null = null;
+      if (getSetting<boolean>("reload_enabled") !== false) {
+        const { activeOffers, reloadBonusMicro } = await import("../lib/reload");
+        const client = getSqliteClient();
+        const nowSecR = Math.floor(Date.now() / 1000);
+        const optin = client
+          .prepare(
+            "SELECT * FROM reload_optins WHERE user_id = ? AND status = 'armed' AND expires_at > ? ORDER BY id DESC LIMIT 1",
+          )
+          .get(tx.userId, nowSecR) as any;
+        if (optin) {
+          const offer = activeOffers(getSetting("reload_offers")).find((o) => o.id === optin.offer_id);
+          if (offer) {
+            const bonusMicro = reloadBonusMicro(offer, tx.currency, amountMicro);
+            if (bonusMicro) {
+              const brow = client
+                .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
+                .get(tx.userId, tx.currency) as any;
+              const newBonus = (brow ? parseMoney(brow.bonus || "0") : 0n) + bonusMicro;
+              client
+                .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
+                .run(fmtMoney(newBonus), tx.userId, tx.currency);
+              client
+                .prepare(
+                  "INSERT INTO bonus_ledger (user_id, kind, currency, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at) VALUES (?, 'reload', ?, ?, ?, ?, '0', 'active', ?, ?)",
+                )
+                .run(tx.userId, tx.currency, fmtMoney(bonusMicro), fmtMoney(bonusMicro), offer.wagering, tx.id, nowSecR + offer.expiryDays * 86400);
+              client
+                .prepare(
+                  "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')",
+                )
+                .run(tx.userId, tx.currency, fmtMoney(bonusMicro), fmtMoney(newBonus));
+              client
+                .prepare("UPDATE reload_optins SET status = 'consumed', deposit_tx_id = ?, consumed_at = ? WHERE id = ?")
+                .run(tx.id, nowSecR, optin.id);
+              reloadGranted = bonusMicro;
+            }
+          }
+        }
+      }
+
       await writeAudit(ctx, "admin.approveDeposit", {
         txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency,
         ...(boostGranted !== null
           ? { boostGranted: fmtMoney(boostGranted), boostPct: boostCfg?.pct }
           : {}),
+        ...(reloadGranted !== null ? { reloadGranted: fmtMoney(reloadGranted) } : {}),
       });
       return { success: true, txId: tx.id };
     }),

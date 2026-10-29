@@ -4,6 +4,7 @@ import { getSqliteClient } from "../queries/connection";
 import { getSetting } from "../lib/settings";
 import { fmtMoney, parseMoney } from "../lib/money";
 import { claimAmountFloat, envelopeStatus } from "../lib/envelopes";
+import { activeOffers, type ReloadOffer } from "../lib/reload";
 import { maskName } from "./social";
 
 /**
@@ -124,6 +125,50 @@ export const promoRouter = createRouter({
           .run(ctx.user.id, env.currency, fmtMoney(amountMicro), fmtMoney(newBonus));
 
         return { amount: fmtMoney(amountMicro), currency: env.currency };
+      });
+      return run();
+    }),
+
+  /* ===== Step 12: reload bonus ===== */
+  listReloadOffers: publicQuery.query(async () => {
+    if (getSetting<boolean>("reload_enabled") === false) return { offers: [] as ReloadOffer[] };
+    return { offers: activeOffers(getSetting("reload_offers")) };
+  }),
+
+  myReloadOptin: authedQuery.query(async ({ ctx }) => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const row = getSqliteClient()
+      .prepare(
+        "SELECT * FROM reload_optins WHERE user_id = ? AND status = 'armed' AND expires_at > ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(ctx.user.id, nowSec) as any;
+    return {
+      optin: row ? { id: row.id, offerId: row.offer_id, expiresAt: row.expires_at } : null,
+    };
+  }),
+
+  optInReload: authedQuery
+    .input(z.object({ offerId: z.string().min(1).max(64) }))
+    .mutation(async ({ ctx, input }) => {
+      if (getSetting<boolean>("reload_enabled") === false) {
+        throw new Error("Reload bonus is disabled");
+      }
+      const offer = activeOffers(getSetting("reload_offers")).find((o) => o.id === input.offerId);
+      if (!offer) throw new Error("Offer not available");
+      const client = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
+      const days = Number(getSetting<number>("reload_optin_days") ?? 7);
+      const run = client.transaction(() => {
+        // One armed opt-in per player: a fresh opt-in replaces it.
+        client
+          .prepare("UPDATE reload_optins SET status = 'expired' WHERE user_id = ? AND status = 'armed'")
+          .run(ctx.user.id);
+        const info = client
+          .prepare(
+            "INSERT INTO reload_optins (user_id, offer_id, status, created_at, expires_at) VALUES (?, ?, 'armed', ?, ?)",
+          )
+          .run(ctx.user.id, offer.id, nowSec, nowSec + days * 86400);
+        return { optinId: Number(info.lastInsertRowid), expiresAt: nowSec + days * 86400 };
       });
       return run();
     }),

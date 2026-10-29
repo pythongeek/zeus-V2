@@ -8,6 +8,7 @@ import { useLang, LanguageToggle } from "@/i18n";
 import { Celebration, type CelebrationData, type CelebrationTier } from "@/components/Celebration";
 import { LiveTicker } from "@/components/LiveTicker";
 import { RedEnvelope } from "@/components/RedEnvelope";
+import { ReloadOffers } from "@/components/ReloadOffers";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
 import { toast } from "sonner";
@@ -1564,6 +1565,7 @@ for (let i = 0; i < 5; i++) {
                     )}
                   </div>
                 )}
+                <ReloadOffers />
                 {!store.config?.binance_pay_id ? (
                   <div className="text-xs text-[#9E9EAC]">{t("depositsUnavailable")}</div>
                 ) : (
