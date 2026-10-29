@@ -135,6 +135,7 @@ const cert = {
     kappa: res.kappa,
     effectiveSpins: Math.round(res.n * res.kappa),
     cvBeta: res.cvBeta,
+    featureExpectationX: s.featureExpectationX,
   },
   observed: {
     hitRate: s.hitRate,

@@ -7,7 +7,7 @@ import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
 import { ensureActiveClassicBundle, listModes, getActiveBundle } from "../lib/bundles";
 import { resolveCascade, makeCascadeDraw, type CascadeMath } from "../lib/cascade";
 import { getSetting, getPublicConfig } from "../lib/settings";
-import { toUsdt } from "../lib/limits";
+import { toUsdt, tsSec } from "../lib/limits";
 import { checkSpinPace } from "../lib/rate-limit";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and, desc } from "drizzle-orm";
@@ -351,6 +351,7 @@ export const gameRouter = createRouter({
       betAmount: z.string().regex(/^\d+\.?\d*$/),
       currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
       mode: z.enum(["classic", "cascade"]).optional(),
+      requestId: z.string().min(8).max(64).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // A3: from here the bet is exact decimal money (BigInt micro units).
@@ -398,6 +399,19 @@ export const gameRouter = createRouter({
       // failure could move money with no spin record, and parallel spins
       // raced the balance check and could overdraw the account.
       const client = getSqliteClient();
+      // Step 17: spin idempotency. A retried request (same
+      // requestId) returns the ORIGINAL response — the spin itself
+      // is inserted with a unique (user, requestId) claim inside
+      // the transaction, so a concurrent duplicate rolls back and
+      // recovers the winner's response instead of double-betting.
+      if (input.requestId) {
+        const prior = client
+          .prepare("SELECT response FROM spin_requests WHERE user_id = ? AND request_id = ?")
+          .get(ctx.user.id, input.requestId) as { response: string | null } | undefined;
+        if (prior?.response) {
+          return JSON.parse(prior.response);
+        }
+      }
       const runSpin = client.transaction(() => {
         const session = client
           .prepare(
@@ -841,6 +855,11 @@ export const gameRouter = createRouter({
             nearMissFlag,
           ) as any;
         const spinId = spinRow.id as number;
+        if (input.requestId) {
+          client
+            .prepare("INSERT INTO spin_requests (user_id, request_id, spin_id) VALUES (?, ?, ?)")
+            .run(ctx.user.id, input.requestId, spinId);
+        }
 
         // Ledger: paid spins write a debit leg (then a credit leg on a
         // win); free spins write only a free_spin_credit leg on a win.
@@ -1029,6 +1048,21 @@ export const gameRouter = createRouter({
       try {
         out = runSpin.immediate();
       } catch (e: any) {
+        // Idempotency recovery: our claim collided with a twin
+        // request that won the race — return ITS response.
+        if (
+          input.requestId &&
+          typeof e?.message === "string" &&
+          e.message.includes("UNIQUE constraint failed: spin_requests")
+        ) {
+          for (let i = 0; i < 12; i++) {
+            const row = client
+              .prepare("SELECT response FROM spin_requests WHERE user_id = ? AND request_id = ?")
+              .get(ctx.user.id, input.requestId) as { response: string | null } | undefined;
+            if (row?.response) return JSON.parse(row.response);
+            await new Promise((r) => setTimeout(r, 150));
+          }
+        }
         const userFacing =
           [
             "Insufficient balance",
@@ -1045,7 +1079,7 @@ export const gameRouter = createRouter({
         throw new Error("Spin could not be recorded — please try again");
       }
 
-      return {
+      const response = {
         spinId: out.spinId,
         nonce: out.newNonce,
         reelPositions: out.reelStops,
@@ -1068,6 +1102,170 @@ export const gameRouter = createRouter({
         freeSpinsRemaining: out.fsRemainingAfter,
         betUsed: fmtMoney(out.spinBetMicro),
         currencyUsed: out.spinCurrency,
+      };
+      if (input.requestId) {
+        try {
+          client
+            .prepare("UPDATE spin_requests SET response = ? WHERE user_id = ? AND request_id = ?")
+            .run(JSON.stringify(response), ctx.user.id, input.requestId);
+        } catch { /* the claim row is the guarantee; response is a cache */ }
+      }
+      return response;
+    }),
+
+  /**
+   * Step 8 — buy the cascade free-spin feature at an EV-neutral
+   * price. The price is NOT a house guess: the active bundle's
+   * certificate carries E[feature] (the measured mean value of one
+   * free-spin round, in bet units); the list price is
+   * ceil(E[feature] / 0.965) bet units, and the implied bonus RTP
+   * (E[feature] / price) is returned — and printed on the button.
+   * Charged to the available balance only, in one transaction,
+   * with the debit on the ledger so loss limits and reconciliation
+   * see it. Blocked during free spins, during an active bonus, and
+   * past the daily purchase cap.
+   */
+  buyFeatureInfo: authedQuery.query(async () => {
+    const client = getSqliteClient();
+    const enabled =
+      getSetting<boolean>("buy_feature_enabled") === true &&
+      getSetting<boolean>("cascade_enabled") === true;
+    const bundle = enabled ? getActiveBundle(client, "cascade") : null;
+    if (!bundle) return { available: false as const };
+    let featureX = 0;
+    try {
+      const cert = bundle.cert ? JSON.parse(bundle.cert) : null;
+      featureX = Number(cert?.run?.featureExpectationX ?? cert?.featureExpectationX ?? 0);
+    } catch { /* cert is JSON by construction */ }
+    if (!(featureX > 0)) return { available: false as const };
+    const priceX = Math.ceil(featureX / 0.965);
+    let fsAward = 10;
+    try {
+      fsAward = Number((JSON.parse(bundle.bundle) as any).math?.fsTable?.["4"] ?? 10);
+    } catch { /* bundle is JSON by construction */ }
+    return {
+      available: true as const,
+      priceX,
+      featureExpectationX: featureX,
+      impliedBonusRtp: featureX / priceX,
+      freeSpins: fsAward,
+      bundleId: bundle.bundle_id,
+    };
+  }),
+
+  buyFeature: authedQuery
+    .input(z.object({
+      sessionId: z.number(),
+      betAmount: z.string().regex(/^\d+\.?\d*$/),
+      currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (getSetting<boolean>("buy_feature_enabled") !== true) {
+        throw new Error("Buy feature is not available");
+      }
+      if (getSetting<boolean>("maintenance_mode")) {
+        throw new Error("Game is under maintenance");
+      }
+      const { assertSpinAllowed } = await import("../lib/limits");
+      assertSpinAllowed(ctx.user.id);
+      let betMicro: bigint;
+      try {
+        betMicro = parseMoney(input.betAmount);
+      } catch {
+        throw new Error("Invalid bet amount");
+      }
+      if (betMicro <= 0n) throw new Error("Invalid bet amount");
+      const ladder = ladderFor(getSetting<Record<string, number[]>>("bet_ladders"), input.currency);
+      if (ladder && !isOnLadder(ladder, betMicro)) {
+        throw new Error(`Bet must be one of the allowed bet steps for ${input.currency}`);
+      }
+      const client = getSqliteClient();
+      const bundle = getActiveBundle(client, "cascade");
+      if (!bundle || getSetting<boolean>("cascade_enabled") !== true) {
+        throw new Error("Cascade mode is not available yet");
+      }
+      let featureX = 0;
+      try {
+        const cert = bundle.cert ? JSON.parse(bundle.cert) : null;
+        featureX = Number(cert?.run?.featureExpectationX ?? cert?.featureExpectationX ?? 0);
+      } catch { /* cert is JSON by construction */ }
+      if (!(featureX > 0)) {
+        throw new Error("Buy feature is not priced yet");
+      }
+      const priceX = Math.ceil(featureX / 0.965);
+      const priceMicro = betMicro * BigInt(priceX);
+      const impliedBonusRtp = featureX / priceX;
+      const maxPerDay = Number(getSetting<number>("buy_feature_max_per_day") ?? 10);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const fsAward = (() => {
+        try {
+          const math = (JSON.parse(bundle.bundle) as any).math;
+          return Number(math?.fsTable?.["4"] ?? 10);
+        } catch {
+          return 10;
+        }
+      })();
+
+      const run = client.transaction(() => {
+        const session = client
+          .prepare("SELECT * FROM game_sessions WHERE id = ? AND user_id = ? AND status = 'active'")
+          .get(input.sessionId, ctx.user.id) as any;
+        if (!session) throw new Error("Active session not found for this user");
+        if (((session.free_spins_remaining as number) ?? 0) > 0) {
+          throw new Error("Finish your free spins before buying more");
+        }
+        const activeBonus = client
+          .prepare("SELECT id FROM bonus_ledger WHERE user_id = ? AND currency = ? AND status = 'active' LIMIT 1")
+          .get(ctx.user.id, input.currency);
+        if (activeBonus) {
+          throw new Error("Finish your active bonus before buying the feature");
+        }
+        const boughtToday = client
+          .prepare(
+            `SELECT COUNT(*) AS c FROM transactions WHERE user_id = ? AND type = 'buy_feature' AND ${tsSec("created_at")} >= ?`,
+          )
+          .get(ctx.user.id, nowSec - 86400) as any;
+        if (Number(boughtToday?.c ?? 0) >= maxPerDay) {
+          throw new Error("Daily buy-feature limit reached");
+        }
+        const balRow = client
+          .prepare("SELECT * FROM balances WHERE user_id = ? AND currency = ?")
+          .get(ctx.user.id, input.currency) as any;
+        const availableMicro = balRow ? parseMoney(balRow.available) : 0n;
+        if (availableMicro < priceMicro) {
+          throw new Error("Insufficient balance");
+        }
+        const newAvailable = availableMicro - priceMicro;
+        client
+          .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE id = ?")
+          .run(fmtMoney(newAvailable), nowSec, balRow.id);
+        const txInfo = client
+          .prepare(
+            `INSERT INTO transactions (user_id, type, currency, amount, status, to_address, payout_ref, created_at, updated_at)
+             VALUES (?, 'buy_feature', ?, ?, 'completed', 'internal', ?, ?, ?)`,
+          )
+          .run(ctx.user.id, input.currency, fmtMoney(priceMicro), `buy:${bundle.bundle_id}`, nowSec, nowSec);
+        client
+          .prepare(
+            "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'buy_feature_debit', ?, ?, ?, 'available')",
+          )
+          .run(ctx.user.id, input.currency, fmtMoney(-priceMicro), fmtMoney(newAvailable));
+        client
+          .prepare(
+            "UPDATE game_sessions SET free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = 'cascade', free_spins_rung = 0 WHERE id = ?",
+          )
+          .run(fsAward, fmtMoney(betMicro), input.currency, session.id);
+        return { txId: Number(txInfo.lastInsertRowid) };
+      });
+      const { txId } = run();
+      return {
+        txId,
+        pricePaid: fmtMoney(priceMicro),
+        priceX,
+        featureExpectationX: featureX,
+        impliedBonusRtp,
+        freeSpinsGranted: fsAward,
+        currency: input.currency,
       };
     }),
 

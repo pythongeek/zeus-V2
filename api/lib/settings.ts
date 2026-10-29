@@ -264,6 +264,22 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "number", scope: "admin", def: 10, group: "features",
     labelEn: "Rebate auto-converts at this BDT equivalent", labelBn: "এই টাকা সমমূল্যে রিবেট অটো-কনভার্ট হয়",
   },
+  blocked_jurisdictions: {
+    type: "json", scope: "admin", def: ["CU", "IR", "KP", "SY"], group: "security",
+    labelEn: "Blocked jurisdictions (Step 17 — sanctioned only; BD is NOT blocked: worldwide launch)", labelBn: "ব্লক করা jurisdiction (ধাপ ১৭)",
+  } as any,
+  kyc_withdrawal_threshold_bdt: {
+    type: "number", scope: "admin", def: 10000, group: "security",
+    labelEn: "KYC required above this cumulative withdrawal total (BDT equivalent)", labelBn: "এই মোট উত্তোলনের উপরে KYC বাধ্যতামূলক (টাকা সমমূল্য)",
+  },
+  buy_feature_enabled: {
+    type: "boolean", scope: "public", def: false, group: "features",
+    labelEn: "Buy feature enabled (Step 8 — cascade free spins at EV-neutral price)", labelBn: "বাই ফিচার চালু (ধাপ ৮)",
+  },
+  buy_feature_max_per_day: {
+    type: "number", scope: "admin", def: 10, group: "features",
+    labelEn: "Buy feature: max purchases per player per day", labelBn: "বাই ফিচার: প্রতিদিন সর্বোচ্চ ক্রয়",
+  },
   near_miss_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Near-miss tease enabled (Step 7, presentation only — outcomes never change)", labelBn: "নিয়ার-মিস টিজ চালু (ধাপ ৭)",

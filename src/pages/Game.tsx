@@ -277,6 +277,63 @@ function RgSettings() {
   );
 }
 
+function BuyFeatureButton() {
+  const { t, num } = useLang();
+  const store = useGameStore();
+  const [armed, setArmed] = useState(false);
+  const info = trpc.game.buyFeatureInfo.useQuery(undefined, {
+    enabled: !!store.session,
+    staleTime: 30000,
+  });
+  const buy = trpc.game.buyFeature.useMutation({
+    onSuccess: (r) => {
+      toast.success(t("buyFeatureDone"));
+      store.setFreeSpinsRemaining(r.freeSpinsGranted);
+      setArmed(false);
+      info.refetch();
+    },
+    onError: (e) => {
+      toast.error(e.message);
+      setArmed(false);
+    },
+  });
+  if (!info.data?.available || store.freeSpinsRemaining > 0 || !store.session) return null;
+  const d = info.data;
+  const priceAmount = store.betAmount * d.priceX;
+  return (
+    <button
+      className="w-full bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-black rounded-lg py-2 px-3 disabled:opacity-50"
+      disabled={store.gameState === "spinning" || buy.isPending}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true);
+          setTimeout(() => setArmed(false), 5000);
+          return;
+        }
+        buy.mutate({
+          sessionId: store.session!.sessionId,
+          betAmount: String(store.betAmount),
+          currency: store.activeCurrency,
+        });
+      }}
+    >
+      <span className="block text-sm font-bold">
+        {armed
+          ? t("buyFeatureConfirm")
+              .replace("{spins}", num(String(d.freeSpins)))
+              .replace("{amount}", `${num(priceAmount.toFixed(2))} ${store.activeCurrency}`)
+              .replace("{rtp}", num((d.impliedBonusRtp * 100).toFixed(1)))
+          : t("buyFeature").replace("{price}", num(String(d.priceX)))}
+      </span>
+      {!armed && (
+        <span className="block text-[11px] font-medium opacity-80">
+          {t("buyFeatureRtp").replace("{rtp}", num((d.impliedBonusRtp * 100).toFixed(1)))}
+        </span>
+      )}
+    </button>
+  );
+}
+
 export default function Game() {
   const store = useGameStore();
   const { t, num, lang } = useLang();
@@ -326,6 +383,9 @@ export default function Game() {
   const [cascadeFinal, setCascadeFinal] = useState<number[] | null>(null);
   const [cascadePlayKey, setCascadePlayKey] = useState(0);
   const cascadeDoneRef = useRef<(() => void) | null>(null);
+  const autoSpinDoneRef = useRef(0);
+  const playStartedAtRef = useRef<number>(Date.now());
+  const realityShownRef = useRef(0);
   const lastModeRef = useRef<"classic" | "cascade">("classic");
   const [bigWinText, setBigWinText] = useState("");
   const [lightningFlash, setLightningFlash] = useState(false);
@@ -534,6 +594,32 @@ export default function Game() {
 
   // B2: admin-controlled public config — bet limits, feature toggles,
   // timings, announcement/maintenance, first-visit sound defaults.
+  // Step 16: slow networks (2G) get Lite mode automatically —
+  // session-only unless the player saved their own preference.
+  useEffect(() => {
+    try {
+      const conn = (navigator as any).connection;
+      const slow = conn && (conn.effectiveType === "2g" || conn.effectiveType === "slow-2g");
+      if (slow && localStorage.getItem("zeus.lite") === null) {
+        store.setLiteMode(true, false);
+      }
+    } catch { /* connection API unavailable */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Step 17: 30-minute reality check while a session is live.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (!store.session) return;
+      const mins = Math.floor((Date.now() - playStartedAtRef.current) / 60000);
+      if (mins >= 30 && mins - realityShownRef.current >= 30) {
+        realityShownRef.current = mins;
+        toast.info(t("realityCheck").replace("{mins}", String(mins)));
+      }
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [store.session, t]);
+
   const configQuery = trpc.game.getConfig.useQuery(undefined, { staleTime: 30000 });
   // E1: the paytable dialog renders the LIVE math from the server.
   const paytableQuery = trpc.game.getPaytable.useQuery(undefined, { enabled: store.showPaytable, staleTime: 60000 });
@@ -621,6 +707,7 @@ export default function Game() {
           betAmount: String(store.betAmount),
           currency: store.activeCurrency,
           mode: "cascade",
+          requestId: crypto.randomUUID(),
         });
         store.setSession({ ...store.session, startingNonce: result.nonce });
         lastModeRef.current = (result.mode as "classic" | "cascade") ?? "cascade";
@@ -679,6 +766,7 @@ export default function Game() {
         sessionId: store.session.sessionId,
         betAmount: String(store.betAmount),
         currency: store.activeCurrency,
+        requestId: crypto.randomUUID(),
       });
       if (debug) document.title = `Z result win=${result.winAmount}`;
 
@@ -911,10 +999,17 @@ export default function Game() {
       }, 1600);
     }
 
-    // Auto spin handling
+    // Auto spin handling — Step 17: pause every 25 spins; the
+    // player restarts it manually (a real confirmation, not a
+    // timer). The 100 cap comes from the auto_spin_options config.
     if (store.isAutoSpinning) {
+      autoSpinDoneRef.current += 1;
       const nextCount = store.autoSpinCount - 1;
-      if (nextCount > 0) {
+      if (nextCount > 0 && autoSpinDoneRef.current % 25 === 0) {
+        store.setAutoSpinCount(nextCount);
+        store.setIsAutoSpinning(false);
+        toast.info(t("autoSpinPaused"));
+      } else if (nextCount > 0) {
         store.setAutoSpinCount(nextCount);
         autoSpinTimer.current = setTimeout(() => {
           store.setGameState("idle");
@@ -1151,6 +1246,8 @@ export default function Game() {
               ))}
             </div>
             {store.mode === "cascade" && (
+              <>
+              <BuyFeatureButton />
               <p className="text-[11px] leading-snug text-[#9E9EAC] text-center px-1">
                 {t("cascadeDisclosure").replace(
                   "{rtp}",
@@ -1161,6 +1258,7 @@ export default function Game() {
                   })(),
                 )}
               </p>
+              </>
             )}
           </div>
         ) : null}
