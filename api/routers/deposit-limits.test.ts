@@ -69,7 +69,7 @@ beforeAll(async () => {
   settings = await import("../lib/settings");
   ({ getDb } = await import("../queries/connection"));
   schema = await import("../../db/schema");
-  settings.setSetting("binance_pay_id", "85719015");
+  settings.setSetting("binance_pay_id", "556677889");
 });
 
 afterAll(() => {
