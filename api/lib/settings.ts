@@ -151,6 +151,26 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----
+  cashback_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Weekly cashback enabled (Step 10)", labelBn: "সাপ্তাহিক ক্যাশব্যাক চালু (ধাপ ১০)",
+  },
+  cashback_pct: {
+    type: "number", scope: "admin", def: 5, group: "features",
+    labelEn: "Cashback: percent of weekly net loss (wagering-free)", labelBn: "ক্যাশব্যাক: সাপ্তাহিক নিট ক্ষতির শতাংশ (ওয়েজারিং-মুক্ত)",
+  },
+  rebate_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Turnover rebate accrual enabled (Step 10)", labelBn: "টার্নওভার রিবেট চালু (ধাপ ১০)",
+  },
+  rebate_per_mille: {
+    type: "number", scope: "admin", def: 1, group: "features",
+    labelEn: "Rebate accrual per mille of bet (1 = 0.1 percent)", labelBn: "রিবেট: বাজির প্রতি হাজারে (১ = ০.১ শতাংশ)",
+  },
+  rebate_min_bdt: {
+    type: "number", scope: "admin", def: 10, group: "features",
+    labelEn: "Rebate auto-converts at this BDT equivalent", labelBn: "এই টাকা সমমূল্যে রিবেট অটো-কনভার্ট হয়",
+  },
   ticker_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Live win ticker enabled (Step 9)", labelBn: "লাইভ জয়ের টিকার চালু (ধাপ ৯)",

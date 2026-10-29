@@ -37,6 +37,8 @@ interface Balance {
   available: number;
   locked: number;
   bonus: number;
+  rebatePending?: number;
+  rebatePendingBdt?: number;
   bdtEquivalent: number;
 }
 

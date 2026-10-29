@@ -164,6 +164,26 @@ export const tripwireState = sqliteTable("tripwire_state", {
   updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
 });
 
+export const promoSettlements = sqliteTable("promo_settlements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  kind: text("kind").notNull(),
+  userId: integer("user_id").notNull(),
+  currency: text("currency").notNull(),
+  periodStart: integer("period_start").notNull(),
+  periodEnd: integer("period_end").notNull(),
+  amount: text("amount").notNull(),
+  basis: text("basis"),
+  txId: integer("tx_id"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
+export const rebateBalances = sqliteTable("rebate_balances", {
+  userId: integer("user_id").notNull(),
+  currency: text("currency").notNull(),
+  pending: text("pending").notNull().default("0"),
+  updatedAt: integer("updated_at").default(sql`(unixepoch())`),
+});
+
 export const tripwireProcesses = sqliteTable("tripwire_processes", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
   modeId: text("mode_id").notNull(),

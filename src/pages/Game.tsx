@@ -1521,6 +1521,11 @@ for (let i = 0; i < 5; i++) {
                       {t("bonusBalance")}: {balance.bonus.toFixed(4)}
                     </div>
                   )}
+                  {(balance.rebatePending ?? 0) > 0 && (
+                    <div className="text-xs text-emerald-300/80">
+                      {t("rebatePending").replace("{bdt}", num((balance.rebatePendingBdt ?? 0).toFixed(0)))}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

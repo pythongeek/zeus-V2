@@ -1484,6 +1484,31 @@ export const adminRouter = createRouter({
     return result;
   }),
 
+  /* ===== Steps 10/13/14: weekly promo settlement (idempotent) ===== */
+  runWeeklySettlement: adminQuery.mutation(async ({ ctx }) => {
+    const { runCashback } = await import("../lib/settlement");
+    const result = runCashback(getSqliteClient(), {});
+    await writeAudit(ctx, "admin.runWeeklySettlement", {
+      periodStart: result.periodStart,
+      periodEnd: result.periodEnd,
+      grants: result.grants.length,
+      totalByCurrency: result.totalByCurrency,
+    });
+    return result;
+  }),
+
+  listSettlements: adminQuery
+    .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())
+    .query(async ({ input }) => {
+      const rows = getSqliteClient()
+        .prepare(
+          `SELECT s.*, u.email FROM promo_settlements s JOIN users u ON u.id = s.user_id
+           ORDER BY s.id DESC LIMIT ?`,
+        )
+        .all(input?.limit ?? 50);
+      return { settlements: rows };
+    }),
+
   getReconciliation: adminQuery.query(async () => {
     const client = getSqliteClient();
     const lastRun = client

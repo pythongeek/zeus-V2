@@ -753,6 +753,48 @@ export const gameRouter = createRouter({
           }
         }
 
+        // Step 10: turnover rebate accrues per paid spin (per mille of
+        // bet) into rebate_balances; at the BDT threshold it converts
+        // to cash in this same transaction with a ledger leg.
+        if (!isFreeSpin && getSetting<boolean>("rebate_enabled") !== false) {
+          const perMille = BigInt(Math.max(0, Math.round(getSetting<number>("rebate_per_mille") ?? 1)));
+          if (perMille > 0n) {
+            const accrual = (spinBetMicro * perMille) / 1000n;
+            if (accrual > 0n) {
+              const rb = client
+                .prepare("SELECT pending FROM rebate_balances WHERE user_id = ? AND currency = ?")
+                .get(ctx.user.id, spinCurrency) as { pending: string } | undefined;
+              let pending = parseMoney(rb?.pending ?? "0") + accrual;
+              const minBdt = Number(getSetting<number>("rebate_min_bdt") ?? 10);
+              const bdtEq = (toUsdt(Number(pending) / 1e8, spinCurrency) ?? 0) * 110;
+              if (bdtEq >= minBdt && pending > 0n) {
+                client
+                  .prepare("UPDATE balances SET available = ?, updated_at = ? WHERE user_id = ? AND currency = ?")
+                  .run(fmtMoney(updatedMicro + pending), nowSec, ctx.user.id, spinCurrency);
+                insLedger.run(
+                  ctx.user.id,
+                  spinId,
+                  "rebate_credit",
+                  spinCurrency,
+                  fmtMoney(pending),
+                  fmtMoney(updatedMicro + pending),
+                  "available",
+                );
+                pending = 0n;
+              }
+              if (rb) {
+                client
+                  .prepare("UPDATE rebate_balances SET pending = ?, updated_at = ? WHERE user_id = ? AND currency = ?")
+                  .run(fmtMoney(pending), nowSec, ctx.user.id, spinCurrency);
+              } else {
+                client
+                  .prepare("INSERT INTO rebate_balances (user_id, currency, pending, updated_at) VALUES (?, ?, ?, ?)")
+                  .run(ctx.user.id, spinCurrency, fmtMoney(pending), nowSec);
+              }
+            }
+          }
+        }
+
         // A6 pool movement: paid spins contribute 1% of the bet, split
         // mini 0.5% / major 0.3% / mega 0.2%. The hit tier paid out its
         // whole balance above and now reseeds to the house float.

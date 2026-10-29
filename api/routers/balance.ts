@@ -75,17 +75,27 @@ export const balanceRouter = createRouter({
         .from(balances)
         .where(eq(balances.userId, ctx.user.id));
 
+      // Step 10: accrued turnover rebate still below the conversion
+      // threshold (shown so players can watch it build).
+      const rebateRows = getSqliteClient()
+        .prepare("SELECT currency, pending FROM rebate_balances WHERE user_id = ?")
+        .all(ctx.user.id) as Array<{ currency: string; pending: string }>;
+      const rebateByCur = new Map(rebateRows.map((r) => [r.currency, parseFloat(r.pending) || 0]));
+
       return currencies.map((currency) => {
         const existing = userBalances.find(b => b.currency === currency);
         const avail = existing ? parseFloat(existing.available) : 0;
         const locked = existing ? parseFloat(existing.locked) : 0;
         const bonus = existing ? parseFloat((existing as any).bonus || "0") : 0;
         const cryptoRate = displayFxRates()[currency] || 1;
+        const rebatePending = rebateByCur.get(currency) ?? 0;
         return {
           currency,
           available: avail,
           locked: locked,
           bonus,
+          rebatePending,
+          rebatePendingBdt: rebatePending * cryptoRate,
           bdtEquivalent: avail * cryptoRate,
         };
       });
