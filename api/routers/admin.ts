@@ -1562,6 +1562,11 @@ export const adminRouter = createRouter({
         .get(modeId, since30) as any;
       const wageredUsdt = wag.reduce((a, r) => a + toUsdt(r.t, r.currency), 0);
       const wonUsdt = won.reduce((a, r) => a + toUsdt(r.t, r.currency), 0);
+      const nearMiss = client
+        .prepare(
+          `SELECT COUNT(*) AS c FROM spins WHERE mode_id = ? AND near_miss = 1 AND ${tsSec("created_at")} >= ?`,
+        )
+        .get(modeId, since30) as any;
       const bundle = client
         .prepare("SELECT cert FROM math_bundles WHERE mode_id = ? AND status = 'active' LIMIT 1")
         .get(modeId) as any;
@@ -1576,6 +1581,7 @@ export const adminRouter = createRouter({
         wonUsdt,
         actualRtp: wageredUsdt > 0 ? (wonUsdt / wageredUsdt) * 100 : null,
         declaredRtp,
+        nearMiss30d: Number(nearMiss?.c ?? 0),
       };
     });
 

@@ -44,7 +44,7 @@ describe("cascade resolver", () => {
     expect(res.steps[1].multiplier).toBe(2);
     expect(res.steps[1].stepWinMicro).toBe("300000000"); // 1.5x at x2
     expect(res.totalWinMicro).toBe(450_000_000n);
-    expect(res.drawsUsed).toBe(46);
+    expect(res.drawsUsed).toBe(48); // 30 + 8 refills + attach + 8 refills + attach
     // Gravity: column 1 survivors (ids 1, 2) dropped below the refills.
     expect(res.steps[1].grid.slice(5, 10)).toEqual([9, 9, 9, 1, 2]);
     expect(res.freeSpinsAwarded).toBe(0);
