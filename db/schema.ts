@@ -114,6 +114,11 @@ export const spins = sqliteTable("spins", {
   featureTriggered: text("feature_triggered", { enum: ["none", "free_spins", "thunder_strike"] }).default("none").notNull(),
   freeSpinsAwarded: integer("free_spins_awarded", { mode: "number" }).default(0).notNull(),
   hash: text("hash").notNull(),
+  // Phase 0 (playbook §5.3): mode/bundle binding — which math resolved
+  // this spin. Legacy rows keep bundleId null (pre-registry).
+  modeId: text("mode_id").default("classic").notNull(),
+  bundleId: text("bundle_id"),
+  bundleSha256: text("bundle_sha256"),
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
 }, (table) => ({
   ukSessionNonce: uniqueIndex("uk_session_nonce").on(table.sessionId, table.nonce),
@@ -122,6 +127,24 @@ export const spins = sqliteTable("spins", {
 }));
 
 export type Spin = typeof spins.$inferSelect;
+
+// Phase 0: immutable, hash-pinned math bundles (playbook §5.2). A bundle
+// fully determines a mode's outcomes; the only mutable state is which
+// bundle is 'active' per mode. Status: draft | shadow | active | parked.
+export const mathBundles = sqliteTable("math_bundles", {
+  bundleId: text("bundle_id").primaryKey(),
+  modeId: text("mode_id").notNull(),
+  engine: text("engine").notNull(),
+  bundle: text("bundle", { mode: "json" }).notNull(),
+  sha256: text("sha256").notNull(),
+  mathHash: text("math_hash").notNull(),
+  status: text("status", { enum: ["draft", "shadow", "active", "parked"] }).default("draft").notNull(),
+  cert: text("cert", { mode: "json" }),
+  createdAt: integer("created_at").default(sql`(unixepoch())`).notNull(),
+  activatedAt: integer("activated_at"),
+});
+
+export type MathBundle = typeof mathBundles.$inferSelect;
 
 export const transactions = sqliteTable("transactions", {
   id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),

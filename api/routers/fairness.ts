@@ -5,6 +5,8 @@ import { gameSessions, spins } from "../../db/schema";
 import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
 import { REEL_STRIPS, SYMBOL_NAMES } from "./game";
+import { getBundleByHash } from "../lib/bundles";
+import { getSqliteClient } from "../queries/connection";
 
 export const fairnessRouter = createRouter({
   verify: authedQuery
@@ -93,6 +95,12 @@ export const fairnessRouter = createRouter({
 
       return {
         verified: hashMatch && positionsMatch && symbolsMatch,
+        // Phase 0 (playbook §5.3): the reveal record binds the spin to
+        // the exact math bundle that resolved it, resolvable by hash
+        // via fairness.bundleByHash. Null for pre-registry spins.
+        modeId: (spin as any).modeId ?? "classic",
+        bundleId: (spin as any).bundleId ?? null,
+        bundleSha256: (spin as any).bundleSha256 ?? null,
         serverSeed: revealed ? session.serverSeed : null,
         serverSeedHash: session.serverSeedHash,
         clientSeed: session.clientSeed,
@@ -155,6 +163,24 @@ export const fairnessRouter = createRouter({
           reelPositions: typeof s.reelPositions === "string" ? JSON.parse(s.reelPositions) : s.reelPositions,
           winLines: typeof s.winLines === "string" ? JSON.parse(s.winLines) : (s.winLines ?? null),
         })),
+      };
+    }),
+
+  // Phase 0 (playbook §6.8): resolve any published math bundle by its
+  // SHA-256 so a player can audit exactly which mathematics a spin ran.
+  bundleByHash: authedQuery
+    .input(z.object({ sha256: z.string().length(64) }))
+    .query(async ({ input }) => {
+      const row = getBundleByHash(getSqliteClient(), input.sha256);
+      if (!row) throw new Error("Bundle not found");
+      return {
+        bundleId: row.bundle_id,
+        modeId: row.mode_id,
+        engine: row.engine,
+        status: row.status,
+        sha256: row.sha256,
+        bundle: typeof row.bundle === "string" ? JSON.parse(row.bundle) : row.bundle,
+        cert: row.cert ? (typeof row.cert === "string" ? JSON.parse(row.cert) : row.cert) : null,
       };
     }),
 

@@ -4,6 +4,7 @@ import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { ladderFor, isOnLadder } from "../lib/betting";
 import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
+import { ensureActiveClassicBundle, listModes } from "../lib/bundles";
 import { getSetting, getPublicConfig } from "../lib/settings";
 import { toUsdt } from "../lib/limits";
 import { checkSpinPace } from "../lib/rate-limit";
@@ -632,10 +633,21 @@ export const gameRouter = createRouter({
             session.id,
           );
 
+        // Phase 0 (playbook §5.3): stamp the math bundle that resolved
+        // this spin. ensure* auto-registers the next bundle version if
+        // the effective math drifted from the active bundle, so the
+        // stamp is truthful whichever door the math changed through.
+        const bundleRow = ensureActiveClassicBundle(
+          client,
+          math,
+          SYMBOL_NAMES,
+          getSetting<number>("rtp_declared") ?? 0,
+        );
+
         const spinRow = client
           .prepare(
-            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin, mode_id, bundle_id, bundle_sha256)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'classic', ?, ?) RETURNING id`,
           )
           .get(
             session.id,
@@ -653,6 +665,8 @@ export const gameRouter = createRouter({
             freeSpinsAwarded,
             hash,
             isFreeSpin ? 1 : 0,
+            bundleRow.bundle_id,
+            bundleRow.sha256,
           ) as any;
         const spinId = spinRow.id as number;
 
@@ -904,7 +918,18 @@ export const gameRouter = createRouter({
 
   // B1: public admin-controlled configuration for the game client.
   getConfig: publicQuery.query(async () => {
-    return getPublicConfig();
+    // Phase 0: the mode registry rides along with the public config so
+    // clients can render mode availability (classic today; a parked
+    // mode reads as unavailable).
+    const client = getSqliteClient();
+    let modes = listModes(client);
+    if (modes.length === 0) {
+      // First boot before any spin: seed the registry so the classic
+      // mode is visible immediately (ensure is idempotent).
+      ensureActiveClassicBundle(client, getMathConfig(), SYMBOL_NAMES, getSetting<number>("rtp_declared") ?? 0);
+      modes = listModes(client);
+    }
+    return { ...getPublicConfig(), modes };
   }),
 
   getSessionSpins: authedQuery
