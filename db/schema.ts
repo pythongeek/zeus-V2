@@ -89,6 +89,7 @@ export const gameSessions = sqliteTable("game_sessions", {
   // spins are free, played at freeSpinsBet/freeSpinsCurrency (locked at
   // award time); awards during free spins add to the remaining count.
   freeSpinsRemaining: integer("free_spins_remaining", { mode: "number" }).default(0).notNull(),
+  freeSpinsMode: text("free_spins_mode").default("classic"),
   freeSpinsBet: text("free_spins_bet"),
   freeSpinsCurrency: text("free_spins_currency"),
 }, (table) => ({

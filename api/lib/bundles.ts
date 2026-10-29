@@ -123,6 +123,64 @@ export function ensureActiveClassicBundle(
   return sqlite.prepare("SELECT * FROM math_bundles WHERE bundle_id = ?").get(bundleId) as BundleRow;
 }
 
+/* ---- Cascade bundles (Step 5) ---- */
+
+export interface CascadeBundleMath {
+  symbols: number[];
+  weights: Record<string, number>;
+  scatterId: number;
+  paytable: Record<string, [number, number, number, number]>;
+  ladder: number[];
+  fsTable: Record<string, number>;
+  fsRetrigger: number;
+  capX: number;
+}
+
+export function buildCascadeBundle(math: CascadeBundleMath, version: number) {
+  const bundleId = `zeus-cascade-v${version}`;
+  const bundle = {
+    bundleId,
+    modeId: "cascade",
+    engine: "cascade",
+    math,
+  };
+  const canonical = canonicalStringify(bundle);
+  return { bundleId, bundle, sha256: sha256Hex(canonical) };
+}
+
+/**
+ * Register a cascade bundle (idempotent per version). New bundles
+ * land as 'draft'; activation is a separate, deliberate act (the
+ * certification publish), except when opts.activate is set by a
+ * test or the publish flow itself.
+ */
+export function registerCascadeBundle(
+  sqlite: SqliteClient,
+  math: CascadeBundleMath,
+  version: number,
+  opts: { status?: string; cert?: unknown } = {},
+): BundleRow {
+  const { bundleId, bundle, sha256 } = buildCascadeBundle(math, version);
+  const existing = getBundleById(sqlite, bundleId);
+  if (existing) {
+    if (existing.sha256 !== sha256) {
+      throw new Error(`Bundle ${bundleId} already exists with different math — bump the version`);
+    }
+    return existing;
+  }
+  sqlite
+    .prepare(
+      `INSERT INTO math_bundles (bundle_id, mode_id, engine, bundle, sha256, math_hash, status, cert)
+       VALUES (?, 'cascade', 'cascade', ?, ?, ?, ?, ?)`,
+    )
+    .run(bundleId, JSON.stringify(bundle), sha256, sha256, opts.status ?? "draft", opts.cert ? JSON.stringify(opts.cert) : null);
+  return getBundleById(sqlite, bundleId)!;
+}
+
+export function getActiveBundle(sqlite: SqliteClient, modeId: string): BundleRow | null {
+  return getActiveRow(sqlite, modeId);
+}
+
 export function getBundleByHash(sqlite: SqliteClient, sha256: string): BundleRow | null {
   return (sqlite.prepare("SELECT * FROM math_bundles WHERE sha256 = ?").get(sha256) as BundleRow | undefined) ?? null;
 }

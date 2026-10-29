@@ -37,6 +37,82 @@ export const fairnessRouter = createRouter({
 
       if (!spin) throw new Error("Spin not found");
 
+      // Step 5: cascade spins verify by full deterministic replay —
+      // same seeds, same bundle math, same resolver; the recomputed
+      // steps and capped win must equal what was stored and paid.
+      if ((spin as any).modeId === "cascade") {
+        const { getBundleByHash, canonicalStringify } = await import("../lib/bundles");
+        const { resolveCascade, makeCascadeDraw } = await import("../lib/cascade");
+        const { parseMoney, fmtMoney } = await import("../lib/money");
+        const { SYMBOL_NAMES } = await import("./game");
+        const revealedC = session.status === "completed";
+        const bundle = (spin as any).bundleSha256
+          ? getBundleByHash(getSqliteClient(), (spin as any).bundleSha256)
+          : null;
+        if (!bundle) {
+          return {
+            verified: false,
+            modeId: "cascade",
+            bundleId: (spin as any).bundleId ?? null,
+            bundleSha256: (spin as any).bundleSha256 ?? null,
+            note: "The math bundle for this spin is no longer in the registry.",
+          };
+        }
+        const cmath = (JSON.parse(bundle.bundle) as any).math;
+        const res = resolveCascade({
+          draw: makeCascadeDraw(session.serverSeed, session.clientSeed, input.nonce),
+          math: cmath,
+          betMicro: parseMoney(spin.betAmount as string),
+          isFreeSpin: !!(spin as any).isFreeSpin,
+        });
+        const storedSteps = typeof (spin as any).winLines === "string"
+          ? JSON.parse((spin as any).winLines)
+          : (spin as any).winLines;
+        const storedSymbolsC = typeof spin.symbolsShown === "string"
+          ? JSON.parse(spin.symbolsShown)
+          : spin.symbolsShown;
+        const columns: number[][] = [];
+        for (let c = 0; c < 6; c++) columns.push(res.initialGrid.slice(c * 5, c * 5 + 5));
+        const winMatch = fmtMoney(res.cappedWinMicro) === spin.winAmount;
+        const stepsMatch = canonicalStringify(storedSteps) === canonicalStringify(res.steps);
+        const symbolsMatch =
+          JSON.stringify(columns.map((col) => col.map((s: number) => SYMBOL_NAMES[s]))) ===
+          JSON.stringify(storedSymbolsC);
+        const hashC = crypto
+          .createHash("sha256")
+          .update(session.serverSeed + session.clientSeed + String(input.nonce))
+          .digest("hex");
+        return {
+          verified: winMatch && stepsMatch && symbolsMatch && hashC === spin.hash,
+          modeId: "cascade",
+          bundleId: (spin as any).bundleId ?? null,
+          bundleSha256: (spin as any).bundleSha256 ?? null,
+          serverSeed: revealedC ? session.serverSeed : null,
+          serverSeedHash: session.serverSeedHash,
+          clientSeed: session.clientSeed,
+          nonce: input.nonce,
+          hash: hashC,
+          storedHash: spin.hash,
+          winAmount: spin.winAmount,
+          recomputedWin: fmtMoney(res.cappedWinMicro),
+          winMatch,
+          stepsMatch,
+          symbolsMatch,
+          cascade: {
+            steps: res.steps,
+            chainLength: res.chainLength,
+            scatters: res.scattersInitial,
+            drawsUsed: res.drawsUsed,
+          },
+          calculationSteps: [
+            "Step 1: draw(k) = uint52(SHA-256(serverSeed:clientSeed:nonce:c:k)) / 2^52 — slot-indexed stream",
+            "Step 2: initial grid = slots 0..29, column-major, weighted by the bundle's weights",
+            `Step 3: resolved ${res.chainLength} cascade step(s), ${res.drawsUsed} draws total`,
+            `Step 4: total win ${fmtMoney(res.totalWinMicro)} capped at ${cmath.capX}x -> ${fmtMoney(res.cappedWinMicro)}`,
+          ],
+        };
+      }
+
       // A1 (Z-01): the server seed decides every FUTURE spin in this session
       // (SHA-256(serverSeed + clientSeed + nonce)), so it must never leave the
       // server while the session is active. It is revealed only after the

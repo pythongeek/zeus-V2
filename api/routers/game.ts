@@ -4,7 +4,8 @@ import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { ladderFor, isOnLadder } from "../lib/betting";
 import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
-import { ensureActiveClassicBundle, listModes } from "../lib/bundles";
+import { ensureActiveClassicBundle, listModes, getActiveBundle } from "../lib/bundles";
+import { resolveCascade, makeCascadeDraw, type CascadeMath } from "../lib/cascade";
 import { getSetting, getPublicConfig } from "../lib/settings";
 import { toUsdt } from "../lib/limits";
 import { checkSpinPace } from "../lib/rate-limit";
@@ -349,6 +350,7 @@ export const gameRouter = createRouter({
       sessionId: z.number(),
       betAmount: z.string().regex(/^\d+\.?\d*$/),
       currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
+      mode: z.enum(["classic", "cascade"]).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // A3: from here the bet is exact decimal money (BigInt micro units).
@@ -419,6 +421,15 @@ export const gameRouter = createRouter({
           ? (session.free_spins_currency as string)
           : input.currency;
 
+        // Step 5: mode selection. Paid spins take the requested
+        // mode; free spins always play out in the mode that awarded
+        // them (recorded on the session when they were granted).
+        const requestedMode = input.mode === "cascade" ? "cascade" : "classic";
+        const fsMode = ((session as any).free_spins_mode as string) || "classic";
+        const effectiveMode: "classic" | "cascade" = isFreeSpin
+          ? (fsMode === "cascade" ? "cascade" : "classic")
+          : requestedMode;
+
         const balRow = client
           .prepare("SELECT * FROM balances WHERE user_id = ? AND currency = ?")
           .get(ctx.user.id, spinCurrency) as any;
@@ -480,6 +491,12 @@ export const gameRouter = createRouter({
           }
         }
 
+        // Step 5: the outcome block is mode-branched. Classic keeps
+        // its exact existing code path (wrapped to return a common
+        // outcome shape); cascade resolves through lib/cascade.
+        let outcome: any;
+        if (effectiveMode === "classic") {
+        outcome = (() => {
         // Provably fair outcome for this spin (math + feature toggles
         // are read per spin from admin settings — B2)
         const math = getMathConfig();
@@ -613,6 +630,103 @@ export const gameRouter = createRouter({
         const fsCurrencyStored =
           fsRemainingAfter > 0 ? spinCurrency : null;
 
+        return {
+          newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
+          isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
+          freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
+          poolRows, poolMicroByTier, math, features, cascade: null, cascadeBundleRow: null,
+        };
+        })();
+        } else {
+          const bundleRowC = getActiveBundle(client, "cascade");
+          if (!bundleRowC || getSetting<boolean>("cascade_enabled") !== true) {
+            throw new Error("Cascade mode is not available yet");
+          }
+          const cmath = (JSON.parse(bundleRowC.bundle) as any).math as CascadeMath;
+          const newNonce = session.nonce + 1;
+          const hash = crypto
+            .createHash("sha256")
+            .update(session.server_seed + session.client_seed + String(newNonce))
+            .digest("hex");
+          const res = resolveCascade({
+            draw: makeCascadeDraw(session.server_seed, session.client_seed, newNonce),
+            math: cmath,
+            betMicro: spinBetMicro,
+            isFreeSpin,
+          });
+          const winMicro = res.cappedWinMicro;
+          const freeSpinsAwarded = res.freeSpinsAwarded;
+          const fsRemainingAfter = isFreeSpin
+            ? fsRemaining - 1 + freeSpinsAwarded
+            : freeSpinsAwarded;
+          const fsBetStored =
+            fsRemainingAfter > 0
+              ? isFreeSpin
+                ? (session.free_spins_bet as string)
+                : fmtMoney(spinBetMicro)
+              : null;
+          const fsCurrencyStored = fsRemainingAfter > 0 ? spinCurrency : null;
+          const columns: number[][] = [];
+          for (let c = 0; c < 6; c++) columns.push(res.initialGrid.slice(c * 5, c * 5 + 5));
+          const bigWinThreshold = getSetting<number>("alert_big_win_usdt");
+          if (
+            typeof bigWinThreshold === "number" && bigWinThreshold > 0 && winMicro > 0n &&
+            toUsdt(Number(winMicro) / 1e8, spinCurrency) >= bigWinThreshold
+          ) {
+            client
+              .prepare(
+                "INSERT INTO admin_alerts (kind, severity, title, details, ref_user_id, ref_id) VALUES ('big_win', 'warning', ?, ?, ?, NULL)",
+              )
+              .run(
+                `Large win (cascade): ${fmtMoney(winMicro)} ${spinCurrency} on a ${fmtMoney(spinBetMicro)} bet`,
+                JSON.stringify({
+                  amount: fmtMoney(winMicro),
+                  currency: spinCurrency,
+                  bet: fmtMoney(spinBetMicro),
+                  multiple: Number(winMicro) / Number(spinBetMicro),
+                  mode: "cascade",
+                }),
+                ctx.user.id,
+              );
+          }
+          outcome = {
+            newNonce,
+            reelStops: [] as number[],
+            symbols: columns,
+            hash,
+            lines: res.steps,
+            winMicro,
+            isBigWin: winMicro >= spinBetMicro * 50n,
+            isJackpot: false,
+            featureTriggered: freeSpinsAwarded > 0 ? "free_spins" : "none",
+            jackpotTier: null,
+            jackpotAwardMicro: 0n,
+            freeSpinsAwarded,
+            fsRemainingAfter,
+            fsBetStored,
+            fsCurrencyStored,
+            poolRows: [] as any[],
+            poolMicroByTier: {} as Record<string, bigint>,
+            math: null,
+            features: { freeSpins: true, thunder: false, jackpots: false },
+            cascade: {
+              steps: res.steps,
+              chainLength: res.chainLength,
+              scatters: res.scattersInitial,
+              wasCapped: res.wasCapped,
+              drawsUsed: res.drawsUsed,
+            },
+            cascadeBundleRow: bundleRowC,
+          };
+        }
+        const {
+          newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
+          isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
+          freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
+          poolRows, poolMicroByTier, math, features,
+        } = outcome;
+        const cascadePayload = outcome.cascade as any;
+
         // Step 4: a paid spin debits only its cash part from
         // available (the bonus bucket funds the rest); a completed
         // grant's conversion credits available after the win.
@@ -642,7 +756,7 @@ export const gameRouter = createRouter({
 
         client
           .prepare(
-            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ? WHERE id = ?",
+            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ? WHERE id = ?",
           )
           .run(
             newNonce,
@@ -655,6 +769,7 @@ export const gameRouter = createRouter({
             fsRemainingAfter,
             fsBetStored,
             fsCurrencyStored,
+            fsRemainingAfter > 0 ? effectiveMode : "classic",
             session.id,
           );
 
@@ -662,17 +777,20 @@ export const gameRouter = createRouter({
         // this spin. ensure* auto-registers the next bundle version if
         // the effective math drifted from the active bundle, so the
         // stamp is truthful whichever door the math changed through.
-        const bundleRow = ensureActiveClassicBundle(
-          client,
-          math,
-          SYMBOL_NAMES,
-          getSetting<number>("rtp_declared") ?? 0,
-        );
+        const bundleRow =
+          effectiveMode === "classic"
+            ? ensureActiveClassicBundle(
+                client,
+                math,
+                SYMBOL_NAMES,
+                getSetting<number>("rtp_declared") ?? 0,
+              )
+            : (outcome.cascadeBundleRow as any);
 
         const spinRow = client
           .prepare(
             `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin, mode_id, bundle_id, bundle_sha256)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'classic', ?, ?) RETURNING id`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
           )
           .get(
             session.id,
@@ -681,7 +799,7 @@ export const gameRouter = createRouter({
             fmtMoney(spinBetMicro),
             spinCurrency,
             JSON.stringify(reelStops),
-            JSON.stringify(symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]))),
+            JSON.stringify(symbols.map((col: number[]) => col.map((s: number) => SYMBOL_NAMES[s]))),
             fmtMoney(winMicro),
             JSON.stringify(lines),
             isBigWin ? 1 : 0,
@@ -690,6 +808,7 @@ export const gameRouter = createRouter({
             freeSpinsAwarded,
             hash,
             isFreeSpin ? 1 : 0,
+            effectiveMode,
             bundleRow.bundle_id,
             bundleRow.sha256,
           ) as any;
@@ -872,6 +991,8 @@ export const gameRouter = createRouter({
           fsRemainingAfter,
           spinBetMicro,
           spinCurrency,
+          mode: effectiveMode,
+          cascade: cascadePayload,
         };
       });
 
@@ -885,9 +1006,10 @@ export const gameRouter = createRouter({
             "Active session not found for this user",
           ].includes(e?.message) ||
           (typeof e?.message === "string" &&
-            e.message.startsWith(
+            (e.message.startsWith(
               "Bet must be one of the allowed bet steps for ",
-            ));
+            ) ||
+              e.message.startsWith("Cascade mode is not available")));
         if (userFacing) throw e;
         // The transaction rolled back: no money moved, no spin recorded.
         console.error("[spin] transaction failed", e);
@@ -911,6 +1033,8 @@ export const gameRouter = createRouter({
         jackpotAward:
           out.jackpotAwardMicro > 0n ? fmtMoney(out.jackpotAwardMicro) : null,
         isFreeSpin: out.isFreeSpin,
+        mode: (out as any).mode ?? "classic",
+        cascade: (out as any).cascade ?? null,
         freeSpinsRemaining: out.fsRemainingAfter,
         betUsed: fmtMoney(out.spinBetMicro),
         currencyUsed: out.spinCurrency,

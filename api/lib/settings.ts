@@ -264,6 +264,10 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "number", scope: "admin", def: 10, group: "features",
     labelEn: "Rebate auto-converts at this BDT equivalent", labelBn: "এই টাকা সমমূল্যে রিবেট অটো-কনভার্ট হয়",
   },
+  cascade_enabled: {
+    type: "boolean", scope: "public", def: false, group: "features",
+    labelEn: "Cascade mode enabled (Step 5 — activate only with a certified, active cascade bundle)", labelBn: "ক্যাসকেড মোড চালু (ধাপ ৫)",
+  },
   ticker_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Live win ticker enabled (Step 9)", labelBn: "লাইভ জয়ের টিকার চালু (ধাপ ৯)",
