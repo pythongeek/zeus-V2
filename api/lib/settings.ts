@@ -151,6 +151,26 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Tripwire: classic per-spin sigma (x bet, from certification)", labelBn: "ট্রিপওয়্যার: ক্লাসিক প্রতি-স্পিন সিগমা (বাজির ×)",
   },
   // ---- B2: features, currencies, presentation (public) ----
+  red_envelope_enabled: {
+    type: "boolean", scope: "public", def: true, group: "features",
+    labelEn: "Red envelopes enabled (Step 11)", labelBn: "লাল খাম চালু (ধাপ ১১)",
+  },
+  red_envelope_min_claim: {
+    type: "number", scope: "public", def: 18, group: "features",
+    labelEn: "Red envelope: minimum claim", labelBn: "লাল খাম: সর্বনিম্ন ক্লেইম",
+  },
+  red_envelope_max_claim: {
+    type: "number", scope: "public", def: 888, group: "features",
+    labelEn: "Red envelope: maximum claim", labelBn: "লাল খাম: সর্বোচ্চ ক্লেইম",
+  },
+  red_envelope_window_seconds: {
+    type: "number", scope: "admin", def: 300, group: "features",
+    labelEn: "Red envelope: claim window (seconds)", labelBn: "লাল খাম: ক্লেইমের সময় (সেকেন্ড)",
+  },
+  red_envelope_daily_budget_bdt: {
+    type: "number", scope: "admin", def: 2000, group: "features",
+    labelEn: "Red envelope: fixed daily budget (BDT equivalent)", labelBn: "লাল খাম: নির্দিষ্ট দৈনিক বাজেট (টাকা সমমূল্য)",
+  },
   cashback_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Weekly cashback enabled (Step 10)", labelBn: "সাপ্তাহিক ক্যাশব্যাক চালু (ধাপ ১০)",

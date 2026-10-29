@@ -288,6 +288,106 @@ function AlertChannelsCard({ enabled, canEdit }: { enabled: boolean; canEdit: bo
 }
 
 /** Section G: risk, reconciliation & alerts. */
+function PromotionsSection({ enabled }: { enabled: boolean }) {
+  const { t } = useLang();
+  const [when, setWhen] = useState("");
+  const [pool, setPool] = useState("2000");
+  const [currency, setCurrency] = useState("BDT");
+  const [maxClaims, setMaxClaims] = useState("100");
+  const list = trpc.admin.listEnvelopes.useQuery(undefined, { enabled, refetchInterval: 15000 });
+  const settlements = trpc.admin.listSettlements.useQuery({ limit: 20 }, { enabled });
+  const schedule = trpc.admin.scheduleEnvelope.useMutation({
+    onSuccess: () => {
+      toast.success(t("envScheduledOk"));
+      list.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const nowSec = Math.floor(Date.now() / 1000);
+  const statusOf = (ts: number) => (nowSec < ts ? "scheduled" : nowSec <= ts + 300 ? "live" : "closed");
+  return (
+    <div className="space-y-4">
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-amber-400">{t("envFormTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <label className="text-xs text-slate-400 space-y-1 block">
+              <span>{t("envWhen")}</span>
+              <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="bg-slate-800 border-slate-700" />
+            </label>
+            <label className="text-xs text-slate-400 space-y-1 block">
+              <span>{t("envPool")}</span>
+              <Input value={pool} onChange={(e) => setPool(e.target.value)} className="bg-slate-800 border-slate-700" />
+            </label>
+            <label className="text-xs text-slate-400 space-y-1 block">
+              <span>BDT / USDT</span>
+              <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md h-9 px-2 text-sm text-white">
+                <option value="BDT">BDT</option>
+                <option value="USDT">USDT</option>
+              </select>
+            </label>
+            <label className="text-xs text-slate-400 space-y-1 block">
+              <span>{t("envMaxClaims")}</span>
+              <Input value={maxClaims} onChange={(e) => setMaxClaims(e.target.value)} className="bg-slate-800 border-slate-700" />
+            </label>
+          </div>
+          <Button
+            className="bg-amber-500 text-black hover:bg-amber-400"
+            disabled={!when || schedule.isPending}
+            onClick={() =>
+              schedule.mutate({
+                scheduledAt: Math.floor(new Date(when).getTime() / 1000),
+                currency,
+                poolAmount: pool,
+                maxClaims: Math.max(1, parseInt(maxClaims) || 1),
+              })
+            }
+          >
+            {t("envScheduleBtn")}
+          </Button>
+          <p className="text-xs text-slate-500">Seed hash publishes immediately; the seed reveals after the drop closes. Daily budget applies (BDT equivalent).</p>
+        </CardContent>
+      </Card>
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-amber-400">{t("envListTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-sm">
+          {(list.data?.envelopes ?? []).map((e: any) => (
+            <div key={e.id} className="flex justify-between border-b border-slate-800 py-1">
+              <span className="text-slate-300">
+                #{e.id} · {new Date(e.scheduled_at * 1000).toLocaleString()} · {statusOf(e.scheduled_at)}
+              </span>
+              <span className="text-slate-400">
+                {e.pool_amount} {e.currency} · {e.claims_count}/{e.max_claims} · claimed {e.claimed_total}
+              </span>
+            </div>
+          ))}
+          {(list.data?.envelopes ?? []).length === 0 && <div className="text-slate-500">—</div>}
+        </CardContent>
+      </Card>
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-amber-400">{t("envSettlementsTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-sm">
+          {(settlements.data?.settlements ?? []).map((s: any) => (
+            <div key={s.id} className="flex justify-between border-b border-slate-800 py-1">
+              <span className="text-slate-300">{s.kind} · {s.email}</span>
+              <span className="text-slate-400">
+                {s.amount} {s.currency} · {new Date(s.period_start * 1000).toLocaleDateString()}
+              </span>
+            </div>
+          ))}
+          {(settlements.data?.settlements ?? []).length === 0 && <div className="text-slate-500">—</div>}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function RiskSection({
   enabled,
   onFocusPlayer,
@@ -1717,13 +1817,6 @@ export default function Admin() {
     );
   }
 
-  const placeholder = (
-    <Card className="bg-slate-900/80 border-slate-800">
-      <CardContent className="py-10 text-center text-sm text-slate-400">
-        {t("sectionComingSoon")}
-      </CardContent>
-    </Card>
-  );
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10">
@@ -2695,7 +2788,7 @@ export default function Admin() {
               onFocusPlayer={(id) => { setSelectedPlayerId(id); goSection("players"); }}
             />
           )}
-          {section === "promotions" && placeholder}
+          {section === "promotions" && <PromotionsSection enabled={isAuthenticated && isAdmin} />}
 
           {section === "system" && (
             <>

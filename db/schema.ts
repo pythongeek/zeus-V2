@@ -164,6 +164,28 @@ export const tripwireState = sqliteTable("tripwire_state", {
   updatedAt: integer("updated_at").default(sql`(unixepoch())`).notNull(),
 });
 
+export const redEnvelopes = sqliteTable("red_envelopes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  scheduledAt: integer("scheduled_at").notNull(),
+  currency: text("currency").notNull().default("BDT"),
+  poolAmount: text("pool_amount").notNull(),
+  claimedTotal: text("claimed_total").notNull().default("0"),
+  maxClaims: integer("max_claims").notNull(),
+  claimsCount: integer("claims_count").notNull().default(0),
+  seed: text("seed").notNull(),
+  seedHash: text("seed_hash").notNull(),
+  createdBy: integer("created_by"),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
+export const redEnvelopeClaims = sqliteTable("red_envelope_claims", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  envelopeId: integer("envelope_id").notNull(),
+  userId: integer("user_id").notNull(),
+  amount: text("amount").notNull(),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
 export const promoSettlements = sqliteTable("promo_settlements", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   kind: text("kind").notNull(),

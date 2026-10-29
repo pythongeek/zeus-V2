@@ -32,6 +32,11 @@ export function dhakaWeekStart(sec: number): number {
   return (localDay - mon0) * 86400 - DHAKA_OFFSET_SEC;
 }
 
+/** 00:00 Asia/Dhaka (unix seconds) of the day containing `sec`. */
+export function dhakaDayStart(sec: number): number {
+  return Math.floor((sec + DHAKA_OFFSET_SEC) / 86400) * 86400 - DHAKA_OFFSET_SEC;
+}
+
 /** The last complete Dhaka week [start, end) relative to `nowSec`. */
 export function previousWeekPeriod(nowSec: number): { start: number; end: number } {
   const end = dhakaWeekStart(nowSec);

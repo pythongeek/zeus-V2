@@ -7,6 +7,7 @@ import { ReelEngine, type WinLine } from "@/game/ReelEngine";
 import { useLang, LanguageToggle } from "@/i18n";
 import { Celebration, type CelebrationData, type CelebrationTier } from "@/components/Celebration";
 import { LiveTicker } from "@/components/LiveTicker";
+import { RedEnvelope } from "@/components/RedEnvelope";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
 import { toast } from "sonner";
@@ -1022,6 +1023,9 @@ export default function Game() {
           <p className="text-[#B8B8C8] max-w-md">{store.config?.maintenance_message ? store.config.maintenance_message : t("maintenanceBody")}</p>
         </div>
       ) : null}
+
+      {/* Step 11: red envelope drop banner */}
+      <RedEnvelope />
 
       {/* Step 9: live win ticker (real settled wins only) */}
       <LiveTicker />

@@ -1497,6 +1497,57 @@ export const adminRouter = createRouter({
     return result;
   }),
 
+  /* ===== Step 11: red envelopes ===== */
+  scheduleEnvelope: adminQuery
+    .input(
+      z.object({
+        scheduledAt: z.number(),
+        currency: z.string().min(3).max(4).default("BDT"),
+        poolAmount: z.string(),
+        maxClaims: z.number().min(1).max(100000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { generateSeed, hashSeed } = await import("../lib/envelopes");
+      const { dhakaDayStart } = await import("../lib/settlement");
+      const { toUsdt } = await import("../lib/limits");
+      const client = getSqliteClient();
+      const budget = Number(getSetting<number>("red_envelope_daily_budget_bdt") ?? 2000);
+      const dayStart = dhakaDayStart(input.scheduledAt);
+      const dayRows = client
+        .prepare("SELECT currency, pool_amount FROM red_envelopes WHERE scheduled_at >= ? AND scheduled_at < ?")
+        .all(dayStart, dayStart + 86400) as Array<{ currency: string; pool_amount: string }>;
+      const bdtOf = (amount: string, currency: string) => toUsdt(parseFloat(amount) || 0, currency) * 110;
+      const used = dayRows.reduce((acc, r) => acc + bdtOf(r.pool_amount, r.currency), 0);
+      const incoming = bdtOf(input.poolAmount, input.currency);
+      if (used + incoming > budget) {
+        throw new Error(
+          `Daily red-envelope budget exceeded: ${used.toFixed(2)} + ${incoming.toFixed(2)} > ${budget} BDT`,
+        );
+      }
+      const seed = generateSeed();
+      const info = client
+        .prepare(
+          "INSERT INTO red_envelopes (scheduled_at, currency, pool_amount, max_claims, seed, seed_hash, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(input.scheduledAt, input.currency, input.poolAmount, input.maxClaims, seed, hashSeed(seed), ctx.user!.id);
+      await writeAudit(ctx, "admin.scheduleEnvelope", {
+        envelopeId: Number(info.lastInsertRowid),
+        scheduledAt: input.scheduledAt,
+        poolAmount: input.poolAmount,
+        currency: input.currency,
+        maxClaims: input.maxClaims,
+      });
+      return { envelopeId: Number(info.lastInsertRowid), seedHash: hashSeed(seed) };
+    }),
+
+  listEnvelopes: adminQuery.query(async () => {
+    const rows = getSqliteClient()
+      .prepare("SELECT id, scheduled_at, currency, pool_amount, claimed_total, max_claims, claims_count, seed_hash, created_at FROM red_envelopes ORDER BY id DESC LIMIT 50")
+      .all();
+    return { envelopes: rows };
+  }),
+
   listSettlements: adminQuery
     .input(z.object({ limit: z.number().min(1).max(200).default(50) }).optional())
     .query(async ({ input }) => {
