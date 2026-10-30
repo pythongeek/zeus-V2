@@ -1406,19 +1406,19 @@ export default function Game() {
       <RedEnvelope />
 
       {/* Main Game Area */}
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-3 py-4 sm:px-4 sm:py-6">
         {/* Jackpot Meters */}
-        <div className="flex gap-2 sm:gap-4 mb-4 sm:mb-6 w-full max-w-[900px]">
+        <div className="flex gap-2 sm:gap-4 mb-2.5 sm:mb-6 w-full max-w-[900px]">
           {((store.config?.features?.jackpots ?? true) ? store.jackpots : []).map((jp) => (
             <div
               key={jp.tier}
-              className={`flex-1 px-2 sm:px-5 py-2 rounded-xl border bg-[#1A1A25]/80 backdrop-blur text-center ${
+              className={`flex-1 min-w-0 overflow-hidden px-1.5 sm:px-5 py-1.5 sm:py-2 rounded-xl border bg-[#1A1A25]/80 backdrop-blur text-center ${
                 jp.tier === "mega" ? "border-[#D4AF37] shadow-[0_0_24px_rgba(212,175,55,0.15)]" :
                 jp.tier === "major" ? "border-[#C0C0C0]" : "border-[#CD7F32]"
               }`}
             >
               <div className="text-[10px] sm:text-xs uppercase tracking-wider text-[#9E9EAC]">{jp.tier === "mega" ? t("jackpotTierMega") : jp.tier === "major" ? t("jackpotTierMajor") : t("jackpotTierMini")}</div>
-              <div className="text-sm sm:text-lg font-mono font-bold text-[#D4AF37] whitespace-nowrap">
+              <div className="text-[12px] sm:text-lg font-mono font-bold text-[#D4AF37] whitespace-nowrap">
                 {num(jp.amount.toFixed(2))} {jp.currency ?? "USDT"}
               </div>
               <div className="text-[11px] sm:text-xs text-[#9E9EAC] whitespace-nowrap">৳{fmtBdt(jp.bdtEquivalent)}</div>
@@ -1426,36 +1426,31 @@ export default function Game() {
           ))}
         </div>
 
-        {/* Stage header: Zeus alive on the left of the title plaque,
-            overlooking the board (reference layout); he reacts to
-            spins and throws thunder on big wins. */}
-        <div className="relative z-30 w-full max-w-[900px] h-[96px] sm:h-[118px]">
+        {/* Stage header: Zeus alive above the board's left edge,
+            overlooking play; he reacts to spins and throws thunder
+            on big wins. The ZEUS THUNDER title plaque that sat
+            beside him was removed 2026-10-31 (owner request); the
+            header also shrinks on phones so the board and the
+            controls fit one screen. */}
+        <div className="relative z-30 w-full max-w-[900px] h-[54px] sm:h-[118px]">
           <ZeusFigure
             mood={zeusMood}
             strikeKey={strikeKey}
             lite={store.liteMode}
-            className="absolute left-0 sm:left-3 -bottom-4 w-[100px] h-[118px] sm:w-[132px] sm:h-[156px]"
+            className="absolute left-0 sm:left-3 -bottom-3 sm:-bottom-4 w-[72px] h-[86px] sm:w-[132px] sm:h-[156px]"
           />
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-center pointer-events-none">
-            <div className="text-center px-5 sm:px-8 py-1.5 rounded-xl border border-[#D4AF37]/70 bg-gradient-to-b from-[#241C3A]/95 to-[#14101F]/95 shadow-[0_0_30px_rgba(212,175,55,0.25)]">
-              <h1 className="text-xl sm:text-3xl font-bold text-[#D4AF37] tracking-widest" style={{ fontFamily: "Cinzel, serif" }}>
-                ZEUS THUNDER
-              </h1>
-              <p className="text-[10px] sm:text-xs text-[#B8B8C8] tracking-widest mt-0.5">{t("tagline")}</p>
-            </div>
-          </div>
         </div>
 
         {/* Step 6: mode selector (classic default) + disclosure */}
         {(store.config as any)?.cascade_enabled ? (
-          <div className="w-full max-w-[520px] mx-auto mb-3 space-y-2">
+          <div className="w-full max-w-[520px] mx-auto mb-2 sm:mb-3 space-y-2">
             <div className="flex rounded-full overflow-hidden border border-[#D4AF37]/40">
               {(["classic", "cascade"] as const).map((m) => (
                 <button
                   key={m}
                   disabled={store.gameState === "spinning" || store.freeSpinsRemaining > 0}
                   onClick={() => { store.setMode(m); setLastResult(null); setLastScatter(0); }}
-                  className={`flex-1 py-1.5 text-xs sm:text-sm font-semibold disabled:opacity-60 ${
+                  className={`flex-1 py-2 sm:py-1.5 text-xs sm:text-sm font-semibold disabled:opacity-60 ${
                     store.mode === m ? "bg-[#D4AF37] text-black" : "bg-black/40 text-[#B8B8C8]"
                   }`}
                 >
@@ -1575,7 +1570,7 @@ export default function Game() {
         {/* Round result — U4: EVERY spin gets visible feedback. Before,
             only a win showed anything here; a losing spin changed nothing
             on screen but a small history pill, so the game felt dead. */}
-        <div className="mt-4 min-h-[54px] text-center">
+        <div className="mt-2.5 sm:mt-4 min-h-[44px] sm:min-h-[54px] text-center">
           {lastResult && store.gameState !== "spinning" && (
             lastResult.win > 0 ? (
               <div className="animate-bounce-in">
@@ -1610,7 +1605,11 @@ export default function Game() {
 
         {/* Control Panel — clean two-row layout (reference style):
             bet + info row on top, turbo / SPIN / auto centred below. */}
-        <div className="mt-4 bg-[#12121A]/95 border border-[#2A2A35] rounded-xl p-4 max-w-[900px] w-full">
+        {/* On phones this panel sticks to the viewport bottom
+            (safe-area aware) so SPIN is always within thumb reach,
+            even on short screens; the sections below scroll under
+            it. Desktop keeps the static panel. */}
+        <div className="mt-2.5 sm:mt-4 bg-[#12121A]/95 border border-[#2A2A35] rounded-xl p-3 sm:p-4 max-w-[900px] w-full max-sm:sticky max-sm:bottom-[max(0.5rem,env(safe-area-inset-bottom))] max-sm:z-40 max-sm:shadow-[0_-10px_36px_rgba(0,0,0,0.6)]">
           <div className="flex flex-wrap items-end justify-between gap-3">
             {/* Bet Controls */}
             <div className="flex items-center gap-3">
@@ -1686,7 +1685,7 @@ export default function Game() {
           </div>
 
           {/* Spin row: round turbo/lite toggles, SPIN centre, auto right */}
-          <div className="mt-4 flex items-center justify-center gap-5 sm:gap-9">
+          <div className="mt-3 sm:mt-4 flex items-center justify-center gap-5 sm:gap-9">
             <div className="flex flex-col gap-2">
               <button
                 onClick={() => store.setTurboMode(!store.turboMode)}
