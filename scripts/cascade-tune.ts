@@ -49,7 +49,7 @@ function evaluate(math: CascadeMath, n: number, seedLabel: string): Metrics {
   const score =
     Math.abs(rtp - 96.5) * 3 +
     viol(hit, 18, 25) * 2 +
-    viol(pGe3, 1.0, 3.0) * 2 +
+    viol(pGe3, 1.0, 3.0) * 4 +
     viol(pGe5, 0.1, 0.5) * 3 +
     viol(s.rawSigma, 8, 16) * 1.5 +
     Math.max(0, pGe8 - 0.05) * 50;

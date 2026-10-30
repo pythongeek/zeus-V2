@@ -78,6 +78,15 @@ export interface MCOptions {
   alpha?: number;
   /** Exact expectation of the control variate, when samples carry c. */
   expectedC?: number;
+  /**
+   * Minimum EFFECTIVE sample size (n x measured kappa) that must be
+   * reached before a tolerance stop is allowed. The cascade
+   * certification gate (playbook section 6) requires >= 50M effective spins
+   * AND a sequential CI <= tolerance; without this floor the
+   * tolerance stop fires first (first cert run: 18.5M raw / 26.4M
+   * effective, verdict FAIL on the floor alone).
+   */
+  minEffectiveSpins?: number;
 }
 
 export function runSequentialMC(next: () => MCSample, opts: MCOptions): MCResult {
@@ -130,7 +139,10 @@ export function runSequentialMC(next: () => MCSample, opts: MCOptions): MCResult
       }
     }
     const st = stats();
-    if (robbinsHalfWidth(st.sigma, n, alpha) <= opts.tolerance) {
+    if (
+      robbinsHalfWidth(st.sigma, n, alpha) <= opts.tolerance &&
+      n * st.kappa >= (opts.minEffectiveSpins ?? 0)
+    ) {
       stoppedBy = "tolerance";
       break;
     }

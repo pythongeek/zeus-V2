@@ -93,6 +93,21 @@ afterAll(() => {
 });
 
 describe("tripwire", () => {
+  it("cascade baseline comes from the certification record (cert.run)", () => {
+    const cert = { result: "PASS", run: { rtp: 0.9648, sigma: 3.856 } };
+    getSqliteClient()
+      .prepare(
+        `INSERT INTO math_bundles (bundle_id, mode_id, engine, bundle, sha256, math_hash, status, cert)
+         VALUES ('zeus-cascade-v1', 'cascade', 'cascade', '{}', 'cascadesha', 'cascadesha', 'active', ?)`,
+      )
+      .run(JSON.stringify(cert));
+    const status = tripwire.getTripwireStatus(getSqliteClient());
+    const cascade = status.find((m: any) => m.modeId === "cascade");
+    expect(cascade).toBeTruthy();
+    expect(cascade.mu0).toBeCloseTo(0.9648, 6);
+    expect(cascade.sigma0).toBeCloseTo(3.856, 6);
+  });
+
   it("a fair stream (mean exactly mu0) stays silent", () => {
     const mu0 = settingsLib.getSetting("rtp_declared") / 100;
     for (let i = 0; i < 3000; i++) insertSpin(mu0);

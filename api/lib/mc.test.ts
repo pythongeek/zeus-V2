@@ -52,6 +52,21 @@ describe("sequential estimator", () => {
     expect(r.naiveHalfWidth).toBeLessThan(0.01);
   });
 
+  it("minEffectiveSpins holds the run past an early tolerance stop", () => {
+    const rng = mc.mulberry32(11);
+    // No CV, so kappa = 1 and effective spins == n: with a loose
+    // tolerance the run would otherwise stop after one small batch.
+    const r = mc.runSequentialMC(() => ({ x: rng() * 2 }), {
+      tolerance: 0.5,
+      maxSpins: 1_000_000,
+      batchSize: 10_000,
+      minEffectiveSpins: 100_000,
+    });
+    expect(r.stoppedBy).toBe("tolerance");
+    expect(r.n).toBeGreaterThanOrEqual(100_000);
+    expect(r.n * r.kappa).toBeGreaterThanOrEqual(100_000);
+  });
+
   it("control variate removes the explained variance (kappa >> 1)", () => {
     const rng = mc.mulberry32(7);
     // c is a fair coin paying 2 (E[c] = 1 exactly); x = c + small noise.

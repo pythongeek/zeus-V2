@@ -86,8 +86,17 @@ function modeParams(sqlite: SqliteClient, modeId: string): ModeParams {
   if (row?.cert) {
     try {
       const cert = typeof row.cert === "string" ? JSON.parse(row.cert) : row.cert;
-      const mu0 = cert.rtp_hat ?? (cert.rtp_percent != null ? cert.rtp_percent / 100 : 0.965);
-      const sigma0 = cert.sigma_hat ?? cert.sigma_x ?? 18;
+      // The cascade certification record (scripts/cascade-cert.ts)
+      // stores its estimates under cert.run ({ rtp, sigma, ... });
+      // earlier drafts used flat rtp_hat / sigma_hat fields. Accept
+      // both so the tripwire baseline is always the CERTIFIED values
+      // — with the flat-only read, cascade silently fell back to
+      // sigma0 = 18 against a certified raw sigma of 3.86, loosening
+      // every drift limit ~4.7x.
+      const mu0 =
+        cert.run?.rtp ?? cert.rtp_hat ?? cert.rtp ??
+        (cert.rtp_percent != null ? cert.rtp_percent / 100 : 0.965);
+      const sigma0 = cert.run?.sigma ?? cert.sigma_hat ?? cert.sigma_x ?? cert.sigma ?? 18;
       return { mu0, sigma0 };
     } catch { /* fall through to defaults */ }
   }
