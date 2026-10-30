@@ -149,11 +149,14 @@ class SoundManager {
     howl.once("end", () => howl.unload());
   }
 
-  /** Start a named loop (idempotent). */
-  startLoop(key: string, file: string, ch: Channel = "sfx", gain = 1) {
+  /** Start a named loop (idempotent). `file` may be an array of
+   * formats for one sound (Howler picks the first the browser can
+   * play — used by the base-game music: Opus with an AAC fallback). */
+  startLoop(key: string, file: string | string[], ch: Channel = "sfx", gain = 1) {
     if (!this.unlocked || this.loops.has(key)) return;
+    const files = Array.isArray(file) ? file : [file];
     const howl = new Howl({
-      src: [`/assets/audio/${file}`],
+      src: files.map((f) => `/assets/audio/${f}`),
       loop: true,
       volume: this.chGain(ch) * gain,
       preload: true,

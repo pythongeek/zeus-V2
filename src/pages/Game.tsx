@@ -455,6 +455,22 @@ export default function Game() {
   }, [isAuthenticated, engineFailed, store.liteMode]);
 
   // Keep ref in sync with grid state
+  // Base-game music: "Crown of the Storm" (owner-supplied own
+  // composition, 2026-10-30) — a seamless 158s loop normalised to a
+  // mild -20 LUFS bed. Start it at the first interaction instead of
+  // waiting for the first spin so the base game has consistent
+  // music; startLoop is idempotent and no-ops until the engine is
+  // unlocked, and the file loads lazily (never in the page's
+  // critical path). The spin handler kicks the same loop as before.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const kick = () => audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
+    kick();
+    window.addEventListener("pointerdown", kick);
+    return () => window.removeEventListener("pointerdown", kick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
   // D1: free-spin music bed while free spins remain.
   useEffect(() => {
     if (store.freeSpinsRemaining > 0) {
@@ -773,7 +789,7 @@ export default function Game() {
     audio.unlock();
     audio.play("ui-click");
     audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
-    audio.startLoop("music", "music-theme.wav", "music", 1);
+    audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
     audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
     engineRef.current?.clearWinLines();
     setWinCells(new Set());
