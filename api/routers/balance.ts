@@ -144,11 +144,16 @@ export const balanceRouter = createRouter({
   // Binance and approves, which credits the balance. The previous
   // flow generated a random mock address — funds sent there would
   // have been lost; it is removed entirely.
+  // Deposit v2 (owner, 2026-10-30): RedotPay added as a second rail
+  // on the identical model — `method` selects which operator account
+  // the pending row points at, and the admin queue tells the rails
+  // apart by that destination ID.
   deposit: authedQuery
     .input(z.object({
       currency: z.enum(["BTC", "ETH", "USDT", "BDT"]),
       amount: z.string().regex(/^\d+\.?\d*$/),
       reference: z.string().min(4).max(64),
+      method: z.enum(["binance", "redotpay"]).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       assertCurrencyEnabled(input.currency);
@@ -180,13 +185,18 @@ export const balanceRouter = createRouter({
       }
 
       if (input.currency !== "USDT" && input.currency !== "BDT") {
-        throw new Error("Deposits are via Binance PayID only (USDT or BDT)");
+        throw new Error("Deposits are via Binance Pay / RedotPay only (USDT or BDT)");
       }
-      const payId = getSetting<string>("binance_pay_id");
+      const method = input.method ?? "binance";
+      const payId = method === "redotpay"
+        ? getSetting<string>("redot_pay_id")
+        : getSetting<string>("binance_pay_id");
       if (!payId) {
         throw new Error("Deposits are not available yet — please contact support");
       }
-      const payName = getSetting<string>("binance_pay_name");
+      const payName = method === "redotpay"
+        ? getSetting<string>("redot_pay_name")
+        : getSetting<string>("binance_pay_name");
 
       const [tx] = await db.insert(transactions).values({
         userId: ctx.user.id,
@@ -205,6 +215,7 @@ export const balanceRouter = createRouter({
         amount: input.amount,
         currency: input.currency,
         status: "pending",
+        method,
       };
     }),
 

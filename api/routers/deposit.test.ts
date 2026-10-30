@@ -120,7 +120,7 @@ describe("F4: Binance PayID deposits", () => {
     settings.setSetting("currencies_enabled", ["USDT", "BDT", "BTC"]);
     await expect(
       caller.deposit({ currency: "BTC", amount: "0.01", reference: "BTCREF123" }),
-    ).rejects.toThrow("Binance PayID only");
+    ).rejects.toThrow("Binance Pay / RedotPay only");
     settings.setSetting("currencies_enabled", ["USDT", "BDT"]);
   });
 
@@ -129,6 +129,33 @@ describe("F4: Binance PayID deposits", () => {
     await expect(
       caller.deposit({ currency: "USDT", amount: "5", reference: "ab" }),
     ).rejects.toThrow();
+  });
+
+  it("redotpay refuses when no RedotPay ID is configured", async () => {
+    const { caller } = await makeUser();
+    await expect(
+      caller.deposit({ currency: "USDT", amount: "25", reference: "REDOT12345", method: "redotpay" }),
+    ).rejects.toThrow("Deposits are not available yet");
+  });
+
+  it("redotpay creates a pending deposit to the configured RedotPay ID", async () => {
+    settings.setSetting("redot_pay_id", "1210819625");
+    const { caller } = await makeUser();
+    const res = await caller.deposit({
+      currency: "USDT",
+      amount: "25",
+      reference: "REDOT12345",
+      method: "redotpay",
+    });
+    expect(res.method).toBe("redotpay");
+    expect(res.payId).toBe("1210819625");
+    expect(res.status).toBe("pending");
+    const row = getSqliteClient()
+      .prepare("SELECT to_address, tx_hash, status FROM transactions WHERE id = ?")
+      .get(res.txId) as any;
+    expect(row.to_address).toBe("1210819625");
+    expect(row.tx_hash).toBe("REDOT12345");
+    expect(row.status).toBe("pending");
   });
 
   it("the F3 daily deposit limit still gates the rail", async () => {

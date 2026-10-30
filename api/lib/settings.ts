@@ -355,6 +355,23 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     def: "",
     labelEn: "Binance Pay link (opens the Binance app payment screen)", labelBn: "Binance Pay লিংক (Binance অ্যাপের পেমেন্ট স্ক্রিন খোলে)",
   },
+  // Deposit v2 (owner, 2026-10-30): RedotPay as a second deposit
+  // rail on the same request-and-approve model as Binance Pay.
+  redot_pay_id: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "RedotPay ID for deposits (shown to players)", labelBn: "ডিপোজিটের জন্য RedotPay ID (খেলোয়াড়দের দেখানো হয়)",
+  },
+  redot_pay_name: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "RedotPay account name shown with the ID", labelBn: "ID-এর সঙ্গে দেখানো RedotPay অ্যাকাউন্টের নাম",
+  },
+  redot_qr_image: {
+    type: "string", scope: "public", group: "currencies",
+    def: "",
+    labelEn: "RedotPay QR image path or URL shown for deposits", labelBn: "ডিপোজিটের জন্য RedotPay QR ছবির পথ বা URL",
+  },
   fx_rates: {
     type: "json", scope: "public", group: "currencies",
     def: { "BTC": 11000000, "ETH": 380000, "USDT": 110, "BDT": 1 },

@@ -36,6 +36,7 @@ import {
   Gift,
   Sparkles,
   LogOut,
+  Copy,
 } from "lucide-react";
 
 
@@ -514,7 +515,12 @@ export default function Game() {
   const [depCurrency, setDepCurrency] = useState<"USDT" | "BDT">("USDT");
   const [depAmount, setDepAmount] = useState("");
   const [depReference, setDepReference] = useState("");
-  const [depositResult, setDepositResult] = useState<{ amount: string; currency: string; payId: string; payName: string | null } | null>(null);
+  const [depositResult, setDepositResult] = useState<{ amount: string; currency: string; payId: string; payName: string | null; method?: string } | null>(null);
+  // Deposit v2 (owner, 2026-10-30): two rails + a two-step flow —
+  // pick rail and amount first, then a pay screen modelled on the
+  // Binance Pay hosted page (big QR, download, open-app).
+  const [depMethod, setDepMethod] = useState<"binance" | "redotpay">("binance");
+  const [depStep, setDepStep] = useState<"amount" | "pay">("amount");
   const [wdCurrency, setWdCurrency] = useState<"BTC" | "ETH" | "USDT">("USDT");
   const [wdAmount, setWdAmount] = useState("");
   const [wdAddress, setWdAddress] = useState("");
@@ -532,11 +538,12 @@ export default function Game() {
       return;
     }
     try {
-      const res = await depositMutation.mutateAsync({ currency: depCurrency, amount: depAmount, reference: depReference.trim() });
+      const res = await depositMutation.mutateAsync({ currency: depCurrency, amount: depAmount, reference: depReference.trim(), method: depMethod });
       setDepositResult(res);
       toast.success(t("depositPending"));
       setDepAmount("");
       setDepReference("");
+      setDepStep("amount");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t("depositFailed"));
     }
@@ -1113,6 +1120,16 @@ export default function Game() {
   // BDT lines ignored the UI language.
   const enabledCurrencies = ((store.config?.currencies_enabled as string[] | undefined) ?? ["USDT", "BDT"]).filter((c) => c in CURRENCY_NAMES);
   const fmtBdt = (n: number) => num(n.toLocaleString(lang === "bn" ? "bn-BD" : "en-US", { maximumFractionDigits: 0 }));
+  // Deposit v2 rails: the selected rail's public config (the server
+  // re-resolves the destination from the same settings — the client
+  // values are display only).
+  const depCfg = (store.config ?? {}) as Record<string, any>;
+  const depRail = depMethod === "redotpay"
+    ? { id: depCfg.redot_pay_id as string | undefined, name: depCfg.redot_pay_name as string | undefined, qr: depCfg.redot_qr_image as string | undefined, link: undefined as string | undefined }
+    : { id: depCfg.binance_pay_id as string | undefined, name: depCfg.binance_pay_name as string | undefined, qr: depCfg.binance_qr_image as string | undefined, link: depCfg.binance_pay_link as string | undefined };
+  const depAnyRail = Boolean(depCfg.binance_pay_id || depCfg.redot_pay_id);
+  const depMin = (depCfg.deposit_min as Record<string, string> | undefined)?.[depCurrency];
+  const depMax = (depCfg.deposit_max as Record<string, string> | undefined)?.[depCurrency];
 
   return (
     <div className="min-h-screen bg-[#0A0A0F] text-white overflow-hidden relative">
@@ -1845,7 +1862,7 @@ for (let i = 0; i < 5; i++) {
               </div>
             ))}
             <div className="flex gap-2">
-              <Button className="flex-1 bg-[#D4AF37] text-black hover:bg-[#F4D03F]" onClick={() => setWalletMode("deposit")}>
+              <Button className="flex-1 bg-[#D4AF37] text-black hover:bg-[#F4D03F]" onClick={() => { setWalletMode("deposit"); setDepStep("amount"); }}>
                 <TrendingUp className="w-4 h-4 mr-2" />
                 {t("deposit")}
               </Button>
@@ -1876,42 +1893,37 @@ for (let i = 0; i < 5; i++) {
                   </div>
                 )}
                 <ReloadOffers />
-                {!store.config?.binance_pay_id ? (
+                {!depAnyRail ? (
                   <div className="text-xs text-[#9E9EAC]">{t("depositsUnavailable")}</div>
-                ) : (
+                ) : depStep === "amount" ? (
                   <>
-                    <div className="text-xs bg-[#12121A] border border-[#2A2A35] rounded p-3 space-y-1">
-                      <div className="text-[#5E5E6E]">{t("depositSendTo")}</div>
-                      <div className="font-mono text-[#D4AF37] break-all text-sm">
-                        {t("depositPayIdLabel")}: {store.config.binance_pay_id}
-                      </div>
-                      {store.config.binance_pay_name ? (
-                        <div className="text-[#9E9EAC]">{t("depositPayName")}: {store.config.binance_pay_name}</div>
-                      ) : null}
-                      <div className="text-[#5E5E6E]">{t("depositVerifyNote")}</div>
-                      {store.config.binance_qr_image ? (
-                        <div className="flex flex-col items-center gap-1.5 pt-2">
-                          <img
-                            src={String(store.config.binance_qr_image)}
-                            alt={t("depositScanQr")}
-                            className="w-52 max-w-full rounded-lg border border-[#2A2A35]"
-                            loading="lazy"
-                          />
-                          <div className="text-[#9E9EAC]">{t("depositScanQr")}</div>
-                        </div>
-                      ) : null}
-                      {store.config.binance_pay_link ? (
-                        <div className="pt-1 text-center">
-                          <a
-                            href={String(store.config.binance_pay_link)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[#D4AF37] underline underline-offset-2 font-semibold"
-                          >
-                            {t("depositOpenPay")}
-                          </a>
-                        </div>
-                      ) : null}
+                    {/* Rail picker: brand tiles like the big-book
+                        deposit grids (owner reference, 2026-10-30). */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={!depCfg.binance_pay_id}
+                        onClick={() => setDepMethod("binance")}
+                        className={`rounded-lg py-3 px-2 font-extrabold tracking-wide text-sm transition-all disabled:opacity-40 ${
+                          depMethod === "binance"
+                            ? "bg-[#F0B90B] text-black ring-2 ring-[#F0B90B]/60"
+                            : "bg-[#F0B90B]/70 text-black/80 hover:bg-[#F0B90B]"
+                        }`}
+                      >
+                        ◆ BINANCE <span className="font-semibold">PAY</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!depCfg.redot_pay_id}
+                        onClick={() => setDepMethod("redotpay")}
+                        className={`rounded-lg py-3 px-2 font-extrabold tracking-wide text-sm transition-all disabled:opacity-40 ${
+                          depMethod === "redotpay"
+                            ? "bg-[#14141C] text-[#FF3B4E] ring-2 ring-[#E8262D]/70 border border-[#E8262D]/60"
+                            : "bg-[#14141C] text-[#FF3B4E]/70 border border-[#2A2A35] hover:border-[#E8262D]/50"
+                        }`}
+                      >
+                        RedotPay
+                      </button>
                     </div>
                     <div className="flex gap-2">
                       <select
@@ -1935,6 +1947,107 @@ for (let i = 0; i < 5; i++) {
                         className="flex-1 bg-[#12121A] border-[#2A2A35]"
                       />
                     </div>
+                    {(depMin || depMax) && (
+                      <div className="text-[11px] text-[#5E5E6E]">
+                        {t("depositAmountRange", { min: depMin ? `${num(depMin)} ${depCurrency}` : "—", max: depMax ? `${num(depMax)} ${depCurrency}` : "—" })}
+                      </div>
+                    )}
+                    {!depRail.id && (
+                      <div className="text-xs text-[#9E9EAC]">{t("depositsUnavailable")}</div>
+                    )}
+                    <Button
+                      size="sm"
+                      className="w-full bg-[#00E676] text-black hover:bg-[#00E676]/80"
+                      disabled={!depAmount || !depRail.id}
+                      onClick={() => {
+                        const amt = parseFloat(depAmount);
+                        if (!amt || amt <= 0) {
+                          toast.error(t("errInvalidDeposit"));
+                          return;
+                        }
+                        setDepStep("pay");
+                      }}
+                    >
+                      {t("depositContinue")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    {/* Pay screen, modelled on the Binance Pay hosted
+                        page (owner reference, 2026-10-30): amount,
+                        brand, big QR card, download / open-app, then
+                        the reference + I-have-paid submission. */}
+                    <button
+                      type="button"
+                      onClick={() => setDepStep("amount")}
+                      className="text-xs text-[#9E9EAC] hover:text-white"
+                    >
+                      ← {t("depositBack")}
+                    </button>
+                    <div className="text-center space-y-1">
+                      <div className="text-[11px] uppercase tracking-[0.25em] text-[#9E9EAC]">{t("payLabel")}</div>
+                      <div className="text-3xl font-extrabold text-white">
+                        {num(depAmount)} <span className="text-lg text-[#D4AF37]">{depCurrency}</span>
+                      </div>
+                      {depMethod === "binance" ? (
+                        <div className="text-lg font-extrabold tracking-wide text-[#F0B90B]">
+                          ◆ BINANCE <span className="text-white">PAY</span>
+                        </div>
+                      ) : (
+                        <div className="text-lg font-extrabold tracking-wide text-[#FF3B4E]">RedotPay</div>
+                      )}
+                    </div>
+                    {depRail.qr ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="bg-white rounded-2xl p-3 w-56 max-w-full shadow-[0_8px_30px_rgba(0,0,0,0.45)]">
+                          <img src={depRail.qr} alt="" className="w-full h-auto" loading="lazy" />
+                        </div>
+                        <div className="text-xs font-semibold text-white">
+                          {depMethod === "binance" ? t("depositScanBinance") : t("depositScanRedot")}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="text-xs bg-[#12121A] border border-[#2A2A35] rounded p-3 space-y-1">
+                      <div className="text-[#5E5E6E]">{t("depositSendTo")}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[#D4AF37] break-all text-sm">
+                          {depMethod === "binance" ? t("depositPayIdLabel") : t("depositRedotIdLabel")}: {depRail.id}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-[#9E9EAC] hover:text-white shrink-0"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(String(depRail.id ?? ""));
+                            toast.success(t("copied"));
+                          }}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {depRail.name ? (
+                        <div className="text-[#9E9EAC]">{t("depositPayName")}: {depRail.name}</div>
+                      ) : null}
+                      <div className="text-[#5E5E6E]">{t("depositVerifyNote")}</div>
+                    </div>
+                    {depRail.qr && (
+                      <a
+                        href={depRail.qr}
+                        download
+                        className="block w-full text-center rounded-lg py-2.5 font-bold text-sm bg-[#F0B90B] text-black hover:bg-[#F4D03F]"
+                      >
+                        {t("downloadQr")}
+                      </a>
+                    )}
+                    {depMethod === "binance" && depRail.link && (
+                      <a
+                        href={depRail.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block w-full text-center rounded-lg py-2.5 font-bold text-sm bg-[#1E2329] text-white border border-[#2A2A35] hover:bg-[#2A2A35]"
+                      >
+                        ◆ {t("openBinanceApp")}
+                      </a>
+                    )}
                     <Input
                       placeholder={t("depositReferencePlaceholder")}
                       value={depReference}
@@ -1944,10 +2057,10 @@ for (let i = 0; i < 5; i++) {
                     <Button
                       size="sm"
                       className="w-full bg-[#00E676] text-black hover:bg-[#00E676]/80"
-                      disabled={depositMutation.isPending || !depAmount}
+                      disabled={depositMutation.isPending}
                       onClick={handleDeposit}
                     >
-                      {depositMutation.isPending ? "..." : t("requestDeposit")}
+                      {depositMutation.isPending ? "..." : t("iHavePaid")}
                     </Button>
                   </>
                 )}
