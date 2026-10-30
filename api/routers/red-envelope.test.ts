@@ -161,10 +161,16 @@ describe("envelope lifecycle", () => {
     expect(claims2.c).toBe(1);
 
     // Daily budget: 5000 + 900 already scheduled today; tighten the
-    // budget to 6000 and a further 700 pool must breach it.
+    // budget to 6000 and a further 700 pool must breach it. The
+    // breach envelope must sit in the SAME Dhaka day as the others
+    // (the budget buckets by the envelope's scheduled day) — using
+    // nowSec() + 3600 crossed into tomorrow whenever the suite ran
+    // after 23:00 Dhaka and the assertion silently stopped testing
+    // the cap. Pin it to 01:00 into the current Dhaka day instead.
     settingsLib.setSetting("red_envelope_daily_budget_bdt", 6000, null);
+    const { dhakaDayStart } = await import("../lib/settlement");
     await expect(
-      admin.scheduleEnvelope({ scheduledAt: nowSec() + 3600, currency: "BDT", poolAmount: "700", maxClaims: 10 }),
+      admin.scheduleEnvelope({ scheduledAt: dhakaDayStart(nowSec()) + 3600, currency: "BDT", poolAmount: "700", maxClaims: 10 }),
     ).rejects.toThrow(/budget exceeded/);
 
     // After close, the seed reveals and verifies against the hash.
