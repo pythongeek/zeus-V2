@@ -11,6 +11,7 @@ import { RedEnvelope } from "@/components/RedEnvelope";
 import { ReloadOffers } from "@/components/ReloadOffers";
 import { VipWheel } from "@/components/VipWheel";
 import { CascadeBoard, type CascadeStepData } from "@/components/CascadeBoard";
+import { ZeusFigure, type ZeusMood } from "@/components/ZeusFigure";
 import { ReferralCard } from "@/components/ReferralCard";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
@@ -78,8 +79,10 @@ const SYMBOL_MARKS: Record<string, string> = {
 
 function SymbolTile({ symbol, spinning, win }: { symbol: string; spinning: boolean; win: boolean }) {
   const [failed, setFailed] = useState(false);
+  const { t } = useLang();
+  const isScatter = symbol === "thunderbolt";
   return (
-    <div className="relative w-full h-full rounded-md bg-gradient-to-b from-[#23202F] to-[#12101C] border border-[#2A2A35] overflow-hidden">
+    <div className={`relative w-full h-full rounded-md bg-gradient-to-b from-[#23202F] to-[#12101C] border overflow-hidden ${isScatter ? "border-[#FFD54F]/80" : "border-[#2A2A35]"}`}>
       <span
         className="absolute inset-0 flex items-center justify-center font-bold text-[#D4AF37]/80"
         style={{ fontFamily: "Cinzel, serif", fontSize: "1.5rem" }}
@@ -96,6 +99,11 @@ function SymbolTile({ symbol, spinning, win }: { symbol: string; spinning: boole
           } ${win ? "scale-110 drop-shadow-[0_0_14px_rgba(255,213,79,0.95)]" : ""}`}
           draggable={false}
         />
+      )}
+      {isScatter && (
+        <span className="absolute bottom-0 inset-x-0 z-10 text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/75 py-px">
+          {t("scatterBadge")}
+        </span>
       )}
     </div>
   );
@@ -390,6 +398,14 @@ export default function Game() {
   const [bigWinText, setBigWinText] = useState("");
   const [lightningFlash, setLightningFlash] = useState(false);
   const [celebration, setCelebration] = useState<CelebrationData | null>(null);
+  // Stage Zeus + scatter presentation (2026-10-30): cascade scatter
+  // count from the server result, classic scatter count from the
+  // settled grid, and the thunder-throw / board-shake triggers.
+  const [cascadeScatters, setCascadeScatters] = useState<number | null>(null);
+  const [cascadeFsAwarded, setCascadeFsAwarded] = useState(0);
+  const [lastScatter, setLastScatter] = useState(0);
+  const [strikeKey, setStrikeKey] = useState(0);
+  const [boardShake, setBoardShake] = useState(false);
   const [recentSpins, setRecentSpins] = useState<Array<{ id: number; winAmount: string; betAmount: string; currency: string; isWin: boolean; createdAt: Date }>>([]);
   const autoSpinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -712,6 +728,8 @@ export default function Game() {
         store.setSession({ ...store.session, startingNonce: result.nonce });
         lastModeRef.current = (result.mode as "classic" | "cascade") ?? "cascade";
         if (result.mode === "cascade" && result.cascade) {
+          setCascadeScatters(typeof result.cascade.scatters === "number" ? result.cascade.scatters : null);
+          setCascadeFsAwarded(result.freeSpinsAwarded ?? 0);
           setCascadeSteps(result.cascade.steps as CascadeStepData[]);
           setCascadeFinal(result.cascade.finalGrid as number[]);
           setCascadePlayKey((k) => k + 1);
@@ -831,10 +849,24 @@ export default function Game() {
       toast.error(e?.message || t("spinFailed"));
       store.setGameState("idle");
     }
-  }, [store.session, store.betAmount, store.activeCurrency, store.turboMode, store.gameState, t]);
+  // store.mode and store.freeSpinsRemaining MUST be deps: without
+  // them the first spin after switching modes ran the PREVIOUS mode's
+  // path from the stale closure (mode switch doesn't touch the other
+  // deps, and gameState only flips once the wrong spin is already
+  // running) — the board kept showing the old mode while the result
+  // text and balance moved. Caught in live verification 2026-10-30.
+  }, [store.session, store.betAmount, store.activeCurrency, store.turboMode, store.gameState, store.mode, store.freeSpinsRemaining, t]);
 
   const handleSpinComplete = (result: any) => {
     store.setLastSpin(result);
+    // Classic scatter count from the settled grid (cascade shows its
+    // own count on the board, from the server's initial-grid count).
+    if (result.mode === "cascade") {
+      setLastScatter(0);
+    } else if (Array.isArray(result.symbols)) {
+      const flat = (result.symbols as any[]).flat();
+      setLastScatter(flat.filter((s) => s === "thunderbolt").length);
+    }
     const winAmount = parseFloat(result.winAmount);
     store.setLastWin(winAmount);
     setLastResult({
@@ -1052,6 +1084,25 @@ export default function Game() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleSpin, store.gameState]);
 
+  // Stage Zeus mood: he throws thunder whenever a celebration or the
+  // feature overlay fires; the board shakes with the strike.
+  const zeusMood: ZeusMood =
+    celebration || showBigWin
+      ? "strike"
+      : store.gameState === "spinning"
+        ? "spin"
+        : store.freeSpinsRemaining > 0
+          ? "freespins"
+          : "idle";
+  useEffect(() => {
+    if (celebration || showBigWin) {
+      setStrikeKey((k) => k + 1);
+      setBoardShake(true);
+      const id = setTimeout(() => setBoardShake(false), 700);
+      return () => clearTimeout(id);
+    }
+  }, [celebration, showBigWin]);
+
   const activeBalance = store.balances.find(b => b.currency === store.activeCurrency);
   const bdtEquivalent = activeBalance ? activeBalance.available * (BDT_RATES[store.activeCurrency] || 1) : 0;
 
@@ -1187,17 +1238,9 @@ export default function Game() {
         </div>
       ) : null}
 
-      {/* Step 11: red envelope drop banner */}
+      {/* Step 11: red envelope drop banner (renders only while a
+          drop is live, so the stage stays clean otherwise) */}
       <RedEnvelope />
-
-      {/* Step 9: live win ticker (real settled wins only) */}
-      <LiveTicker />
-
-      {/* Step 13: VIP strip + lucky wheel */}
-      <VipWheel />
-
-      {/* Step 14: referral card */}
-      <ReferralCard />
 
       {/* Main Game Area */}
       <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-72px)] px-4 py-6">
@@ -1220,12 +1263,24 @@ export default function Game() {
           ))}
         </div>
 
-        {/* Game Title */}
-        <div className="text-center mb-4">
-          <h1 className="text-2xl sm:text-3xl font-bold text-[#D4AF37] tracking-widest" style={{ fontFamily: "Cinzel, serif" }}>
-            ZEUS THUNDER
-          </h1>
-          <p className="text-xs text-[#B8B8C8] tracking-widest mt-1">{t("tagline")}</p>
+        {/* Stage header: Zeus alive on the left of the title plaque,
+            overlooking the board (reference layout); he reacts to
+            spins and throws thunder on big wins. */}
+        <div className="relative z-30 w-full max-w-[900px] h-[96px] sm:h-[118px]">
+          <ZeusFigure
+            mood={zeusMood}
+            strikeKey={strikeKey}
+            lite={store.liteMode}
+            className="absolute left-0 sm:left-3 -bottom-4 w-[100px] h-[118px] sm:w-[132px] sm:h-[156px]"
+          />
+          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-center pointer-events-none">
+            <div className="text-center px-5 sm:px-8 py-1.5 rounded-xl border border-[#D4AF37]/70 bg-gradient-to-b from-[#241C3A]/95 to-[#14101F]/95 shadow-[0_0_30px_rgba(212,175,55,0.25)]">
+              <h1 className="text-xl sm:text-3xl font-bold text-[#D4AF37] tracking-widest" style={{ fontFamily: "Cinzel, serif" }}>
+                ZEUS THUNDER
+              </h1>
+              <p className="text-[10px] sm:text-xs text-[#B8B8C8] tracking-widest mt-0.5">{t("tagline")}</p>
+            </div>
+          </div>
         </div>
 
         {/* Step 6: mode selector (classic default) + disclosure */}
@@ -1263,13 +1318,8 @@ export default function Game() {
           </div>
         ) : null}
 
-        {/* Zeus Character (decorative) */}
-        <div className="absolute right-8 top-20 w-48 h-72 opacity-40 pointer-events-none hidden lg:block">
-          <img src="/assets/zeus-character.webp" alt="Zeus" className="w-full h-full object-contain" />
-        </div>
-
         {/* Slot Machine Frame */}
-        <div className="relative bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full">
+        <div className={`relative bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${boardShake ? "animate-board-shake" : ""}`}>
           {/* Greek key pattern border */}
           <div className="absolute inset-0 rounded-2xl border border-[#996E20]/40 pointer-events-none" />
           {/* Corner bolts */}
@@ -1287,6 +1337,8 @@ export default function Game() {
                 turbo={store.turboMode}
                 currencySymbol={CURRENCY_SYMBOLS[store.activeCurrency] ?? ""}
                 onDone={() => cascadeDoneRef.current?.()}
+                scatters={cascadeScatters}
+                fsAwarded={cascadeFsAwarded}
               />
             ) : engineFailed || store.liteMode ? (
               <div className="grid grid-cols-5 gap-1">
@@ -1305,7 +1357,7 @@ export default function Game() {
                     ) : (
                       <div className={`flex flex-col ${store.gameState === "spinning" && reelIndex === liteStopped - 1 ? "animate-reel-land" : ""}`}>
                         {reel.map((symbol, rowIndex) => (
-                          <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
+                          <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${symbol === "thunderbolt" ? "scatter-glow rounded-lg" : ""} ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
                             <SymbolTile symbol={symbol} spinning={false} win={winCells.has(`${reelIndex}:${rowIndex}`)} />
                           </div>
                         ))}
@@ -1321,6 +1373,27 @@ export default function Game() {
                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#0A0A0F]/85 rounded-lg">
                     <div className="w-10 h-10 rounded-full border-2 border-[#2A2A35] border-t-[#D4AF37] animate-spin" />
                     <div className="text-xs tracking-widest text-[#9E9EAC]">{t("loading")}</div>
+                  </div>
+                )}
+                {/* Scatter badges over the settled Pixi board: the
+                    thunderbolt is the free-spins trigger and must read
+                    as SCATTER, like on the Lite board. */}
+                {boardReady && store.gameState !== "spinning" && (
+                  <div className="absolute inset-0 z-10 grid grid-cols-5 grid-rows-3 pointer-events-none">
+                    {Array.from({ length: 3 }).flatMap((_, row) =>
+                      Array.from({ length: 5 }).map((_, reel) => (
+                        <div key={`${reel}:${row}`} className="relative">
+                          {reelSymbols[reel]?.[row] === "thunderbolt" && (
+                            <>
+                              <span className="absolute inset-x-[6%] top-[6%] bottom-[12%] scatter-glow rounded-md" />
+                              <span className="absolute bottom-[7%] inset-x-[10%] text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/70 py-px rounded">
+                                {t("scatterBadge")}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      )),
+                    )}
                   </div>
                 )}
               </div>
@@ -1358,11 +1431,23 @@ export default function Game() {
               </div>
             )
           )}
+          {/* Classic scatter tracker (cascade shows its own on the board) */}
+          {lastScatter >= 1 && store.gameState !== "spinning" && store.mode === "classic" && (
+            <div className="mt-1.5 flex items-center justify-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-black tracking-wider bg-[#2A2110]/90 text-[#FFD54F] border border-[#FFD54F]/60">
+                {t("scatterLanded", { n: lastScatter })}
+              </span>
+              {lastScatter === 2 && (
+                <span className="text-[11px] text-[#F4D03F]/90">{t("scatterOneMore")}</span>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Control Panel */}
-        <div className="mt-6 bg-[#12121A]/95 border border-[#2A2A35] rounded-xl p-4 max-w-[900px] w-full">
-          <div className="flex flex-wrap items-center justify-between gap-4">
+        {/* Control Panel — clean two-row layout (reference style):
+            bet + info row on top, turbo / SPIN / auto centred below. */}
+        <div className="mt-4 bg-[#12121A]/95 border border-[#2A2A35] rounded-xl p-4 max-w-[900px] w-full">
+          <div className="flex flex-wrap items-end justify-between gap-3">
             {/* Bet Controls */}
             <div className="flex items-center gap-3">
               <div>
@@ -1413,73 +1498,6 @@ export default function Game() {
               </div>
             </div>
 
-            {/* Spin Button */}
-            <div className="flex items-center gap-3">
-              {/* Auto Spin */}
-              <div className="flex flex-col gap-1">
-                <select
-                  value={store.autoSpinCount}
-                  onChange={(e) => {
-                    const count = parseInt(e.target.value);
-                    store.setAutoSpinCount(count);
-                    store.setIsAutoSpinning(count > 0);
-                  }}
-                  className="bg-[#1A1A25] border border-[#2A2A35] rounded-lg px-2 py-1 text-xs text-white focus:outline-none"
-                  disabled={store.gameState === "spinning"}
-                >
-                  <option value={0}>{t("autoOff")}</option>
-                  {((store.config?.auto_spin_options as number[] | undefined) ?? [10, 25, 50, 100]).map((n) => (
-                    <option key={n} value={n}>{t("autoSpins", { n })}</option>
-                  ))}
-                </select>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => store.setTurboMode(!store.turboMode)}
-                  className={`border-[#2A2A35] text-xs h-6 ${
-                    store.turboMode ? "bg-[#4FC3F7]/20 border-[#4FC3F7] text-[#4FC3F7]" : "bg-[#1A1A25]"
-                  }`}
-                >
-                  <Zap className="w-3 h-3 mr-1" />
-                  {t("turbo")}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => store.setLiteMode(!store.liteMode)}
-                  className={`border-[#2A2A35] text-xs h-6 ${
-                    store.liteMode ? "bg-[#4FC3F7]/20 border-[#4FC3F7] text-[#4FC3F7]" : "bg-[#1A1A25]"
-                  }`}
-                >
-                  {t("liteMode")}
-                </Button>
-              </div>
-
-              {/* Main Spin Button */}
-              <div className="flex flex-col items-center gap-1">
-              <button
-                id="spin-btn"
-                onClick={handleSpin}
-                disabled={store.gameState === "spinning"}
-                className={`relative w-[84px] h-[84px] sm:w-24 sm:h-24 rounded-full transition-all duration-200 ${
-                  store.gameState === "spinning"
-                    ? "opacity-70 scale-95 cursor-not-allowed"
-                    : "hover:scale-105 hover:shadow-[0_0_30px_rgba(212,175,55,0.5)] active:scale-95"
-                }`}
-              >
-                <img
-                  src="/assets/btn-spin.webp"
-                  alt={t("spinAlt")}
-                  className={`w-full h-full object-contain ${
-                    store.gameState === "spinning" ? "animate-spin-slow" : ""
-                  }`}
-                  draggable={false}
-                />
-              </button>
-              <span className="text-[10px] font-bold tracking-[0.3em] text-[#D4AF37]">{t("spinAlt")}</span>
-              </div>
-            </div>
-
             {/* Info Buttons */}
             <div className="flex items-center gap-2">
               <Button
@@ -1500,6 +1518,78 @@ export default function Game() {
                 <Shield className="w-4 h-4 mr-1" />
                 {t("fair")}
               </Button>
+            </div>
+          </div>
+
+          {/* Spin row: round turbo/lite toggles, SPIN centre, auto right */}
+          <div className="mt-4 flex items-center justify-center gap-5 sm:gap-9">
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => store.setTurboMode(!store.turboMode)}
+                title={t("turbo")}
+                className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all ${
+                  store.turboMode
+                    ? "bg-[#4FC3F7]/20 border-[#4FC3F7] text-[#4FC3F7]"
+                    : "border-[#2A2A35] bg-[#1A1A25] text-[#B8B8C8] hover:border-[#D4AF37]"
+                }`}
+              >
+                <Zap className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => store.setLiteMode(!store.liteMode)}
+                title={t("liteMode")}
+                className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all ${
+                  store.liteMode
+                    ? "bg-[#4FC3F7]/20 border-[#4FC3F7] text-[#4FC3F7]"
+                    : "border-[#2A2A35] bg-[#1A1A25] text-[#B8B8C8] hover:border-[#D4AF37]"
+                }`}
+              >
+                <Sparkles className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Main Spin Button */}
+            <div className="flex flex-col items-center gap-1">
+              <button
+                id="spin-btn"
+                onClick={handleSpin}
+                disabled={store.gameState === "spinning"}
+                className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-full transition-all duration-200 ${
+                  store.gameState === "spinning"
+                    ? "opacity-70 scale-95 cursor-not-allowed"
+                    : "hover:scale-105 hover:shadow-[0_0_30px_rgba(212,175,55,0.5)] active:scale-95"
+                }`}
+              >
+                <img
+                  src="/assets/btn-spin.webp"
+                  alt={t("spinAlt")}
+                  className={`w-full h-full object-contain ${
+                    store.gameState === "spinning" ? "animate-spin-slow" : ""
+                  }`}
+                  draggable={false}
+                />
+              </button>
+              <span className="text-[10px] font-bold tracking-[0.3em] text-[#D4AF37]">{t("spinAlt")}</span>
+            </div>
+
+            {/* Auto Spin */}
+            <div className="flex flex-col items-center gap-1.5">
+              <select
+                value={store.autoSpinCount}
+                onChange={(e) => {
+                  const count = parseInt(e.target.value);
+                  store.setAutoSpinCount(count);
+                  store.setIsAutoSpinning(count > 0);
+                }}
+                className="bg-[#1A1A25] border border-[#2A2A35] rounded-full px-3 py-2.5 text-xs text-white focus:outline-none"
+                disabled={store.gameState === "spinning"}
+              >
+                <option value={0}>{t("autoOff")}</option>
+                {((store.config?.auto_spin_options as number[] | undefined) ?? [10, 25, 50, 100]).map((n) => (
+                  <option key={n} value={n}>{t("autoSpins", { n })}</option>
+                ))}
+              </select>
+              <span className="text-[9px] font-bold tracking-[0.25em] text-[#9E9EAC]">{t("autoLabel")}</span>
             </div>
           </div>
         </div>
@@ -1538,6 +1628,14 @@ export default function Game() {
             </div>
           </div>
         )}
+
+        {/* Lounge cards below the stage — the play area stays clean
+            (ticker / VIP / referral live here now, 2026-10-30). */}
+        <div className="w-full max-w-[900px] mt-4 space-y-3">
+          <LiveTicker />
+          <VipWheel />
+          <ReferralCard />
+        </div>
       </div>
 
       {/* Tiered Win Celebration (GSAP) */}

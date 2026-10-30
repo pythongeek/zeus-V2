@@ -227,3 +227,76 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Stage Zeus + scatter presentation (owner request 2026-10-30:
+   the god lives on the stage and throws thunder on big wins). */
+@keyframes zeus-float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-7px) scale(1.012); }
+}
+
+@keyframes zeus-aura {
+  0%, 100% { filter: drop-shadow(0 0 10px rgba(120, 180, 255, 0.35)) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45)); }
+  50% { filter: drop-shadow(0 0 22px rgba(140, 200, 255, 0.6)) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45)); }
+}
+
+@keyframes zeus-rock {
+  0%, 100% { transform: rotate(-1.1deg) translateY(0); }
+  50% { transform: rotate(1.1deg) translateY(-3px); }
+}
+
+@keyframes zeus-strike-pose {
+  0% { transform: scale(1) rotate(0deg); }
+  30% { transform: scale(1.09) rotate(-2.4deg) translateY(-4px); }
+  60% { transform: scale(1.05) rotate(1deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+@keyframes bolt-flicker {
+  0%, 100% { opacity: 0.25; transform: scale(0.92) rotate(-4deg); }
+  18% { opacity: 1; transform: scale(1.08) rotate(3deg); }
+  36% { opacity: 0.4; }
+  54% { opacity: 0.95; transform: scale(1.02) rotate(-2deg); }
+  72% { opacity: 0.35; }
+}
+
+@keyframes bolt-strike-draw {
+  0% { stroke-dashoffset: 100; opacity: 1; }
+  55% { stroke-dashoffset: 0; opacity: 1; }
+  80% { stroke-dashoffset: 0; opacity: 0.9; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+@keyframes strike-glow-pop {
+  0% { opacity: 0.95; transform: scale(0.5); }
+  100% { opacity: 0; transform: scale(1.9); }
+}
+
+@keyframes board-shake {
+  0%, 100% { transform: translate(0, 0); }
+  15% { transform: translate(-5px, 2px) rotate(-0.35deg); }
+  35% { transform: translate(5px, -2px) rotate(0.35deg); }
+  55% { transform: translate(-4px, -1px); }
+  75% { transform: translate(3px, 1px); }
+}
+
+@keyframes scatter-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 213, 79, 0.95), 0 0 10px rgba(255, 213, 79, 0.45); }
+  50% { box-shadow: 0 0 0 2px rgba(255, 213, 79, 1), 0 0 22px rgba(255, 213, 79, 0.85); }
+}
+
+.zeus-idle { animation: zeus-float 4.6s ease-in-out infinite, zeus-aura 3.8s ease-in-out infinite; }
+.zeus-spin { animation: zeus-rock 0.9s ease-in-out infinite, zeus-aura 1.4s ease-in-out infinite; }
+.zeus-strike { animation: zeus-strike-pose 0.85s ease-out, zeus-aura 0.85s ease-in-out; }
+.bolt-flicker { animation: bolt-flicker 2.6s linear infinite; transform-origin: center; }
+.bolt-strike-path { stroke-dasharray: 100; stroke-dashoffset: 100; animation: bolt-strike-draw 0.8s ease-out forwards; }
+.strike-glow-pop { animation: strike-glow-pop 0.8s ease-out forwards; }
+.animate-board-shake { animation: board-shake 0.6s ease-in-out; }
+.scatter-glow { animation: scatter-pulse 1.5s ease-in-out infinite; border-radius: 0.375rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .zeus-idle, .zeus-spin, .zeus-strike, .bolt-flicker, .animate-board-shake, .scatter-glow {
+    animation: none;
+  }
+  .bolt-strike-path { animation: none; opacity: 0; }
+}

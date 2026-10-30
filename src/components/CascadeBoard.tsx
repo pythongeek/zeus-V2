@@ -26,6 +26,19 @@ const SYMBOL_NAMES: Record<number, string> = {
 };
 const LADDER = [1, 2, 3, 5, 10];
 
+/**
+ * Pre-spin placeholder grid: a neutral mix with NO scatter (id 0).
+ * The old fallback filled the board with id 0 — thirty ZEUS scatters
+ * on an unplayed board, which reads as a broken (or rigged) game.
+ */
+const PLACEHOLDER_GRID: number[] = [
+  8, 3, 4, 9, 5, 7,
+  2, 6, 1, 8, 4, 9,
+  3, 5, 2, 7, 8, 6,
+  1, 3, 9, 5, 7, 4,
+  2, 8, 6, 3, 1, 9,
+];
+
 type Phase = "idle" | "highlight" | "explode" | "drop";
 
 export function CascadeBoard({
@@ -35,6 +48,8 @@ export function CascadeBoard({
   turbo,
   currencySymbol,
   onDone,
+  scatters,
+  fsAwarded,
 }: {
   steps: CascadeStepData[] | null;
   finalGrid: number[] | null;
@@ -42,8 +57,12 @@ export function CascadeBoard({
   turbo: boolean;
   currencySymbol: string;
   onDone: () => void;
+  /** ZEUS scatters on the initial grid (server-resolved; FS trigger count). */
+  scatters?: number | null;
+  /** Free spins this spin awarded (0 when none). */
+  fsAwarded?: number;
 }) {
-  const { num } = useLang();
+  const { num, t } = useLang();
   const [stepIdx, setStepIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");
   const [shownWin, setShownWin] = useState(0);
@@ -83,7 +102,7 @@ export function CascadeBoard({
     }
     setPhase("highlight");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playKey]);
+  }, [playKey, steps]);
 
   useEffect(() => {
     if (!steps || phase === "idle") return;
@@ -142,23 +161,53 @@ export function CascadeBoard({
           {num(shownWin.toFixed(2))}
         </span>
       </div>
+      {/* Scatter tracker: scatters are counted on the initial grid
+          (that is the certified trigger); 3+ awards free spins in
+          the active bundle (zeus-cascade-v1 threshold). */}
+      {scatters != null && scatters >= 1 && (
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <span
+            className={`px-2.5 py-0.5 rounded-full text-xs font-black tracking-wider border ${
+              (fsAwarded ?? 0) > 0
+                ? "bg-[#FFD54F] text-black border-[#FFD54F] animate-pulse"
+                : "bg-[#2A2110]/90 text-[#FFD54F] border-[#FFD54F]/60"
+            }`}
+          >
+            {t("scatterLanded", { n: scatters })}
+          </span>
+          {(fsAwarded ?? 0) === 0 && scatters === 2 && (
+            <span className="text-[11px] text-[#F4D03F]/90">{t("scatterOneMore")}</span>
+          )}
+        </div>
+      )}
       {/* 6x5 grid */}
       <div className="grid grid-cols-6 gap-1 sm:gap-1.5 bg-black/40 rounded-xl p-1.5 sm:p-2 border border-[#D4AF37]/20">
-        {(activeGrid ?? Array(30).fill(0)).map((sym, idx) => {
+        {(activeGrid ?? PLACEHOLDER_GRID).map((sym, idx) => {
           const isWin = phase !== "idle" && winPositions.has(idx);
+          // Symbol 0 is the ZEUS scatter: it never pays as a cluster —
+          // it is the free-spins trigger, so it wears the SCATTER
+          // treatment (gold pulse ring + ribbon) on every grid.
+          const isScatter = sym === 0;
           return (
             <div
               key={idx}
               className={`relative aspect-square flex items-center justify-center rounded-md bg-[#1A1A25]/80 ${
+                isScatter ? "scatter-glow bg-[#2A2110]/90" : ""
+              } ${
                 isWin && phase === "highlight" ? "ring-2 ring-[#FFD54F] animate-pulse" : ""
               } ${isWin && phase === "explode" ? "scale-125 opacity-30 transition-all duration-200" : "transition-all duration-200"}`}
             >
               <img
                 src={`/assets/symbol-${SYMBOL_NAMES[sym] ?? "zeus"}.webp`}
                 alt={SYMBOL_NAMES[sym] ?? "zeus"}
-                className="w-[86%] h-[86%] object-contain"
+                className={`${isScatter ? "w-[96%] h-[96%]" : "w-[86%] h-[86%]"} object-contain`}
                 draggable={false}
               />
+              {isScatter && (
+                <span className="absolute bottom-0 inset-x-0 text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/75 py-px rounded-b-md">
+                  {t("scatterBadge")}
+                </span>
+              )}
             </div>
           );
         })}
