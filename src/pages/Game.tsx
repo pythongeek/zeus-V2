@@ -387,6 +387,8 @@ export default function Game() {
   // U4: Lite-board stop progress — reels below this count show finals
   const [liteStopped, setLiteStopped] = useState(5);
   const fsWinTotalRef = useRef(0);
+  // In-flight startSession promise — see handleStartSession.
+  const sessionStartRef = useRef<Promise<any> | null>(null);
   // Step 6: cascade playback state.
   const [cascadeSteps, setCascadeSteps] = useState<CascadeStepData[] | null>(null);
   const [cascadeSpinning, setCascadeSpinning] = useState(false);
@@ -709,23 +711,39 @@ export default function Game() {
   }, [isAuthenticated]);
 
   const handleStartSession = async () => {
-    try {
-      const result = await startSession.mutateAsync({ clientSeed: store.clientSeed });
-      store.setSession({
-        sessionId: result.sessionId,
-        serverSeedHash: result.serverSeedHash,
-        clientSeed: result.clientSeed,
-        startingNonce: result.startingNonce,
-      });
-      // Wheel-token free spins are granted INTO the new session by
-      // startSession; seed the counter from its response so the
-      // player sees them (and the FS music bed starts) before the
-      // first spin, not only after a spin response reveals them.
-      store.setFreeSpinsRemaining(result.freeSpinsGranted);
-    } catch (e: any) {
-      console.error("Failed to start session:", e);
-      toast.error(e?.message || t("sessionFailed"));
-    }
+    // Overlapping starts are dangerous: startSession completes the
+    // user's previous session server-side, so two starts in flight
+    // can complete each other's session and race the store onto a
+    // dead one — after which every spin fails with "Active session
+    // not found" until a manual reload (seen live 2026-10-29 and
+    // 2026-10-31). Share one in-flight start; return the session.
+    if (sessionStartRef.current) return sessionStartRef.current;
+    const p = (async () => {
+      try {
+        const result = await startSession.mutateAsync({ clientSeed: store.clientSeed });
+        const session = {
+          sessionId: result.sessionId,
+          serverSeedHash: result.serverSeedHash,
+          clientSeed: result.clientSeed,
+          startingNonce: result.startingNonce,
+        };
+        store.setSession(session);
+        // Wheel-token free spins are granted INTO the new session by
+        // startSession; seed the counter from its response so the
+        // player sees them (and the FS music bed starts) before the
+        // first spin, not only after a spin response reveals them.
+        store.setFreeSpinsRemaining(result.freeSpinsGranted);
+        return session;
+      } catch (e: any) {
+        console.error("Failed to start session:", e);
+        toast.error(e?.message || t("sessionFailed"));
+        return null;
+      } finally {
+        sessionStartRef.current = null;
+      }
+    })();
+    sessionStartRef.current = p;
+    return p;
   };
 
   const handleSpin = useCallback(async () => {
@@ -749,6 +767,41 @@ export default function Game() {
       }
     }
 
+    // The session this spin runs on. Starts as the store's
+    // session; spinWithRecovery may replace it with a fresh one,
+    // and the post-spin nonce bookkeeping must spread THIS object,
+    // not the stale closure snapshot, or the dead id comes back.
+    let liveSession = store.session;
+    // One transparent recovery for a replaced session: if the
+    // server says the session is gone (startSession completed it
+    // — a second tab or a reload race can do that to this page),
+    // start a fresh session and retry ONCE with a new requestId.
+    // The rejected attempt wrote nothing (the session check is
+    // the spin transaction's first statement), so the retry
+    // cannot double-bet. Never recover while free spins remain:
+    // those live on the dead session, and silently turning a
+    // free spin into a paid one would be worse than the error.
+    const spinWithRecovery = async (args: Parameters<typeof spin.mutateAsync>[0]) => {
+      try {
+        return await spin.mutateAsync({ ...args, sessionId: liveSession.sessionId });
+      } catch (e: any) {
+        if (
+          store.freeSpinsRemaining > 0 ||
+          !String(e?.message ?? "").includes("Active session not found")
+        ) {
+          throw e;
+        }
+        const fresh = await handleStartSession();
+        if (!fresh) throw e;
+        liveSession = fresh;
+        return await spin.mutateAsync({
+          ...args,
+          sessionId: fresh.sessionId,
+          requestId: crypto.randomUUID(),
+        });
+      }
+    };
+
     // Step 6: cascade path — server resolves, board plays back.
     const wantCascade =
       store.freeSpinsRemaining > 0 ? lastModeRef.current === "cascade" : store.mode === "cascade";
@@ -768,8 +821,8 @@ export default function Game() {
       setCascadeSpinning(true);
       const spinStartedAt = Date.now();
       try {
-        const result = await spin.mutateAsync({
-          sessionId: store.session.sessionId,
+        const result = await spinWithRecovery({
+          sessionId: liveSession.sessionId,
           betAmount: String(store.betAmount),
           currency: store.activeCurrency,
           mode: "cascade",
@@ -787,7 +840,7 @@ export default function Game() {
         if (flightLeftMs > 0) await new Promise((r) => setTimeout(r, flightLeftMs));
         audio.stopLoop("reels");
         setCascadeSpinning(false);
-        store.setSession({ ...store.session, startingNonce: result.nonce });
+        store.setSession({ ...liveSession, startingNonce: result.nonce });
         lastModeRef.current = (result.mode as "classic" | "cascade") ?? "cascade";
         if (result.mode === "cascade" && result.cascade) {
           setCascadeScatters(typeof result.cascade.scatters === "number" ? result.cascade.scatters : null);
@@ -847,8 +900,8 @@ export default function Game() {
     });
 
     try {
-      const result = await spin.mutateAsync({
-        sessionId: store.session.sessionId,
+      const result = await spinWithRecovery({
+        sessionId: liveSession.sessionId,
         betAmount: String(store.betAmount),
         currency: store.activeCurrency,
         requestId: crypto.randomUUID(),
@@ -857,7 +910,7 @@ export default function Game() {
 
       // Update session nonce
       store.setSession({
-        ...store.session,
+        ...liveSession,
         startingNonce: result.nonce,
       });
 
