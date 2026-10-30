@@ -190,7 +190,7 @@ export function CascadeBoard({
           (that is the certified trigger); 3+ awards free spins in
           the active bundle (zeus-cascade-v1 threshold). */}
       {scatters != null && scatters >= 1 && (
-        <div className="flex items-center justify-center gap-2 mb-2">
+        <div className="flex items-center justify-center gap-2 mb-2 animate-bounce-in">
           <span
             className={`px-2.5 py-0.5 rounded-full text-xs font-black tracking-wider border ${
               (fsAwarded ?? 0) > 0
@@ -212,12 +212,17 @@ export function CascadeBoard({
           // Symbol 0 is the ZEUS scatter: it never pays as a cluster —
           // it is the free-spins trigger, so it wears the SCATTER
           // treatment (gold pulse ring + ribbon) on every grid.
+          // The pulse ring sits on the <img>, NOT this tile div: an
+          // element carries ONE animation list, and the glow's
+          // animation silently overrode the tile's drop-in/tumble
+          // animations — scatter tiles hung still while the rest of
+          // the board fell around them (found 2026-10-31).
           const isScatter = sym === 0;
           return (
             <div
               key={idx}
               className={`relative aspect-square flex items-center justify-center rounded-md bg-[#1A1A25]/80 ${
-                isScatter ? "scatter-glow bg-[#2A2110]/90" : ""
+                isScatter ? "bg-[#2A2110]/90" : ""
               } ${
                 isWin && phase === "highlight" ? "ring-2 ring-[#FFD54F] animate-pulse" : ""
               } ${isWin && phase === "explode" ? "scale-125 opacity-30 transition-all duration-200" : "transition-all duration-200"} ${
@@ -234,7 +239,7 @@ export function CascadeBoard({
               <img
                 src={`/assets/symbol-${SYMBOL_NAMES[sym] ?? "zeus"}.webp`}
                 alt={SYMBOL_NAMES[sym] ?? "zeus"}
-                className={`${isScatter ? "w-[96%] h-[96%]" : "w-[86%] h-[86%]"} object-contain`}
+                className={`${isScatter ? "w-[96%] h-[96%] scatter-glow" : "w-[86%] h-[86%]"} object-contain`}
                 draggable={false}
               />
               {isScatter && (

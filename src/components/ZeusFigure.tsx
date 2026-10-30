@@ -12,7 +12,7 @@ import { useMemo } from "react";
  * it with a rectangular picture. Lite mode and
  * prefers-reduced-motion render him still.
  */
-export type ZeusMood = "idle" | "spin" | "freespins" | "strike";
+export type ZeusMood = "idle" | "spin" | "freespins" | "strike" | "scatter";
 
 function BoltShape({ className, style }: { className?: string; style?: React.CSSProperties }) {
   return (
@@ -48,9 +48,11 @@ export function ZeusFigure({
     ? ""
     : mood === "strike"
       ? "zeus-strike"
-      : mood === "spin"
-        ? "zeus-spin"
-        : "zeus-idle";
+      : mood === "scatter"
+        ? "zeus-scatter"
+        : mood === "spin"
+          ? "zeus-spin"
+          : "zeus-idle";
 
   return (
     <div className={`relative pointer-events-none select-none ${className ?? ""}`} aria-hidden="true">
@@ -68,15 +70,17 @@ export function ZeusFigure({
           staff grip upper-left, free fist mid-right. */}
       {!still && mood !== "strike" && (
         <>
-          <BoltShape className="bolt-flicker absolute w-[15%] left-[3%] bottom-[57%] opacity-80" />
+          <BoltShape className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[15%] left-[3%] bottom-[57%] opacity-80`} />
           <BoltShape
-            className="bolt-flicker absolute w-[10%] right-[22%] bottom-[44%] opacity-60"
+            className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[10%] right-[22%] bottom-[44%] opacity-60`}
             style={{ animationDelay: "1.3s" }}
           />
         </>
       )}
-      {/* Big-win thunder throw: bolt streaks from Zeus toward the board */}
-      {mood === "strike" && !still && (
+      {/* Thunder throw: bolt streaks from Zeus toward the board —
+          big wins (strike) and 2+ scatter settles (scatter) alike,
+          so the god visibly answers the board's big moments. */}
+      {(mood === "strike" || mood === "scatter") && !still && (
         <div key={strikeKey} className="absolute left-[52%] top-[38%] w-[290%] aspect-[3/2] z-30">
           <svg viewBox="0 0 300 200" className="w-full h-full overflow-visible">
             <path

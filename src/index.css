@@ -313,6 +313,25 @@
 .zeus-idle { animation: zeus-float 4.6s ease-in-out infinite, zeus-aura 3.8s ease-in-out infinite; }
 .zeus-spin { animation: zeus-rock 0.9s ease-in-out infinite, zeus-aura 1.4s ease-in-out infinite; }
 .zeus-strike { animation: zeus-strike-pose 0.85s ease-out, zeus-aura 0.85s ease-in-out; }
+/* One keyframe set animating transform AND filter together:
+   pairing this with zeus-aura (which also animates filter)
+   silently killed the brightness flash — the later animation
+   wins a shared property outright. */
+@keyframes zeus-scatter-charge {
+  0% { transform: scale(1) rotate(0deg); filter: brightness(1) drop-shadow(0 0 10px rgba(120, 180, 255, 0.35)); }
+  20% { transform: scale(1.12) rotate(-2deg) translateY(-4px); filter: brightness(1.28) drop-shadow(0 0 26px rgba(255, 213, 79, 0.85)); }
+  45% { transform: scale(1.09) rotate(-1.2deg) translateY(-3px); filter: brightness(1.18) drop-shadow(0 0 20px rgba(255, 213, 79, 0.65)); }
+  75% { transform: scale(1.03) rotate(0.5deg); filter: brightness(1.06) drop-shadow(0 0 12px rgba(255, 213, 79, 0.4)); }
+  100% { transform: scale(1) rotate(0deg); filter: brightness(1) drop-shadow(0 0 10px rgba(120, 180, 255, 0.35)); }
+}
+
+@keyframes bolt-flare {
+  0%, 100% { opacity: 0.55; transform: scale(1) rotate(-3deg); }
+  50% { opacity: 1; transform: scale(1.5) rotate(3deg); }
+}
+
+.zeus-scatter { animation: zeus-scatter-charge 1.6s ease-out; }
+.bolt-flare { animation: bolt-flare 0.4s ease-in-out infinite; transform-origin: center; }
 .bolt-flicker { animation: bolt-flicker 2.6s linear infinite; transform-origin: center; }
 .bolt-strike-path { stroke-dasharray: 100; stroke-dashoffset: 100; animation: bolt-strike-draw 0.8s ease-out forwards; }
 .strike-glow-pop { animation: strike-glow-pop 0.8s ease-out forwards; }
@@ -320,7 +339,7 @@
 .scatter-glow { animation: scatter-pulse 1.5s ease-in-out infinite; border-radius: 0.375rem; }
 
 @media (prefers-reduced-motion: reduce) {
-  .zeus-idle, .zeus-spin, .zeus-strike, .bolt-flicker, .animate-board-shake, .scatter-glow {
+  .zeus-idle, .zeus-spin, .zeus-strike, .zeus-scatter, .bolt-flicker, .bolt-flare, .animate-board-shake, .scatter-glow {
     animation: none;
   }
   .bolt-strike-path { animation: none; opacity: 0; }

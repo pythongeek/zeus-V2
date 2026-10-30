@@ -395,6 +395,19 @@ export default function Game() {
   const [cascadeFinal, setCascadeFinal] = useState<number[] | null>(null);
   const [cascadePlayKey, setCascadePlayKey] = useState(0);
   const cascadeDoneRef = useRef<(() => void) | null>(null);
+  // Zeus scatter reaction: when a spin settles with 2+ scatters
+  // (but no free-spins award — that gets the full strike via the
+  // unlock banner), Zeus charges his bolts at the board for a
+  // beat, in sync with the scatter badges landing.
+  const [scatterReact, setScatterReact] = useState(false);
+  const scatterReactTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerScatterReact = () => {
+    setScatterReact(true);
+    // Restart the board-bound bolt throw for this settle too.
+    setStrikeKey((k) => k + 1);
+    if (scatterReactTimer.current) clearTimeout(scatterReactTimer.current);
+    scatterReactTimer.current = setTimeout(() => setScatterReact(false), 1600);
+  };
   const autoSpinDoneRef = useRef(0);
   const playStartedAtRef = useRef<number>(Date.now());
   const realityShownRef = useRef(0);
@@ -853,6 +866,11 @@ export default function Game() {
             setTimeout(resolve, 30000); // playback can never hang the game
           });
           cascadeDoneRef.current = null;
+          // Zeus scatter reaction, in sync with the board's
+          // scatter chip: 2+ ZEUS on the initial grid, no award
+          // (an award strikes via the unlock banner instead).
+          const scCount = typeof result.cascade.scatters === "number" ? result.cascade.scatters : 0;
+          if (scCount >= 2 && (result.freeSpinsAwarded ?? 0) === 0) triggerScatterReact();
           if (
             typeof window !== "undefined" &&
             window.matchMedia?.("(prefers-reduced-motion: reduce)").matches &&
@@ -995,7 +1013,12 @@ export default function Game() {
       setLastScatter(0);
     } else if (Array.isArray(result.symbols)) {
       const flat = (result.symbols as any[]).flat();
-      setLastScatter(flat.filter((s) => s === "thunderbolt").length);
+      const sc = flat.filter((s) => s === "thunderbolt").length;
+      setLastScatter(sc);
+      // Zeus reacts to a near-trigger: 2+ scatters charge his
+      // bolts as the badges land. A free-spins award already gets
+      // the full strike through the unlock banner.
+      if (sc >= 2 && result.featureTriggered !== "free_spins") triggerScatterReact();
     }
     const winAmount = parseFloat(result.winAmount);
     store.setLastWin(winAmount);
@@ -1242,11 +1265,13 @@ export default function Game() {
   const zeusMood: ZeusMood =
     celebration || showBigWin
       ? "strike"
-      : store.gameState === "spinning"
-        ? "spin"
-        : store.freeSpinsRemaining > 0
-          ? "freespins"
-          : "idle";
+      : scatterReact
+        ? "scatter"
+        : store.gameState === "spinning"
+          ? "spin"
+          : store.freeSpinsRemaining > 0
+            ? "freespins"
+            : "idle";
   useEffect(() => {
     if (celebration || showBigWin) {
       setStrikeKey((k) => k + 1);
@@ -1541,7 +1566,7 @@ export default function Game() {
                   <div className="absolute inset-0 z-10 grid grid-cols-5 grid-rows-3 pointer-events-none">
                     {Array.from({ length: 3 }).flatMap((_, row) =>
                       Array.from({ length: 5 }).map((_, reel) => (
-                        <div key={`${reel}:${row}`} className="relative">
+                        <div key={`${reel}:${row}`} className="relative animate-bounce-in">
                           {reelSymbols[reel]?.[row] === "thunderbolt" && (
                             <>
                               <span className="absolute inset-x-[6%] top-[6%] bottom-[12%] scatter-glow rounded-md" />
