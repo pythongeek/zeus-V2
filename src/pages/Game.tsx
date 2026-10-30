@@ -474,7 +474,7 @@ export default function Game() {
   // D1: free-spin music bed while free spins remain.
   useEffect(() => {
     if (store.freeSpinsRemaining > 0) {
-      audio.startLoop("musicFs", "music-freespins.wav", "music", 0.9);
+      audio.startLoop("musicFs", ["bgm-freespins.opus", "bgm-freespins.m4a"], "music", 0.9);
     } else {
       audio.stopLoop("musicFs");
     }
@@ -707,6 +707,11 @@ export default function Game() {
         clientSeed: result.clientSeed,
         startingNonce: result.startingNonce,
       });
+      // Wheel-token free spins are granted INTO the new session by
+      // startSession; seed the counter from its response so the
+      // player sees them (and the FS music bed starts) before the
+      // first spin, not only after a spin response reveals them.
+      store.setFreeSpinsRemaining(result.freeSpinsGranted);
     } catch (e: any) {
       console.error("Failed to start session:", e);
       toast.error(e?.message || t("sessionFailed"));
