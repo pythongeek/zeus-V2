@@ -15,9 +15,13 @@ interface AudioPrefs {
   master: number; // 0-100
   music: number; // 0-100
   sfx: number; // 0-100
+  // Dedicated background-music switch (owner, 2026-10-31): ON by
+  // default; turning it off silences the music channel only and
+  // leaves SFX and the player's music volume untouched.
+  musicEnabled: boolean;
 }
 
-const DEFAULTS: AudioPrefs = { enabled: true, master: 80, music: 55, sfx: 80 };
+const DEFAULTS: AudioPrefs = { enabled: true, master: 80, music: 55, sfx: 80, musicEnabled: true };
 
 function loadPrefs(): AudioPrefs {
   try {
@@ -67,6 +71,7 @@ class SoundManager {
   /** 0-1 multiplier applied to a channel */
   private chGain(ch: Channel): number {
     if (!this.prefs.enabled) return 0;
+    if (ch === "music" && !this.prefs.musicEnabled) return 0;
     return (this.prefs.master / 100) * (this.prefs[ch] / 100);
   }
 
@@ -117,6 +122,14 @@ class SoundManager {
 
   setChannel(ch: Channel, v: number) {
     this.prefs[ch] = v;
+    this.save();
+    this.refreshLoops();
+  }
+
+  /** Background-music switch: silences/restores music loops in
+   * place (they keep playing at gain 0, so re-enabling is instant). */
+  setMusicEnabled(on: boolean) {
+    this.prefs.musicEnabled = on;
     this.save();
     this.refreshLoops();
   }

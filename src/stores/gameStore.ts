@@ -104,6 +104,8 @@ interface GameStore {
   setMasterVolume: (volume: number) => void;
   musicVolume: number;
   setMusicVolume: (volume: number) => void;
+  musicEnabled: boolean;
+  setMusicEnabled: (enabled: boolean) => void;
   sfxVolume: number;
   setSfxVolume: (volume: number) => void;
 
@@ -189,6 +191,9 @@ export const useGameStore = create<GameStore>((set) => ({
   setMasterVolume: (volume) => set({ masterVolume: volume }),
   musicVolume: 55,
   setMusicVolume: (volume) => set({ musicVolume: volume }),
+  // Background music is ON by default (owner, 2026-10-31).
+  musicEnabled: true,
+  setMusicEnabled: (enabled) => set({ musicEnabled: enabled }),
   sfxVolume: 80,
   setSfxVolume: (volume) => set({ sfxVolume: volume }),
 

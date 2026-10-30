@@ -589,6 +589,9 @@ export default function Game() {
     audio.setChannel("music", store.musicVolume);
   }, [store.musicVolume]);
   useEffect(() => {
+    audio.setMusicEnabled(store.musicEnabled);
+  }, [store.musicEnabled]);
+  useEffect(() => {
     audio.setChannel("sfx", store.sfxVolume);
   }, [store.sfxVolume]);
 
@@ -2165,6 +2168,17 @@ for (let i = 0; i < 5; i++) {
                 step={1}
                 className="w-full"
               />
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#9E9EAC]">{t("bgMusic")}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => store.setMusicEnabled(!store.musicEnabled)}
+                className={`border-[#2A2A35] ${store.musicEnabled ? "bg-[#00E676]/20 text-[#00E676]" : ""}`}
+              >
+                {store.musicEnabled ? t("on") : t("off")}
+              </Button>
             </div>
             <div>
               <div className="text-sm text-[#9E9EAC] mb-2">{t("soundEffects")}</div>
