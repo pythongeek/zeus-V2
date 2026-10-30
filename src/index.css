@@ -158,6 +158,31 @@
   animation: reel-land 0.28s ease-out;
 }
 
+/* Cascade board: tiles drop in when a spin's first grid lands, and
+   tumble in place while the spin is in flight (2026-10-31 — the
+   board previously swapped instantly with no motion at all). */
+@keyframes cascade-drop {
+  0% { transform: translateY(-46px); opacity: 0; }
+  60% { transform: translateY(4px); opacity: 1; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+.animate-cascade-drop {
+  animation: cascade-drop 0.5s cubic-bezier(0.22, 0.9, 0.32, 1) both;
+}
+
+@keyframes cascade-tumble {
+  0% { transform: translateY(0); }
+  25% { transform: translateY(-7px); }
+  55% { transform: translateY(5px); }
+  80% { transform: translateY(-3px); }
+  100% { transform: translateY(0); }
+}
+
+.animate-cascade-tumble {
+  animation: cascade-tumble 0.36s ease-in-out infinite;
+}
+
 .animate-shimmer {
   animation: shimmer 1s linear infinite;
 }

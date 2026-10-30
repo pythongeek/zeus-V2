@@ -39,7 +39,7 @@ const PLACEHOLDER_GRID: number[] = [
   2, 8, 6, 3, 1, 9,
 ];
 
-type Phase = "idle" | "highlight" | "explode" | "drop";
+type Phase = "idle" | "dropin" | "highlight" | "explode" | "drop";
 
 export function CascadeBoard({
   steps,
@@ -50,6 +50,7 @@ export function CascadeBoard({
   onDone,
   scatters,
   fsAwarded,
+  spinning,
 }: {
   steps: CascadeStepData[] | null;
   finalGrid: number[] | null;
@@ -61,6 +62,9 @@ export function CascadeBoard({
   scatters?: number | null;
   /** Free spins this spin awarded (0 when none). */
   fsAwarded?: number;
+  /** True while a spin request is in flight: tiles tumble so the
+   * board is visibly alive before the result lands. */
+  spinning?: boolean;
 }) {
   const { num, t } = useLang();
   const [stepIdx, setStepIdx] = useState(0);
@@ -89,7 +93,7 @@ export function CascadeBoard({
       setPhase("idle");
       return;
     }
-    if (reduced || steps.length === 0) {
+    if (reduced) {
       setPhase("idle");
       setShownWin(steps.reduce((a, s) => a + parseFloat(s.stepWinMicro) / 1e8, 0));
       const id = setTimeout(() => {
@@ -100,7 +104,15 @@ export function CascadeBoard({
       }, 60);
       return () => clearTimeout(id);
     }
-    setPhase("highlight");
+    // Every spin's first grid DROPS IN — including losing spins
+    // (steps is empty for a loss). The fast path above is ONLY for
+    // reduced motion: an earlier version also fast-pathed empty
+    // steps, so the ~82% of cascade spins that lose swapped the
+    // board instantly with no motion at all (owner report,
+    // 2026-10-31). The phase machine below ends a step-less
+    // playback right after the drop-in.
+    setPhase("dropin");
+    audio.play("symbol-land", 0.9);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playKey, steps]);
 
@@ -108,10 +120,22 @@ export function CascadeBoard({
     if (!steps || phase === "idle") return;
     const scale = turbo ? 0.4 : 1;
     let ms = 300;
+    if (phase === "dropin") ms = 550;
     if (phase === "highlight") ms = 400;
     if (phase === "explode") ms = 250;
     const id = setTimeout(() => {
-      if (phase === "highlight") {
+      if (phase === "dropin") {
+        if (steps.length === 0) {
+          // Losing spin: the drop-in IS the whole playback.
+          setPhase("idle");
+          if (!doneRef.current) {
+            doneRef.current = true;
+            onDone();
+          }
+        } else {
+          setPhase("highlight");
+        }
+      } else if (phase === "highlight") {
         const step = steps[stepIdx];
         if (step) {
           setShownWin((w) => w + parseFloat(step.stepWinMicro) / 1e8);
@@ -119,6 +143,7 @@ export function CascadeBoard({
         }
         setPhase("explode");
       } else if (phase === "explode") {
+        audio.play("symbol-land", 0.45);
         setPhase("drop");
       } else if (phase === "drop") {
         if (stepIdx + 1 < steps.length) {
@@ -195,7 +220,16 @@ export function CascadeBoard({
                 isScatter ? "scatter-glow bg-[#2A2110]/90" : ""
               } ${
                 isWin && phase === "highlight" ? "ring-2 ring-[#FFD54F] animate-pulse" : ""
-              } ${isWin && phase === "explode" ? "scale-125 opacity-30 transition-all duration-200" : "transition-all duration-200"}`}
+              } ${isWin && phase === "explode" ? "scale-125 opacity-30 transition-all duration-200" : "transition-all duration-200"} ${
+                phase === "dropin" ? "animate-cascade-drop" : ""
+              } ${spinning && phase === "idle" ? "animate-cascade-tumble" : ""}`}
+              style={
+                phase === "dropin"
+                  ? { animationDelay: `${(idx % 6) * 30 + Math.floor(idx / 6) * 45}ms` }
+                  : spinning && phase === "idle"
+                    ? { animationDelay: `${(idx % 6) * 45}ms` }
+                    : undefined
+              }
             >
               <img
                 src={`/assets/symbol-${SYMBOL_NAMES[sym] ?? "zeus"}.webp`}

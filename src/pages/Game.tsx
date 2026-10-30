@@ -389,6 +389,7 @@ export default function Game() {
   const fsWinTotalRef = useRef(0);
   // Step 6: cascade playback state.
   const [cascadeSteps, setCascadeSteps] = useState<CascadeStepData[] | null>(null);
+  const [cascadeSpinning, setCascadeSpinning] = useState(false);
   const [cascadeFinal, setCascadeFinal] = useState<number[] | null>(null);
   const [cascadePlayKey, setCascadePlayKey] = useState(0);
   const cascadeDoneRef = useRef<(() => void) | null>(null);
@@ -757,6 +758,15 @@ export default function Game() {
       setLastResult(null);
       audio.unlock();
       audio.play("ui-click");
+      // Cascade gets the full spin soundscape too (2026-10-31: this
+      // branch previously played nothing but the click — no reel
+      // sound, no ambience, and the music never ducked).
+      audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
+      audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
+      audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
+      audio.duckMusic(true);
+      setCascadeSpinning(true);
+      const spinStartedAt = Date.now();
       try {
         const result = await spin.mutateAsync({
           sessionId: store.session.sessionId,
@@ -765,6 +775,18 @@ export default function Game() {
           mode: "cascade",
           requestId: crypto.randomUUID(),
         });
+        // The result often lands in ~200ms on a fast connection —
+        // too fast for the tumbling tiles and the reel loop to
+        // register at all, so the board appeared to swap instantly
+        // (owner report, 2026-10-31). Hold the in-flight
+        // presentation for a minimum beat first, mirroring
+        // classic's fixed reel-stop schedule; the board playback
+        // takes over from here.
+        const minFlightMs = store.turboMode ? 300 : 700;
+        const flightLeftMs = minFlightMs - (Date.now() - spinStartedAt);
+        if (flightLeftMs > 0) await new Promise((r) => setTimeout(r, flightLeftMs));
+        audio.stopLoop("reels");
+        setCascadeSpinning(false);
         store.setSession({ ...store.session, startingNonce: result.nonce });
         lastModeRef.current = (result.mode as "classic" | "cascade") ?? "cascade";
         if (result.mode === "cascade" && result.cascade) {
@@ -794,6 +816,9 @@ export default function Game() {
       } catch (e: any) {
         console.error("Cascade spin failed:", e);
         toast.error(e?.message || t("spinFailed"));
+        audio.stopLoop("reels");
+        audio.duckMusic(false);
+        setCascadeSpinning(false);
         store.setGameState("idle");
       }
       return;
@@ -921,6 +946,9 @@ export default function Game() {
     }
     const winAmount = parseFloat(result.winAmount);
     store.setLastWin(winAmount);
+    // A losing spin gets a soft landing thud in both modes (owner,
+    // 2026-10-31: losses were completely silent before).
+    if (winAmount <= 0) audio.play("lose-soft", 0.8);
     setLastResult({
       win: winAmount,
       bet: typeof result.betAmount === "string" ? parseFloat(result.betAmount) : store.betAmount,
@@ -1368,7 +1396,7 @@ export default function Game() {
                 <button
                   key={m}
                   disabled={store.gameState === "spinning" || store.freeSpinsRemaining > 0}
-                  onClick={() => store.setMode(m)}
+                  onClick={() => { store.setMode(m); setLastResult(null); setLastScatter(0); }}
                   className={`flex-1 py-1.5 text-xs sm:text-sm font-semibold disabled:opacity-60 ${
                     store.mode === m ? "bg-[#D4AF37] text-black" : "bg-black/40 text-[#B8B8C8]"
                   }`}
@@ -1416,6 +1444,7 @@ export default function Game() {
                 onDone={() => cascadeDoneRef.current?.()}
                 scatters={cascadeScatters}
                 fsAwarded={cascadeFsAwarded}
+                spinning={cascadeSpinning}
               />
             ) : engineFailed || store.liteMode ? (
               <div className="grid grid-cols-5 gap-1">
