@@ -41,7 +41,11 @@ const CORE_SFX = [
 
 class SoundManager {
   private prefs: AudioPrefs = loadPrefs();
-  private loops = new Map<string, Howl>();
+  private loops = new Map<string, { howl: Howl; ch: Channel; gain: number }>();
+  /** Music ducking during spins (owner, 2026-10-31): while the
+   * reels roll, the music channel fades to a whisper so the reel
+   * sounds own the mix; it swells back when the spin settles. */
+  private musicDuck = 1;
   private pool = new Map<string, Howl>();
   private unlocked = false;
   private listeners = new Set<(prefs: AudioPrefs) => void>();
@@ -172,10 +176,25 @@ class SoundManager {
     }, 350);
   }
 
+  private loopVolume(ch: Channel, gain: number): number {
+    return this.chGain(ch) * gain * (ch === "music" ? this.musicDuck : 1);
+  }
+
   private refreshLoops() {
-    this.loops.forEach((howl, key) => {
-      const ch: Channel = key.startsWith("music") ? "music" : "sfx";
-      howl.volume(this.chGain(ch));
+    this.loops.forEach(({ howl, ch, gain }) => {
+      howl.volume(this.loopVolume(ch, gain));
+    });
+  }
+
+  /** Fade the music bed down while reels spin (duck=true) and back
+   * up when they settle. SFX loops are never ducked. */
+  duckMusic(duck: boolean) {
+    const target = duck ? 0.12 : 1;
+    if (this.musicDuck === target) return;
+    this.musicDuck = target;
+    this.loops.forEach(({ howl, ch, gain }) => {
+      if (ch !== "music") return;
+      try { howl.fade(howl.volume(), this.loopVolume(ch, gain), 200); } catch { /* ignore */ }
     });
   }
 
@@ -209,16 +228,17 @@ class SoundManager {
     const howl = new Howl({
       src: files.map((f) => `/assets/audio/${f}`),
       loop: true,
-      volume: this.chGain(ch) * gain,
+      volume: this.loopVolume(ch, gain),
       preload: true,
     });
     howl.play();
-    this.loops.set(key, howl);
+    this.loops.set(key, { howl, ch, gain });
   }
 
   stopLoop(key: string) {
-    const howl = this.loops.get(key);
-    if (howl) {
+    const entry = this.loops.get(key);
+    if (entry) {
+      const { howl } = entry;
       howl.fade(howl.volume(), 0, 250);
       howl.once("fade", () => {
         howl.stop();

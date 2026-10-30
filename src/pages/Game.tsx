@@ -808,12 +808,14 @@ export default function Game() {
     audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
     audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
     audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
+    // Owner (2026-10-31): while the reels roll the background music
+    // pauses (ducks to a whisper) so the reel sounds own the mix.
+    audio.duckMusic(true);
     engineRef.current?.clearWinLines();
     setWinCells(new Set());
     if (debug) document.title = `Z firing sess=${store.session.sessionId}`;
 
     // Start the Pixi reel engine immediately
-    const spinStartedAt = performance.now();
     engineRef.current?.spin(reelSymbolsRef.current, {
       turbo: store.turboMode,
       stopDelays: store.turboMode ? (store.config?.turbo_delays ?? [120, 180, 240, 300, 360]) : (store.config?.normal_delays ?? [350, 500, 650, 800, 950]),
@@ -855,15 +857,20 @@ export default function Game() {
         !!(result as any).nearMiss && (store.config as any)?.near_miss_enabled !== false;
 
       baseDelays.forEach((delay, i) => {
-        const elapsed = performance.now() - spinStartedAt;
-        let at = Math.max(delay - elapsed, 0);
+        // Reel stops are scheduled from the RESULT's arrival, never
+        // from the click: the old elapsed-compensation collapsed the
+        // whole spin — reels and their sound — to zero whenever the
+        // network round-trip outlasted the stop delays, which is
+        // exactly what players on slower connections hit (owner
+        // report, 2026-10-31). The reels spin open-endedly until
+        // stopped, so this stays in sync visually.
+        let at = delay;
         if (anticipate && i === 4 && scatterOnReel5) {
           // Dramatic slow-down: engine already slows reel 5; extend its stop
           at += store.turboMode ? 400 : 700;
         }
         if (nearMissTease && i === 4) {
-          const target = store.turboMode ? 900 : 1800;
-          at = Math.max(at, target - elapsed);
+          at = Math.max(at, store.turboMode ? 900 : 1800);
         }
         setTimeout(() => {
           setLiteStopped(i + 1);
@@ -887,6 +894,9 @@ export default function Game() {
       console.error("Spin failed:", e);
       if (debug) document.title = `Z spinERR ${e?.message ?? "?"}`;
       toast.error(e?.message || t("spinFailed"));
+      audio.stopLoop("reels");
+      audio.stopLoop("anticipation");
+      audio.duckMusic(false);
       store.setGameState("idle");
     }
   // store.mode and store.freeSpinsRemaining MUST be deps: without
@@ -898,6 +908,8 @@ export default function Game() {
   }, [store.session, store.betAmount, store.activeCurrency, store.turboMode, store.gameState, store.mode, store.freeSpinsRemaining, t]);
 
   const handleSpinComplete = (result: any) => {
+    // The spin has settled in both modes: the music swells back.
+    audio.duckMusic(false);
     store.setLastSpin(result);
     // Classic scatter count from the settled grid (cascade shows its
     // own count on the board, from the server's initial-grid count).
