@@ -111,6 +111,7 @@ class SoundManager {
     Howler.mute(!on);
     this.save();
     this.refreshLoops();
+    if (!on) this.stopCelebrationSting(true);
   }
 
   setMaster(v: number) {
@@ -132,6 +133,43 @@ class SoundManager {
     this.prefs.musicEnabled = on;
     this.save();
     this.refreshLoops();
+  }
+
+  private sting: Howl | null = null;
+
+  /** Win-celebration sting — the "Throne of the Storm" finale
+   * (owner, 2026-10-31). Plays on the SFX channel while a big /
+   * mega / jackpot celebration overlay is on screen; the game
+   * stops it when the overlay closes. One-shot, ~11 s. */
+  playCelebrationSting() {
+    if (!this.prefs.enabled) return;
+    this.stopCelebrationSting(true);
+    const h = new Howl({
+      src: ["/assets/audio/win-celebration.opus", "/assets/audio/win-celebration.m4a"],
+      volume: this.chGain("sfx"),
+      onend: () => {
+        h.unload();
+        if (this.sting === h) this.sting = null;
+      },
+    });
+    this.sting = h;
+    h.play();
+  }
+
+  stopCelebrationSting(immediate = false) {
+    const h = this.sting;
+    if (!h) return;
+    this.sting = null;
+    if (immediate) {
+      try { h.stop(); } catch { /* already gone */ }
+      h.unload();
+      return;
+    }
+    try { h.fade(h.volume(), 0, 300); } catch { /* ignore */ }
+    setTimeout(() => {
+      try { h.stop(); } catch { /* ignore */ }
+      h.unload();
+    }, 350);
   }
 
   private refreshLoops() {

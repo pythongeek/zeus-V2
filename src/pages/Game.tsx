@@ -481,6 +481,15 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.freeSpinsRemaining]);
 
+  // Win celebrations (big / mega / jackpot tiers): the "Throne of
+  // the Storm" sting plays while the celebration overlay is up and
+  // fades out as soon as it closes.
+  useEffect(() => {
+    if (celebration) audio.playCelebrationSting();
+    else audio.stopCelebrationSting();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [celebration]);
+
   // C4: FPS guard — if this device cannot hold a smooth frame rate with
   // the Pixi renderer, drop to Lite mode (CSS reels) automatically.
   const fpsGuardDoneRef = useRef(false);
