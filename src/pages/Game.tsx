@@ -1093,6 +1093,11 @@ export default function Game() {
           // D2: free-spin outro theatre — celebrate the session total.
           if (fsWinTotalRef.current > 0) {
             setBigWinText(t("freeSpinsComplete", { amount: fsWinTotalRef.current.toFixed(2), cur: store.activeCurrency }));
+            // The banner's amount line renders displayedWin, which
+            // still holds the LAST spin's counter (0.0000 when the
+            // final free spin lost) — point it at the round total
+            // the banner text announces, or the two contradict.
+            setDisplayedWin(fsWinTotalRef.current);
             setShowBigWin(true);
             fsWinTotalRef.current = 0;
           }
