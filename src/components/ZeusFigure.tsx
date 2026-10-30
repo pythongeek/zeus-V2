@@ -5,8 +5,11 @@ import { useMemo } from "react";
  * the stage — idle breathing/float with a storm aura and flickering
  * hand-lightning, a tense rock while reels spin, a golden aura during
  * free spins, and on big wins he lunges and hurls a lightning bolt
- * across the stage toward the board. Pure CSS/SVG over the existing
- * character art — no new assets, no canvas. Lite mode and
+ * across the stage toward the board. Pure CSS/SVG over the character
+ * art — since 2026-10-30 the figure uses a transparent-background
+ * cutout (zeus-character-cutout.webp, background removed from the
+ * original painting) so he stands ON the stage instead of blocking
+ * it with a rectangular picture. Lite mode and
  * prefers-reduced-motion render him still.
  */
 export type ZeusMood = "idle" | "spin" | "freespins" | "strike";
@@ -56,24 +59,25 @@ export function ZeusFigure({
         <div className="absolute inset-0 -m-3 rounded-full bg-[radial-gradient(circle,rgba(255,213,79,0.35)_0%,transparent_65%)] animate-pulse" />
       )}
       <img
-        src="/assets/zeus-character.webp"
+        src="/assets/zeus-character-cutout.webp"
         alt=""
         className={`relative w-full h-full object-contain ${imgClass} ${mood === "freespins" ? "brightness-110" : ""}`}
         draggable={false}
       />
-      {/* Ambient hand lightning */}
+      {/* Ambient hand lightning — positions track the cutout's hands:
+          staff grip upper-left, free fist mid-right. */}
       {!still && mood !== "strike" && (
         <>
-          <BoltShape className="bolt-flicker absolute w-[16%] left-[6%] bottom-[16%] opacity-80" />
+          <BoltShape className="bolt-flicker absolute w-[15%] left-[3%] bottom-[57%] opacity-80" />
           <BoltShape
-            className="bolt-flicker absolute w-[11%] right-[10%] bottom-[30%] opacity-60"
+            className="bolt-flicker absolute w-[10%] right-[22%] bottom-[44%] opacity-60"
             style={{ animationDelay: "1.3s" }}
           />
         </>
       )}
       {/* Big-win thunder throw: bolt streaks from Zeus toward the board */}
       {mood === "strike" && !still && (
-        <div key={strikeKey} className="absolute left-[38%] top-[26%] w-[290%] aspect-[3/2] z-30">
+        <div key={strikeKey} className="absolute left-[52%] top-[38%] w-[290%] aspect-[3/2] z-30">
           <svg viewBox="0 0 300 200" className="w-full h-full overflow-visible">
             <path
               d="M6 14 L96 62 L78 70 L168 116 L148 124 L238 178"
