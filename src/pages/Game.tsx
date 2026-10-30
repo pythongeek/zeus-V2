@@ -1112,6 +1112,21 @@ export default function Game() {
     store.setGameState("idle");
   };
 
+  // The celebration overlay must release the game exactly like
+  // closeBigWin does: the celebration branch of handleSpinComplete
+  // leaves gameState at "spinning" (blocking further spins), and
+  // until now onDone only cleared the overlay — after a big / mega
+  // / jackpot celebration with no banner stacked behind it, the
+  // game stayed locked until a page reload. Found live 2026-10-31
+  // during the celebration-sting verification.
+  const closeCelebration = () => {
+    setCelebration(null);
+    store.setBigWinAnimation(false);
+    // While free spins remain, the auto-consume timer owns the
+    // game state (it idles and re-spins) — do not clobber it.
+    if (store.freeSpinsRemaining <= 0) store.setGameState("idle");
+  };
+
   // Keyboard shortcut
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -1690,7 +1705,7 @@ export default function Game() {
 
       {/* Tiered Win Celebration (GSAP) */}
       {celebration && (
-        <Celebration data={celebration} onDone={() => setCelebration(null)} />
+        <Celebration data={celebration} onDone={closeCelebration} />
       )}
 
       {/* Feature Announcement Overlay (thunder strike / free spins) */}
