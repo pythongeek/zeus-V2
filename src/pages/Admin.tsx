@@ -12,6 +12,7 @@ import {
   Users, DollarSign, Trophy, Percent, ShieldCheck, ArrowLeft, RefreshCw,
   LayoutDashboard, CreditCard, Cog, Globe, ShieldAlert, Gift, ServerCog,
   Activity,
+  ScrollText,
   FlaskConical, HeartPulse, BellRing, Download,
 } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -383,6 +384,170 @@ function PromotionsSection({ enabled }: { enabled: boolean }) {
             </div>
           ))}
           {(settlements.data?.settlements ?? []).length === 0 && <div className="text-slate-500">—</div>}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** Ledger dashboard (2026-10-31): browse every ledger entry with
+ * filters + totals, and jump to the player in Player 360. */
+function LedgerSection({ enabled, onFocusPlayer }: { enabled: boolean; onFocusPlayer: (id: number) => void }) {
+  const { t } = useLang();
+  const inputCls = "bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100";
+  const PAGE_SIZE = 50;
+  const [userId, setUserId] = useState("");
+  const [kind, setKind] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [applied, setApplied] = useState<any>({});
+  const [offset, setOffset] = useState(0);
+
+  const playersQ = trpc.admin.listPlayers.useQuery({ limit: 100, sort: "newest" }, { enabled });
+  const listQ = trpc.admin.listLedger.useQuery({ ...applied, limit: PAGE_SIZE, offset }, { enabled });
+  const totalsQ = trpc.admin.ledgerTotals.useQuery(applied, { enabled });
+
+  const apply = () => {
+    const f: any = {};
+    if (userId) f.userId = Number(userId);
+    if (kind) f.kind = kind;
+    if (currency) f.currency = currency;
+    if (from) f.from = Math.floor(new Date(from).getTime() / 1000);
+    if (to) f.to = Math.floor(new Date(to).getTime() / 1000);
+    setApplied(f);
+    setOffset(0);
+  };
+  const reset = () => {
+    setUserId(""); setKind(""); setCurrency(""); setFrom(""); setTo("");
+    setApplied({}); setOffset(0);
+  };
+
+  const data: any = listQ.data;
+  const rows: any[] = data?.rows ?? [];
+  const total: number = data?.total ?? 0;
+  const kinds: string[] = data?.kinds ?? [];
+  const page = Math.floor(offset / PAGE_SIZE) + 1;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const fmt = (v: any) => {
+    const n = Number(v ?? 0);
+    return `${n > 0 ? "+" : ""}${n.toFixed(2)}`;
+  };
+
+  return (
+    <div className="space-y-4">
+      {(totalsQ.data ?? []).map((r: any) => (
+        <div key={r.currency} className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="bg-slate-900/80 border-slate-800"><CardContent className="py-3">
+            <div className="text-xs text-slate-500">{r.currency} · {t("ledgerCredit")}</div>
+            <div className="text-lg text-emerald-400">+{r.credit.toFixed(2)}</div>
+          </CardContent></Card>
+          <Card className="bg-slate-900/80 border-slate-800"><CardContent className="py-3">
+            <div className="text-xs text-slate-500">{r.currency} · {t("ledgerDebit")}</div>
+            <div className="text-lg text-red-400">{r.debit.toFixed(2)}</div>
+          </CardContent></Card>
+          <Card className="bg-slate-900/80 border-slate-800"><CardContent className="py-3">
+            <div className="text-xs text-slate-500">{r.currency} · {t("ledgerNet")}</div>
+            <div className="text-lg text-slate-100">{fmt(r.net)}</div>
+          </CardContent></Card>
+          <Card className="bg-slate-900/80 border-slate-800"><CardContent className="py-3">
+            <div className="text-xs text-slate-500">{r.currency} · {t("ledgerEntries")}</div>
+            <div className="text-lg text-slate-100">{r.count}</div>
+          </CardContent></Card>
+        </div>
+      ))}
+
+      <Card className="bg-slate-900/80 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-amber-400">{t("ledgerTitle")}</CardTitle>
+          <CardDescription className="text-slate-400">{t("ledgerDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2 items-end">
+            <label className="text-xs text-slate-400 space-y-1">
+              <span>{t("ledgerPlayer")}</span>
+              <select className={inputCls} value={userId} onChange={(e) => setUserId(e.target.value)}>
+                <option value="">{t("ledgerAll")}</option>
+                {(playersQ.data?.rows ?? []).map((p: any) => (
+                  <option key={p.id} value={p.id}>{p.email ?? p.name ?? `#${p.id}`}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-slate-400 space-y-1">
+              <span>{t("ledgerKind")}</span>
+              <select className={inputCls} value={kind} onChange={(e) => setKind(e.target.value)}>
+                <option value="">{t("ledgerAll")}</option>
+                {kinds.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-slate-400 space-y-1">
+              <span>{t("ledgerCurrency")}</span>
+              <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                <option value="">{t("ledgerAll")}</option>
+                <option value="BDT">BDT</option>
+                <option value="USDT">USDT</option>
+              </select>
+            </label>
+            <label className="text-xs text-slate-400 space-y-1">
+              <span>{t("ledgerFrom")}</span>
+              <Input type="datetime-local" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} />
+            </label>
+            <label className="text-xs text-slate-400 space-y-1">
+              <span>{t("ledgerTo")}</span>
+              <Input type="datetime-local" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} />
+            </label>
+            <Button size="sm" className="h-8" onClick={apply}>{t("ledgerApply")}</Button>
+            <Button size="sm" variant="outline" className="h-8 border-slate-700" onClick={reset}>{t("ledgerReset")}</Button>
+          </div>
+
+          {rows.length === 0 ? (
+            <div className="text-slate-500 text-sm py-4">{listQ.isLoading ? "…" : t("ledgerEmpty")}</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("ledgerColTime")}</TableHead>
+                  <TableHead>{t("ledgerColPlayer")}</TableHead>
+                  <TableHead>{t("ledgerColKind")}</TableHead>
+                  <TableHead className="text-right">{t("ledgerColAmount")}</TableHead>
+                  <TableHead className="text-right">{t("ledgerColBalance")}</TableHead>
+                  <TableHead>{t("ledgerColBucket")}</TableHead>
+                  <TableHead>{t("ledgerColSpin")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r: any) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="text-slate-400 whitespace-nowrap">{new Date(r.ts * 1000).toLocaleString()}</TableCell>
+                    <TableCell>
+                      <button className="text-amber-300 hover:underline" onClick={() => onFocusPlayer(r.userId)}>
+                        {r.userEmail ?? r.userName ?? `#${r.userId}`}
+                      </button>
+                    </TableCell>
+                    <TableCell><Badge variant="outline" className="border-slate-700 text-slate-300">{r.kind}</Badge></TableCell>
+                    <TableCell className={`text-right font-mono ${Number(r.amount) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {fmt(r.amount)} {r.currency}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-slate-200">{Number(r.balanceAfter).toFixed(2)}</TableCell>
+                    <TableCell className="text-slate-400">{r.bucket}</TableCell>
+                    <TableCell className="text-slate-400">
+                      {r.spinId ? `#${r.spinId} · ${r.spinMode ?? ""}${r.spinFs ? " · FS" : ""} · ${Number(r.spinBet ?? 0).toFixed(2)} → ${Number(r.spinWin ?? 0).toFixed(2)}` : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+
+          <div className="flex items-center gap-3 text-sm text-slate-400">
+            <Button size="sm" variant="outline" className="h-7 border-slate-700" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+              {t("ledgerPrev")}
+            </Button>
+            <span>{t("ledgerPage")} {page} / {pages} · {total} {t("ledgerEntries")}</span>
+            <Button size="sm" variant="outline" className="h-7 border-slate-700" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+              {t("ledgerNext")}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -1635,6 +1800,7 @@ const SECTIONS = [
   { id: "dashboard", icon: LayoutDashboard, labelKey: "navDashboard" },
   { id: "players", icon: Users, labelKey: "navPlayers" },
   { id: "payments", icon: CreditCard, labelKey: "navPayments" },
+  { id: "ledger", icon: ScrollText, labelKey: "navLedger" },
   { id: "engine", icon: Cog, labelKey: "navEngine" },
   { id: "jackpots", icon: Trophy, labelKey: "navJackpots" },
   { id: "site", icon: Globe, labelKey: "navSite" },
@@ -2920,6 +3086,12 @@ export default function Admin() {
             />
           )}
           {section === "promotions" && <PromotionsSection enabled={isAuthenticated && isAdmin} />}
+          {section === "ledger" && (
+            <LedgerSection
+              enabled={isAuthenticated && isAdmin}
+              onFocusPlayer={(id) => { setSelectedPlayerId(id); goSection("players"); }}
+            />
+          )}
           {section === "ops" && <OpsSection enabled={isAuthenticated && isAdmin} />}
 
           {section === "system" && (

@@ -2315,4 +2315,92 @@ export const adminRouter = createRouter({
         .orderBy(desc(auditLog.createdAt))
         .limit(input?.limit ?? 50);
     }),
+
+  // ===== Ledger dashboard (2026-10-31) =====
+  // The ledger has existed in the DB since A2 and reconciliation
+  // reads it nightly, but until now there was no way to BROWSE
+  // it — Player 360 shows only a player's recent activity. These
+  // two power the Ledger section: every money movement, filterable
+  // by player / kind / currency / date, with the running
+  // balance-after that makes the chain auditable by eye.
+  // Timestamps go through tsSec: createdAt storage is mixed-era
+  // (integer epochs from drizzle, text CURRENT_TIMESTAMP rows).
+  listLedger: adminQuery
+    .input(z.object({
+      userId: z.number().optional(),
+      kind: z.string().max(48).optional(),
+      currency: z.string().max(8).optional(),
+      from: z.number().optional(),
+      to: z.number().optional(),
+      limit: z.number().min(1).max(100).default(50),
+      offset: z.number().min(0).default(0),
+    }))
+    .query(async ({ input }) => {
+      const client = getSqliteClient();
+      const where: string[] = [];
+      const params: any[] = [];
+      if (input.userId) { where.push("l.user_id = ?"); params.push(input.userId); }
+      if (input.kind) { where.push("l.kind = ?"); params.push(input.kind); }
+      if (input.currency) { where.push("l.currency = ?"); params.push(input.currency); }
+      if (input.from) { where.push(`${tsSec('l."createdAt"')} >= ?`); params.push(input.from); }
+      if (input.to) { where.push(`${tsSec('l."createdAt"')} <= ?`); params.push(input.to); }
+      const wsql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const total = (client
+        .prepare(`SELECT COUNT(*) AS n FROM ledger_entries l ${wsql}`)
+        .get(...params) as any).n as number;
+      const rows = client
+        .prepare(
+          `SELECT l.id, l.user_id AS userId, u.email AS userEmail, u.name AS userName,
+                  l.kind, l.currency, l.amount, l.balance_after AS balanceAfter,
+                  l.bucket, l.spin_id AS spinId,
+                  s.mode_id AS spinMode, s.bet_amount AS spinBet, s.win_amount AS spinWin,
+                  s.is_free_spin AS spinFs, ${tsSec('l."createdAt"')} AS ts
+           FROM ledger_entries l
+           JOIN users u ON u.id = l.user_id
+           LEFT JOIN spins s ON s.id = l.spin_id
+           ${wsql}
+           ORDER BY l.id DESC LIMIT ? OFFSET ?`,
+        )
+        .all(...params, input.limit, input.offset) as any[];
+      const kinds = (client
+        .prepare("SELECT DISTINCT kind FROM ledger_entries ORDER BY kind")
+        .all() as any[]).map((r) => r.kind as string);
+      return { rows, total, kinds };
+    }),
+
+  ledgerTotals: adminQuery
+    .input(z.object({
+      userId: z.number().optional(),
+      kind: z.string().max(48).optional(),
+      currency: z.string().max(8).optional(),
+      from: z.number().optional(),
+      to: z.number().optional(),
+    }))
+    .query(async ({ input }) => {
+      const client = getSqliteClient();
+      const where: string[] = [];
+      const params: any[] = [];
+      if (input.userId) { where.push("user_id = ?"); params.push(input.userId); }
+      if (input.kind) { where.push("kind = ?"); params.push(input.kind); }
+      if (input.currency) { where.push("currency = ?"); params.push(input.currency); }
+      if (input.from) { where.push(`${tsSec('"createdAt"')} >= ?`); params.push(input.from); }
+      if (input.to) { where.push(`${tsSec('"createdAt"')} <= ?`); params.push(input.to); }
+      const wsql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const rows = client
+        .prepare(
+          `SELECT currency,
+                  SUM(CASE WHEN CAST(amount AS REAL) > 0 THEN CAST(amount AS REAL) ELSE 0 END) AS credit,
+                  SUM(CASE WHEN CAST(amount AS REAL) < 0 THEN CAST(amount AS REAL) ELSE 0 END) AS debit,
+                  COUNT(*) AS n
+           FROM ledger_entries ${wsql} GROUP BY currency ORDER BY currency`,
+        )
+        .all(...params) as any[];
+      return rows.map((r) => ({
+        currency: r.currency as string,
+        credit: Number(r.credit ?? 0),
+        debit: Number(r.debit ?? 0),
+        net: Number(r.credit ?? 0) + Number(r.debit ?? 0),
+        count: r.n as number,
+      }));
+    }),
 });
