@@ -56,27 +56,47 @@ export function ZeusFigure({
 
   return (
     <div className={`relative pointer-events-none select-none ${className ?? ""}`} aria-hidden="true">
+      {/* Permanent stage aura + pedestal glow (owner polish,
+          2026-10-31): he should read as a presence on the stage,
+          not a sticker — a soft storm-gold halo behind him at all
+          times (the stronger pulsing aura still layers on top in
+          free spins) and a warm pool of light at his feet. */}
+      <div className="absolute inset-0 -m-4 rounded-full bg-[radial-gradient(circle,rgba(140,200,255,0.22)_0%,rgba(212,175,55,0.10)_48%,transparent_70%)]" />
+      <div className="absolute bottom-0 inset-x-1 h-3 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(255,213,79,0.35)_0%,transparent_70%)] blur-[2px]" />
       {/* Free-spin aura */}
       {mood === "freespins" && !still && (
         <div className="absolute inset-0 -m-3 rounded-full bg-[radial-gradient(circle,rgba(255,213,79,0.35)_0%,transparent_65%)] animate-pulse" />
       )}
-      <img
-        src="/assets/zeus-character-cutout.webp"
-        alt=""
-        className={`relative w-full h-full object-contain ${imgClass} ${mood === "freespins" ? "brightness-110" : ""}`}
-        draggable={false}
-      />
-      {/* Ambient hand lightning — positions track the cutout's hands:
-          staff grip upper-left, free fist mid-right. */}
-      {!still && mood !== "strike" && (
-        <>
-          <BoltShape className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[15%] left-[3%] bottom-[57%] opacity-80`} />
-          <BoltShape
-            className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[10%] right-[22%] bottom-[44%] opacity-60`}
-            style={{ animationDelay: "1.3s" }}
-          />
-        </>
-      )}
+      {/* Facing (owner, 2026-10-31): the cutout's gaze and staff
+          read LEFT; the stage figure is mirrored so Zeus faces
+          RIGHT, toward the board he overlooks. The flip wraps the
+          art and the hand lightning together (their anchor points
+          are painted for the cutout, so they mirror along and stay
+          on his hands); his CSS pose animations use translate /
+          rotate / scale only, so they compose cleanly inside the
+          mirror. The thunder-throw overlay further down is stage
+          geometry (it streaks across the board) and stays
+          unflipped. */}
+      <div className="absolute inset-0 [transform:scaleX(-1)]">
+        <img
+          src="/assets/zeus-character-cutout.webp"
+          alt=""
+          className={`relative w-full h-full object-contain ${imgClass} ${mood === "freespins" ? "brightness-110" : ""} ${still ? "drop-shadow-[0_2px_16px_rgba(120,180,255,0.45)]" : ""}`}
+          draggable={false}
+        />
+        {/* Ambient hand lightning — positions track the cutout's
+            hands: staff grip upper-left, free fist mid-right (in
+            the art's own, pre-mirror coordinates). */}
+        {!still && mood !== "strike" && (
+          <>
+            <BoltShape className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[15%] left-[3%] bottom-[57%] opacity-80`} />
+            <BoltShape
+              className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[10%] right-[22%] bottom-[44%] opacity-60`}
+              style={{ animationDelay: "1.3s" }}
+            />
+          </>
+        )}
+      </div>
       {/* Thunder throw: bolt streaks from Zeus toward the board —
           big wins (strike) and 2+ scatter settles (scatter) alike,
           so the god visibly answers the board's big moments. */}

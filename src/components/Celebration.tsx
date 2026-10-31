@@ -230,7 +230,7 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
           <img
             src="/assets/zeus-character-cutout.webp"
             alt=""
-            className="w-full h-full object-contain"
+            className="w-full h-full object-contain [transform:scaleX(-1)]"
             style={{ filter: "drop-shadow(0 0 40px rgba(212,175,55,0.8))" }}
           />
         </div>
