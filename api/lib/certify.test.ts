@@ -1,26 +1,301 @@
 import { describe, it, expect } from "vitest";
 import { certifyMath, exactBase, linePayout, type MathBundle } from "../lib/certify";
-import { getMathConfig } from "../routers/game";
 
 /**
  * Section E1: the Lab certifier must reproduce the A4 certified
- * numbers for the live default bundle — base EV 68.344% and
- * f 0.2501 by EXACT enumeration; total 96.00% with the Monte-Carlo
- * thunder term.
+ * numbers — base EV 68.344% and f 0.2501 by EXACT enumeration;
+ * total 96.00% with the Monte-Carlo thunder term.
+ *
+ * The A4 bundle is PINNED here as a fixture (it was the live
+ * math until the 2026-10-31 reshaped publish, math version 4).
+ * The test guards the CERTIFIER against regressions; it must
+ * not drift every time the owner publishes new math, so it no
+ * longer reads the ambient live config.
  */
-function defaultBundle(): MathBundle {
-  const cfg = getMathConfig();
-  const paytable: MathBundle["paytable"] = {};
-  for (let id = 0; id <= 10; id++) {
-    const p = cfg.payouts[id as keyof typeof cfg.payouts];
-    paytable[String(id)] = { "3": p[3], "4": p[4], "5": p[5] };
+const A4_BUNDLE: MathBundle = {
+  "paytable": {
+    "0": {
+      "3": 50,
+      "4": 200,
+      "5": 1000
+    },
+    "1": {
+      "3": 2,
+      "4": 5,
+      "5": 20
+    },
+    "2": {
+      "3": 30,
+      "4": 100,
+      "5": 500
+    },
+    "3": {
+      "3": 25,
+      "4": 80,
+      "5": 400
+    },
+    "4": {
+      "3": 20,
+      "4": 75,
+      "5": 300
+    },
+    "5": {
+      "3": 15,
+      "4": 40,
+      "5": 200
+    },
+    "6": {
+      "3": 12,
+      "4": 30,
+      "5": 150
+    },
+    "7": {
+      "3": 10,
+      "4": 30,
+      "5": 100
+    },
+    "8": {
+      "3": 5,
+      "4": 18,
+      "5": 75
+    },
+    "9": {
+      "3": 5,
+      "4": 18,
+      "5": 75
+    },
+    "10": {
+      "3": 4,
+      "4": 12,
+      "5": 60
+    }
+  },
+  "reels": [
+    [
+      0,
+      0,
+      1,
+      1,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      5,
+      6,
+      6,
+      6,
+      6,
+      7,
+      7,
+      7,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8,
+      9,
+      9,
+      9,
+      9,
+      9,
+      10,
+      10,
+      10,
+      10,
+      10
+    ],
+    [
+      0,
+      0,
+      10,
+      1,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      5,
+      6,
+      6,
+      6,
+      6,
+      7,
+      7,
+      7,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8,
+      9,
+      9,
+      9,
+      9,
+      9,
+      10,
+      10,
+      10,
+      10,
+      10
+    ],
+    [
+      0,
+      0,
+      0,
+      1,
+      1,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      5,
+      6,
+      6,
+      6,
+      6,
+      7,
+      7,
+      7,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8,
+      9,
+      9,
+      9,
+      9,
+      9,
+      10,
+      10,
+      10,
+      10,
+      10
+    ],
+    [
+      0,
+      0,
+      10,
+      1,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      5,
+      6,
+      6,
+      6,
+      6,
+      7,
+      7,
+      7,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8,
+      9,
+      9,
+      9,
+      9,
+      9,
+      10,
+      10,
+      10,
+      10,
+      10
+    ],
+    [
+      0,
+      0,
+      10,
+      1,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      5,
+      6,
+      6,
+      6,
+      6,
+      7,
+      7,
+      7,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8,
+      9,
+      9,
+      9,
+      9,
+      9,
+      10,
+      10,
+      10,
+      10,
+      10
+    ]
+  ],
+  "freeSpins": {
+    "3": 8,
+    "4": 12,
+    "5": 20
+  },
+  "thunder": {
+    "chanceDenominator": 200,
+    "floorX": 5
   }
-  return {
-    paytable,
-    reels: cfg.strips,
-    freeSpins: cfg.freeSpins,
-    thunder: { chanceDenominator: cfg.thunderDenominator, floorX: cfg.thunderFloorX },
-  };
+};
+
+function defaultBundle(): MathBundle {
+  return JSON.parse(JSON.stringify(A4_BUNDLE)) as MathBundle;
 }
 
 describe("E1: certifier exact enumeration", () => {
