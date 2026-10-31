@@ -276,6 +276,34 @@ function checkJackpot(hash: string): { tier: string } | null {
   return null;
 }
 
+// FS banking (2026-10-31): move a session's unplayed free spins
+// into banked_free_spins, preserving the exact terms they were won
+// on (bet, currency, mode, cascade ladder rung), and clear them
+// from the session so they can never be double-counted. Called at
+// every session boundary (startSession replacing actives,
+// endSession) — before this, those spins were silently destroyed.
+function bankSessionFreeSpins(client: any, session: any): number {
+  const remaining = (session.free_spins_remaining as number) ?? 0;
+  if (!remaining || remaining <= 0) return 0;
+  client
+    .prepare(
+      "INSERT INTO banked_free_spins (user_id, spins, bet_amount, currency, mode, ladder_rung, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      session.user_id,
+      remaining,
+      (session.free_spins_bet as string) ?? "0",
+      (session.free_spins_currency as string) ?? "USDT",
+      (session.free_spins_mode as string) ?? "classic",
+      (session.free_spins_rung as number) ?? 0,
+      Math.floor(Date.now() / 1000),
+    );
+  client
+    .prepare("UPDATE game_sessions SET free_spins_remaining = 0 WHERE id = ?")
+    .run(session.id);
+  return remaining;
+}
+
 export const gameRouter = createRouter({
   startSession: authedQuery
     .input(z.object({
@@ -290,6 +318,21 @@ export const gameRouter = createRouter({
       // unavailable the spin endpoint must not operate on untracked state.
       const db = getDb();
       const userId = ctx.user.id;
+
+      // FS banking: sessions about to be completed may still hold
+      // unplayed free spins (scatter wins, wheel tokens). Bank them
+      // first — a reload, a new tab or an app restart must never
+      // destroy spins the player already won. They are restored
+      // into the new session below.
+      {
+        const client = getSqliteClient();
+        client.transaction(() => {
+          const actives = client
+            .prepare("SELECT * FROM game_sessions WHERE user_id = ? AND status = 'active'")
+            .all(userId) as any[];
+          for (const s of actives) bankSessionFreeSpins(client, s);
+        })();
+      }
 
       // End any active sessions
       await db.update(gameSessions)
@@ -308,27 +351,51 @@ export const gameRouter = createRouter({
         status: "active",
       }).returning();
 
-      // Step 13: wheel free-spin tokens seed the new session — the
-      // tokens are spent here, played at the fixed token bet.
+      // Seeding the new session's free spins, in priority order:
+      // 1) BANKED spins (FS banking, 2026-10-31): free spins the
+      //    player won earlier and could not finish — restored on
+      //    their original bet/currency/mode/rung terms.
+      // 2) Step 13 wheel tokens: spent here, played at the fixed
+      //    token bet.
       let freeSpinsGranted = 0;
+      let seededFs: { bet: string; currency: string; mode: string } | null = null;
       {
         const client = getSqliteClient();
-        const tok = client
-          .prepare("SELECT spins FROM free_spin_tokens WHERE user_id = ?")
-          .get(userId) as { spins: number } | undefined;
-        if (tok && tok.spins > 0) {
-          const tokenBet = Number(getSetting<number>("wheel_token_bet_bdt") ?? 10);
-          client
-            .prepare("UPDATE free_spin_tokens SET spins = 0, updated_at = ? WHERE user_id = ?")
-            .run(Math.floor(Date.now() / 1000), userId);
+        const banked = client
+          .prepare("SELECT * FROM banked_free_spins WHERE user_id = ? ORDER BY id LIMIT 1")
+          .get(userId) as any;
+        if (banked) {
+          client.prepare("DELETE FROM banked_free_spins WHERE id = ?").run(banked.id);
           await db.update(gameSessions)
             .set({
-              freeSpinsRemaining: tok.spins,
-              freeSpinsBet: String(tokenBet),
-              freeSpinsCurrency: "BDT" as any,
+              freeSpinsRemaining: banked.spins,
+              freeSpinsBet: banked.bet_amount,
+              freeSpinsCurrency: banked.currency as any,
+              freeSpinsMode: banked.mode,
+              freeSpinsRung: banked.ladder_rung,
             })
             .where(eq(gameSessions.id, session.id));
-          freeSpinsGranted = tok.spins;
+          freeSpinsGranted = banked.spins;
+          seededFs = { bet: banked.bet_amount, currency: banked.currency, mode: banked.mode };
+        } else {
+          const tok = client
+            .prepare("SELECT spins FROM free_spin_tokens WHERE user_id = ?")
+            .get(userId) as { spins: number } | undefined;
+          if (tok && tok.spins > 0) {
+            const tokenBet = Number(getSetting<number>("wheel_token_bet_bdt") ?? 10);
+            client
+              .prepare("UPDATE free_spin_tokens SET spins = 0, updated_at = ? WHERE user_id = ?")
+              .run(Math.floor(Date.now() / 1000), userId);
+            await db.update(gameSessions)
+              .set({
+                freeSpinsRemaining: tok.spins,
+                freeSpinsBet: String(tokenBet),
+                freeSpinsCurrency: "BDT" as any,
+              })
+              .where(eq(gameSessions.id, session.id));
+            freeSpinsGranted = tok.spins;
+            seededFs = { bet: String(tokenBet), currency: "BDT", mode: "classic" };
+          }
         }
       }
 
@@ -342,6 +409,9 @@ export const gameRouter = createRouter({
         clientSeed: fullSession.clientSeed,
         startingNonce: 0,
         freeSpinsGranted,
+        freeSpinsBet: seededFs?.bet ?? null,
+        freeSpinsCurrency: seededFs?.currency ?? null,
+        freeSpinsMode: seededFs?.mode ?? null,
       };
     }),
 
@@ -1286,10 +1356,18 @@ export const gameRouter = createRouter({
         throw new Error("Session not found");
       }
 
+      // FS banking (2026-10-31): ending a session no longer
+      // strands unplayed free spins behind a refusal — they are
+      // banked and restored into the player's next session on the
+      // same terms. (The A5-era refusal protected the spins only
+      // on this path; startSession's silent completion destroyed
+      // them anyway.)
       if ((session.freeSpinsRemaining ?? 0) > 0) {
-        throw new Error(
-          "Free spins still active: finish them before ending the session",
-        );
+        const client = getSqliteClient();
+        const row = client
+          .prepare("SELECT * FROM game_sessions WHERE id = ?")
+          .get(input.sessionId) as any;
+        if (row) client.transaction(() => bankSessionFreeSpins(client, row))();
       }
 
       await db.update(gameSessions)

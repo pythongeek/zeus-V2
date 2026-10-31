@@ -228,6 +228,19 @@ export const freeSpinTokens = sqliteTable("free_spin_tokens", {
   updatedAt: integer("updated_at").default(sql`(unixepoch())`),
 });
 
+// FS banking (2026-10-31): free spins that outlive their session,
+// restored into the next session on their original terms.
+export const bankedFreeSpins = sqliteTable("banked_free_spins", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  spins: integer("spins").notNull(),
+  betAmount: text("bet_amount").notNull(),
+  currency: text("currency").notNull(),
+  mode: text("mode").notNull().default("classic"),
+  ladderRung: integer("ladder_rung").notNull().default(0),
+  createdAt: integer("created_at").default(sql`(unixepoch())`),
+});
+
 export const reloadOptins = sqliteTable("reload_optins", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id").notNull(),

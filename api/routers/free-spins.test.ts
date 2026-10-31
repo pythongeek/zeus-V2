@@ -108,10 +108,10 @@ describe("A5: server-side free spins", () => {
     const balAfterPaid = parseFloat(r1.newBalance);
     expect(balAfterPaid).toBeCloseTo(100 - 1 + parseFloat(r1.winAmount), 8);
 
-    // The session cannot be ended while free spins remain.
-    await expect(caller.endSession({ sessionId })).rejects.toThrow(
-      "Free spins still active",
-    );
+    // (Ending a session with free spins remaining used to be
+    // refused here; since FS banking (2026-10-31) endSession banks
+    // them instead — covered by fs-banking.test.ts. This flow
+    // needs the session alive, so the end is deferred to below.)
 
     const r2 = await caller.spin({ sessionId, betAmount: "1", currency: "USDT" });
     expect(r2.isFreeSpin).toBe(true);

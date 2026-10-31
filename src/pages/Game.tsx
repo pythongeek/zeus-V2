@@ -746,6 +746,12 @@ export default function Game() {
         // player sees them (and the FS music bed starts) before the
         // first spin, not only after a spin response reveals them.
         store.setFreeSpinsRemaining(result.freeSpinsGranted);
+        // Restored (banked) free spins carry the mode they were
+        // won in — show that board so the free spins play where
+        // they belong, not behind the player's last mode toggle.
+        if (result.freeSpinsGranted > 0 && result.freeSpinsMode) {
+          store.setMode(result.freeSpinsMode as "classic" | "cascade");
+        }
         return session;
       } catch (e: any) {
         console.error("Failed to start session:", e);
