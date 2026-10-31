@@ -13,7 +13,7 @@ import { hashPassword } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
 import { decryptSecret, verifyTotp } from "../lib/totp";
-import { count, sum, desc, eq, and, or, inArray, like, max as sqlMax } from "drizzle-orm";
+import { count, sum, desc, eq, and, or, inArray, like } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
 // Record every admin mutation for accountability. Failures to log are
@@ -114,6 +114,22 @@ async function publishMathBundle(ctx: any, bundle: MathBundle, note: string | nu
     note,
   });
   return { versionId: Number(info.lastInsertRowid), totalPct: cert.totalPct, breakdown: cert };
+}
+
+// Mixed-era timestamp storage (Section B lesson): several tables
+// store created_at as TEXT ("2026-10-31 05:46:49", UTC) via SQL
+// defaults and raw writers, while drizzle timestamp-mode fields
+// read those rows back as null — admin surfaces showed 1/1/1970
+// dates and "Last spin: never". Re-read real values via tsSec.
+function isoTimes(table: string, ids: number[]): Map<number, string | null> {
+  const out = new Map<number, string | null>();
+  if (!ids.length) return out;
+  const ph = ids.map(() => "?").join(",");
+  const rows = getSqliteClient()
+    .prepare(`SELECT id, ${tsSec("created_at")} AS ts FROM ${table} WHERE id IN (${ph})`)
+    .all(...ids) as any[];
+  for (const r of rows) out.set(r.id, r.ts ? new Date(r.ts * 1000).toISOString() : null);
+  return out;
 }
 
 export const adminRouter = createRouter({
@@ -424,11 +440,14 @@ export const adminRouter = createRouter({
         ? await db.select().from(balances).where(inArray(balances.userId, ids))
         : [];
       const lastSpins = ids.length
-        ? await db
-            .select({ userId: spins.userId, last: sqlMax(spins.createdAt) })
-            .from(spins)
-            .where(inArray(spins.userId, ids))
-            .groupBy(spins.userId)
+        ? (getSqliteClient()
+            .prepare(
+              `SELECT user_id AS userId, MAX(${tsSec("created_at")}) AS last FROM spins WHERE user_id IN (${ids.map(() => "?").join(",")}) GROUP BY user_id`,
+            )
+            .all(...ids) as any[]).map((r) => ({
+            userId: r.userId,
+            last: r.last ? new Date(r.last * 1000).toISOString() : null,
+          }))
         : [];
       const balByUser = new Map<number, number>();
       for (const b of bals) {
@@ -504,6 +523,12 @@ export const adminRouter = createRouter({
         .where(eq(transactions.userId, input.userId))
         .orderBy(desc(transactions.createdAt))
         .limit(20);
+      // Date normalisation: drizzle returned null createdAt for
+      // TEXT-stored spins/transactions (see isoTimes note).
+      const spinTimes = isoTimes("spins", recentSpins.map((x) => x.id));
+      const recentSpinsDated = recentSpins.map((x) => ({ ...x, createdAt: spinTimes.get(x.id) ?? null }));
+      const txTimes = isoTimes("transactions", recentTxs.map((x) => x.id));
+      const recentTxsDated = recentTxs.map((x) => ({ ...x, createdAt: txTimes.get(x.id) ?? null }));
       const notes = getSqliteClient()
         .prepare(
           `SELECT n.id, n.note, n.created_at AS createdAt, u.email AS adminEmail
@@ -516,6 +541,7 @@ export const adminRouter = createRouter({
         .from(auditLog)
         .orderBy(desc(auditLog.createdAt))
         .limit(300);
+      const auditTimes = isoTimes("audit_log", auditRows.map((r) => r.id));
       const trail = auditRows
         .filter((r) => {
           // audit_log.details is a json-mode column: drizzle hands it
@@ -528,7 +554,7 @@ export const adminRouter = createRouter({
           }
         })
         .slice(0, 20)
-        .map((r) => ({ id: r.id, action: r.action, details: r.details, createdAt: r.createdAt }));
+        .map((r) => ({ id: r.id, action: r.action, details: r.details, createdAt: auditTimes.get(r.id) ?? null }));
       let rg: any = null;
       try {
         rg = { limits: getLimits(input.userId), usage: getUsage(input.userId) };
@@ -559,8 +585,8 @@ export const adminRouter = createRouter({
           wonUsdt: Math.round(wonUsdt * 100) / 100,
           spinsCount,
         },
-        recentSpins,
-        recentTxs,
+        recentSpins: recentSpinsDated,
+        recentTxs: recentTxsDated,
         notes,
         auditTrail: trail,
         rg,
