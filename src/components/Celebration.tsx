@@ -22,9 +22,9 @@ interface Coin {
 }
 
 const TIER_CONFIG = {
-  big: { coins: 36, duration: 3.2, shake: 6, flash: 0.25 },
-  mega: { coins: 70, duration: 4.2, shake: 12, flash: 0.4 },
-  jackpot: { coins: 110, duration: 5.5, shake: 20, flash: 0.6 },
+  big: { coins: 64, duration: 3.2, shake: 6, flash: 0.25 },
+  mega: { coins: 120, duration: 4.2, shake: 12, flash: 0.4 },
+  jackpot: { coins: 180, duration: 5.5, shake: 20, flash: 0.6 },
 } as const;
 
 const COIN_COLORS = ["#D4AF37", "#F4D03F", "#FFD700", "#B8860B"];
@@ -45,10 +45,10 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
   const coins = useMemo<Coin[]>(() => {
     return Array.from({ length: cfg.coins }, (_, i) => ({
       id: i,
-      x: 8 + Math.random() * 84,
-      delay: Math.random() * 1.6,
+      x: 4 + Math.random() * 92,
+      delay: Math.random() * 1.1,
       color: COIN_COLORS[i % COIN_COLORS.length],
-      size: 6 + Math.random() * 10,
+      size: 7 + Math.random() * 12,
       drift: (Math.random() - 0.5) * 220,
     }));
   }, [cfg.coins]);
@@ -170,12 +170,12 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
         );
       });
 
-      // Jackpot: Zeus rises with aura
-      if (data.tier === "jackpot" && zeusRef.current) {
+      // Mega/Jackpot: Zeus rises with aura
+      if (data.tier !== "big" && zeusRef.current) {
         tl.fromTo(
           zeusRef.current,
           { y: 260, opacity: 0, scale: 0.8 },
-          { y: 0, opacity: 0.9, scale: 1, duration: 1.1, ease: "power2.out" },
+          { y: 0, opacity: data.tier === "jackpot" ? 0.9 : 0.75, scale: 1, duration: data.tier === "jackpot" ? 1.1 : 0.9, ease: "power2.out" },
           0.5,
         );
       }
@@ -199,6 +199,16 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
       role="alertdialog"
       aria-label={data.title}
     >
+      {/* Flash-burst climax (all tiers): the white-gold burst
+          from the reference video, timed to the title slam. */}
+      <div
+        className="absolute inset-0 pointer-events-none celebration-burst"
+        style={{
+          background:
+            "radial-gradient(circle at center, rgba(255,246,200,0.95) 0%, rgba(255,213,79,0.55) 32%, transparent 62%)",
+        }}
+      />
+
       {/* Lightning flash ring for jackpot/mega */}
       {data.tier !== "big" && (
         <div
@@ -212,10 +222,10 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
       )}
 
       {/* Zeus rises for jackpot */}
-      {data.tier === "jackpot" && (
+      {data.tier !== "big" && (
         <div
           ref={zeusRef}
-          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-64 h-96 opacity-90 pointer-events-none"
+          className={`absolute bottom-0 left-1/2 -translate-x-1/2 ${data.tier === "jackpot" ? "w-64 h-96" : "w-52 h-80"} opacity-90 pointer-events-none`}
         >
           <img
             src="/assets/zeus-character-cutout.webp"
@@ -256,11 +266,12 @@ export function Celebration({ data, onDone }: { data: CelebrationData; onDone: (
           {letters.map((ch, i) => (
             <span
               key={i}
-              className="inline-block text-5xl md:text-7xl font-black"
+              className="inline-block text-6xl md:text-8xl font-black"
               style={{
                 color: data.tier === "jackpot" ? "#FFF3C4" : "#D4AF37",
                 textShadow:
-                  "0 0 30px rgba(212,175,55,0.9), 0 0 60px rgba(212,175,55,0.5), 0 4px 0 rgba(0,0,0,0.6)",
+                  "0 2px 0 #8A6D1F, 0 4px 0 #6E5616, 0 7px 0 rgba(0,0,0,0.45), 0 0 34px rgba(212,175,55,0.9), 0 0 70px rgba(212,175,55,0.5)",
+                WebkitTextStroke: "1px rgba(122,84,8,0.55)",
                 opacity: 0,
               }}
             >

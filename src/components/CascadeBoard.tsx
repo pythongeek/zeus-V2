@@ -62,8 +62,8 @@ export function CascadeBoard({
   scatters?: number | null;
   /** Free spins this spin awarded (0 when none). */
   fsAwarded?: number;
-  /** True while a spin request is in flight: tiles tumble so the
-   * board is visibly alive before the result lands. */
+  /** True while a spin request is in flight: every cell streams
+   * symbols downward like a slot reel until the result lands. */
   spinning?: boolean;
 }) {
   const { num, t } = useLang();
@@ -71,6 +71,12 @@ export function CascadeBoard({
   const [phase, setPhase] = useState<Phase>("idle");
   const [shownWin, setShownWin] = useState(0);
   const doneRef = useRef(false);
+  // onDone arrives as a fresh closure on every parent render;
+  // keeping it in a ref stops parent re-renders from re-arming
+  // the phase timers mid-playback (in the 2026-10-31 audit they
+  // stretched a ~1.3s playback toward 5s).
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   const reduced = useMemo(
     () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
     [],
@@ -99,7 +105,7 @@ export function CascadeBoard({
       const id = setTimeout(() => {
         if (!doneRef.current) {
           doneRef.current = true;
-          onDone();
+          onDoneRef.current();
         }
       }, 60);
       return () => clearTimeout(id);
@@ -120,7 +126,7 @@ export function CascadeBoard({
     if (!steps || phase === "idle") return;
     const scale = turbo ? 0.4 : 1;
     let ms = 300;
-    if (phase === "dropin") ms = 550;
+    if (phase === "dropin") ms = 480;
     if (phase === "highlight") ms = 400;
     if (phase === "explode") ms = 250;
     const id = setTimeout(() => {
@@ -130,7 +136,7 @@ export function CascadeBoard({
           setPhase("idle");
           if (!doneRef.current) {
             doneRef.current = true;
-            onDone();
+            onDoneRef.current();
           }
         } else {
           setPhase("highlight");
@@ -153,13 +159,33 @@ export function CascadeBoard({
           setPhase("idle");
           if (!doneRef.current) {
             doneRef.current = true;
-            onDone();
+            onDoneRef.current();
           }
         }
       }
     }, ms * scale);
     return () => clearTimeout(id);
-  }, [phase, stepIdx, steps, turbo, onDone]);
+  }, [phase, stepIdx, steps, turbo]);
+
+  // True rolling (2026-10-31): while a spin is in flight each
+  // cell streams symbols downward like a slot reel. Strips are
+  // decorative only — two symbols repeated, because the -50%
+  // loop needs identical halves to wrap seamlessly.
+  const [rollSeed, setRollSeed] = useState(0);
+  useEffect(() => {
+    if (spinning) setRollSeed((n) => n + 1);
+  }, [spinning]);
+  const rollStrips = useMemo(() => {
+    if (rollSeed === 0) return null;
+    const pick = () => (Math.random() < 0.03 ? 0 : 1 + Math.floor(Math.random() * 10));
+    return Array.from({ length: 30 }, () => {
+      const a = pick();
+      let b = pick();
+      if (b === a) b = (a + 3) % 11;
+      return [a, b, a, b];
+    });
+  }, [rollSeed]);
+  const rolling = !!spinning && phase === "idle" && !reduced && !!rollStrips;
 
   const currentStep = steps && phase !== "idle" ? steps[Math.min(stepIdx, steps.length - 1)] : null;
   const winPositions = new Set(currentStep?.clusters.flatMap((c) => c.positions) ?? []);
@@ -227,25 +253,45 @@ export function CascadeBoard({
                 isWin && phase === "highlight" ? "ring-2 ring-[#FFD54F] animate-pulse" : ""
               } ${isWin && phase === "explode" ? "scale-125 opacity-30 transition-all duration-200" : "transition-all duration-200"} ${
                 phase === "dropin" ? "animate-cascade-drop" : ""
-              } ${spinning && phase === "idle" ? "animate-cascade-tumble" : ""}`}
+              }`}
               style={
                 phase === "dropin"
-                  ? { animationDelay: `${(idx % 6) * 30 + Math.floor(idx / 6) * 45}ms` }
-                  : spinning && phase === "idle"
-                    ? { animationDelay: `${(idx % 6) * 45}ms` }
-                    : undefined
+                  ? { animationDelay: `${(idx % 6) * 22 + Math.floor(idx / 6) * 32}ms` }
+                  : undefined
               }
             >
-              <img
-                src={`/assets/symbol-${SYMBOL_NAMES[sym] ?? "zeus"}.webp`}
-                alt={SYMBOL_NAMES[sym] ?? "zeus"}
-                className={`${isScatter ? "w-[96%] h-[96%] scatter-glow" : "w-[86%] h-[86%]"} object-contain`}
-                draggable={false}
-              />
-              {isScatter && (
-                <span className="absolute bottom-0 inset-x-0 text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/75 py-px rounded-b-md">
-                  {t("scatterBadge")}
-                </span>
+              {rolling ? (
+                <div className="absolute inset-0 overflow-hidden rounded-md bg-[#1A1A25]">
+                  <div
+                    className="animate-cascade-roll flex flex-col"
+                    style={{ animationDuration: `${0.34 + (idx % 6) * 0.028 + Math.floor(idx / 6) * 0.014}s` }}
+                  >
+                    {rollStrips![idx].map((rs, k) => (
+                      <div key={k} className="relative w-full aspect-square flex-none flex items-center justify-center">
+                        <img
+                          src={`/assets/symbol-${SYMBOL_NAMES[rs] ?? "zeus"}.webp`}
+                          alt=""
+                          className="w-[86%] h-[86%] object-contain"
+                          draggable={false}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <img
+                    src={`/assets/symbol-${SYMBOL_NAMES[sym] ?? "zeus"}.webp`}
+                    alt={SYMBOL_NAMES[sym] ?? "zeus"}
+                    className={`${isScatter ? "w-[96%] h-[96%] scatter-glow" : "w-[86%] h-[86%]"} object-contain`}
+                    draggable={false}
+                  />
+                  {isScatter && (
+                    <span className="absolute bottom-0 inset-x-0 text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/75 py-px rounded-b-md">
+                      {t("scatterBadge")}
+                    </span>
+                  )}
+                </>
               )}
             </div>
           );

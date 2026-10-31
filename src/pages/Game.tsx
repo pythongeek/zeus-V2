@@ -848,13 +848,13 @@ export default function Game() {
           requestId: crypto.randomUUID(),
         });
         // The result often lands in ~200ms on a fast connection —
-        // too fast for the tumbling tiles and the reel loop to
+        // too fast for the rolling columns and the reel loop to
         // register at all, so the board appeared to swap instantly
         // (owner report, 2026-10-31). Hold the in-flight
         // presentation for a minimum beat first, mirroring
         // classic's fixed reel-stop schedule; the board playback
         // takes over from here.
-        const minFlightMs = store.turboMode ? 300 : 700;
+        const minFlightMs = store.turboMode ? 300 : 550;
         const flightLeftMs = minFlightMs - (Date.now() - spinStartedAt);
         if (flightLeftMs > 0) await new Promise((r) => setTimeout(r, flightLeftMs));
         audio.stopLoop("reels");

@@ -113,6 +113,16 @@
   100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
 }
 
+@keyframes celebration-burst {
+  0% { transform: scale(0.55); opacity: 0; }
+  14% { opacity: 1; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+.celebration-burst {
+  animation: celebration-burst 0.7s ease-out 0.3s both;
+}
+
 @keyframes lightning-flash {
   0%, 100% { opacity: 0; }
   10%, 90% { opacity: 0.3; }
@@ -181,6 +191,17 @@
 
 .animate-cascade-tumble {
   animation: cascade-tumble 0.36s ease-in-out infinite;
+}
+
+@keyframes cascade-roll {
+  from { transform: translateY(0); }
+  to { transform: translateY(-50%); }
+}
+
+.animate-cascade-roll {
+  animation-name: cascade-roll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 
 .animate-shimmer {
