@@ -1,0 +1,35 @@
+# FIX_LOG — mighty-zeus audit remediation
+
+Branch: `audit-fixes-2026-11` (merged ff to `feature/bd-production` for deploy)
+Deployed to production: 2026-11-03, pre-deploy backup `/var/backups/apps/zeus-pre-rtpdeploy-20261103-222529.sqlite` (integrity ok, 723 spins).
+
+Worked this batch (#1 + #2 of the RTP action plan):
+- **#2 [A4/A5] FIXED+VERIFIED** — commit `d133739 fix(math): kill legacy fallback math; spins require the active certified bundle`
+  - Evidence (before): `getMathConfig()` (game.ts) fell back to hardcoded `PAYOUTS`/`REEL_STRIPS`/`DEFAULT_FREE_SPINS` (the pre-registry math era, 57 production spins, 192% observed — see correction below); `ensureActiveClassicBundle` auto-activated any settings drift while stamping the *declared* RTP as its "cert"; fairness replayed classic spins against a hardcoded strip set.
+  - After: engine math comes only from the active certified bundle (`getActiveCertifiedClassic` / `ensureActiveCertifiedClassicBundle`); a settings edit that skipped the RTP Lab refuses spins with `MATH_DESYNC`; first-boot bootstrap self-certifies via `certifyMath` and the publish bounds before activating; `publishMath` is the only activation door and stores the full certification breakdown; the classic fairness verifier replays the spin's OWN stamped bundle; pre-registry spins return `verified:false, unverifiable:"PRE_REGISTRY"` (hash binding still shown).
+  - Tests: `bundles.test.ts` registry-lifecycle rewritten (bootstrap certifies / desync refuses / publish activates), new PRE_REGISTRY fairness test, rtp/mc/tripwire/recon/maxwin/b2 updated off the removed defaults. Suite: **47 files / 205 tests passed** (baseline 199 + 6 new).
+  - Corrections recorded: (1) `is_big_win` is NOT dead — threshold is 50× bet and no spin has reached it (max observed 39×); (2) thunder IS recorded as `thunder_strike` — zero occurrences in 394 paid spins vs λ≈2 is within Poisson range (13.9%); (3) the 192% "legacy math" number was 57-spin variance — the default math simulates 94.5–97.5% at 120k spins (rtp.test.ts) — the fallback still had to die (uncertified, unversioned, unverifiable), but not because of that number.
+- **#1 [A1/A2/A8] FIXED+VERIFIED** — commit `60a7c36 feat(rtplab): per-bundle RTP dashboard`
+  - `api/lib/rtplab.ts computeRtpReport`: per (mode, bundle) rows — certified RTP (unit-normalized: cascade cert stores a fraction), true RTP (all wins incl. FS wins ÷ paid bets), base RTP, ±95% band from the paid-spin sample, hit rates (paid/FS), FS round counts **with zero-payout rounds**, `MIN_SAMPLE_SPINS = 5000` honesty flag, per-day detail, jackpot pools shown separately (A8). Never blended.
+  - `admin.getRtpReport` (admin-gated; 401 verified unauthenticated). Admin → System card, EN/BN, horizontally scrollable at 390px (verified in a real browser, desktop + mobile viewport).
+  - Live numbers now visible to the operator (staging verification call, identical on prod): cascade-v1 98.93% [66.9–131.0] cert 96.48 · classic-v2 69.00% [48.0–90.0] cert 96.04 (cert outside band → the dashboard colors it) · classic-v1 parked 177.3% [162.1–192.6] cert 95.95 · pre-registry 192.0% (cert none).
+  - Tests: `rtplab.test.ts` — 4 tests (bundle separation, FS round accounting, exact band math incl. zero-variance clamp, days/jackpots).
+- Production smoke (post-deploy): health ok; paytable serves the certified bundle (zeus 45/175/730, RTP 96.04, FS 5/8/12); real spin id 724 settled and stamped `zeus-classic-v2` + sha256; `admin.getRtpReport` → 401 unauthenticated; journal clean; zero JS errors in the browser session.
+
+## Pending (everything else from the assessment — not started this batch)
+| ID | Status |
+|---|---|
+| A3 | PENDING — FS redesign (investigate runtime vs certified FS model; owner decision gate on target RTP/volatility before re-certification) |
+| A6 | PENDING — paytable per-line-bet disclosure (EN/BN) |
+| A7 | PENDING — regenerate classic v2 certificate with full breakdown (one RTP Lab publish) |
+| A10 | PENDING — rejection sampling for reel stops/thunder (requires re-certification) |
+| A11 | PENDING — bonus-buy pricing guard; cascade PASS-cert activation gate |
+| B1 | PENDING (CRITICAL) — autoplay runaway (timers, stale closures; DB-proven) |
+| B2/B3/B4/B6 | PENDING — FS banking race, jackpot-on-FS policy, idempotency cache in-txn, nonce continuity |
+| C1 | PENDING (CRITICAL) — rotate APP_SECRET, purge `.env*` from tree/history |
+| C2–C8 | PENDING — proxy-trust rate limits, transactional admin money ops, deposit dedupe, session revocation, ledger HMAC + 6 open recon mismatches, weekly-settlement cron, BDT withdrawals, misc hardening, identify port 8092 service |
+| D1–D6 | PENDING — spin-path timer cleanup, VipWheel pointer alignment, celebration re-render storm, balance refetch, polling gates, ReelEngine resize/race |
+| E1–E8 | PENDING — autoplay arm UX, tap targets, sign-out redirect, dialog disclosures, a11y, hardcoded strings, win<bet presentation |
+| F1–F4 | PENDING — sanctioned-country list, KYC/age gating (owner decision), restore drill, cron dedupe, `.env.bak` removal (after C1), off-box replication, two-sided tripwire alarms |
+
+Staging environment retained at `/opt/zeus-slot-staging` (port 3101, branch `audit-fixes-2026-11`, DB = pre-deploy copy; QA user elevated to super_admin and staging `admin_2fa_required` disabled for testing — staging only).
