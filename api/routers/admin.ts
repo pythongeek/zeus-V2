@@ -5,7 +5,8 @@ import { users, spins, jackpotPool, auditLog, transactions, balances, playerNote
 import { parseMoney, fmtMoney, canonicalMoney } from "../lib/money";
 import { getAllSettings, getSetting, setSetting } from "../lib/settings";
 import { toUsdt, getLimits, getUsage, dhakaDayStartSec, tsSec } from "../lib/limits";
-import { getMathConfig } from "./game";
+import { getMathConfig, SYMBOL_NAMES, type MathConfig } from "./game";
+import { activateClassicBundle, settingsMathConfig } from "../lib/bundles";
 import { certifyMath as certifyBundle, type MathBundle } from "../lib/certify";
 import { runReconciliation as executeReconciliation } from "../lib/reconcile";
 import { depositBoostFor, computeBoostMicro } from "../lib/boosts";
@@ -45,7 +46,16 @@ async function writeAudit(
 
 /* ---- Section E helpers: math bundle <-> settings ---- */
 function liveMathBundle(): MathBundle {
-  const cfg = getMathConfig();
+  // A4/A5: prefer the ACTIVE CERTIFIED bundle (what the engine runs);
+  // on a fresh install with no bundle yet, fall back to the strict
+  // settings mirror so the Lab can open. Spin still refuses either way
+  // until something certified is activated.
+  let cfg: MathConfig;
+  try {
+    cfg = getMathConfig();
+  } catch {
+    cfg = settingsMathConfig();
+  }
   const paytable: MathBundle["paytable"] = {};
   for (let id = 0; id <= 10; id++) {
     const p = cfg.payouts[id as keyof typeof cfg.payouts];
@@ -102,6 +112,26 @@ async function publishMathBundle(ctx: any, bundle: MathBundle, note: string | nu
   setSetting("math_free_spins", bundle.freeSpins, adminId);
   setSetting("math_thunder", bundle.thunder, adminId);
   setSetting("rtp_declared", cert.totalPct, adminId);
+  // A4/A5 (audit 2026-11-04): the publish is the ONLY door that changes
+  // live math. Register + activate the bundle here, carrying the FULL
+  // certification (the old drift path stamped the declared RTP as a
+  // stub cert and let uncertified settings edits go live).
+  const cfg: MathConfig = {
+    payouts: Object.fromEntries(
+      Object.entries(bundle.paytable).map(([id, p]) => [
+        Number(id),
+        { 3: p["3"], 4: p["4"], 5: p["5"] },
+      ]),
+    ) as MathConfig["payouts"],
+    strips: bundle.reels,
+    freeSpins: bundle.freeSpins,
+    thunderDenominator: bundle.thunder.chanceDenominator,
+    thunderFloorX: bundle.thunder.floorX,
+  };
+  const { row } = activateClassicBundle(getSqliteClient(), cfg, SYMBOL_NAMES, {
+    rtpPercent: cert.totalPct,
+    breakdown: cert,
+  });
   const info = getSqliteClient()
     .prepare(
       "INSERT INTO math_versions (bundle, total_rtp, breakdown, note, published_by) VALUES (?, ?, ?, ?, ?)",
@@ -110,10 +140,11 @@ async function publishMathBundle(ctx: any, bundle: MathBundle, note: string | nu
   setSetting("math_draft", null, adminId);
   await writeAudit(ctx, "admin.publishMath", {
     versionId: Number(info.lastInsertRowid),
+    bundleId: row.bundle_id,
     totalRtp: cert.totalPct,
     note,
   });
-  return { versionId: Number(info.lastInsertRowid), totalPct: cert.totalPct, breakdown: cert };
+  return { versionId: Number(info.lastInsertRowid), bundleId: row.bundle_id, totalPct: cert.totalPct, breakdown: cert };
 }
 
 // Mixed-era timestamp storage (Section B lesson): several tables

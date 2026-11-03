@@ -4,8 +4,8 @@ import { getDb } from "../queries/connection";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
-import { REEL_STRIPS, SYMBOL_NAMES } from "./game";
-import { getBundleByHash } from "../lib/bundles";
+import { SYMBOL_NAMES } from "./game";
+import { getBundleByHash, classicCfgFromBundle } from "../lib/bundles";
 import { getSqliteClient } from "../queries/connection";
 
 export const fairnessRouter = createRouter({
@@ -123,18 +123,63 @@ export const fairnessRouter = createRouter({
         ? session.serverSeed
         : "<hidden until this session ends>";
 
-      // Recalculate the hash
+      // A4 (audit 2026-11-04): replay against the spin's OWN certified
+      // bundle — the previous static REEL_STRIPS replay could never
+      // verify spins played under published math.
+      const bundleRowC = (spin as any).bundleSha256
+        ? getBundleByHash(getSqliteClient(), (spin as any).bundleSha256)
+        : null;
+      let strips: number[][] | null = null;
+      if (bundleRowC) {
+        try {
+          strips = classicCfgFromBundle(
+            typeof bundleRowC.bundle === "string" ? JSON.parse(bundleRowC.bundle) : bundleRowC.bundle,
+            SYMBOL_NAMES,
+          ).strips;
+        } catch {
+          strips = null;
+        }
+      }
+
+      // Recalculate the hash (strip-independent)
       const hash = crypto
         .createHash("sha256")
         .update(session.serverSeed + session.clientSeed + String(input.nonce))
         .digest("hex");
 
-      // Recalculate reel stops from hash
+      if (!strips) {
+        // Legacy spins played before the registry existed carry no
+        // bundle; honesty over theater — report exactly that.
+        return {
+          verified: false,
+          unverifiable: "PRE_REGISTRY",
+          note: "This spin predates the math registry (no certified bundle was stamped), so an independent replay is impossible. Hash binding is shown for reference only.",
+          modeId: (spin as any).modeId ?? "classic",
+          bundleId: (spin as any).bundleId ?? null,
+          bundleSha256: (spin as any).bundleSha256 ?? null,
+          serverSeed: revealed ? session.serverSeed : null,
+          serverSeedHash: session.serverSeedHash,
+          clientSeed: session.clientSeed,
+          nonce: input.nonce,
+          hash,
+          storedHash: spin.hash,
+          hashMatch: hash === spin.hash,
+          winAmount: spin.winAmount,
+          reelPositions: null,
+          symbols: null,
+          calculationSteps: [
+            `Step 1: hash = SHA-256(serverSeed + clientSeed + nonce) = "${hash}"`,
+            "Step 2: no certified bundle was stamped on this spin (pre-registry era) — replay unavailable.",
+          ],
+        };
+      }
+
+      // Recalculate reel stops from hash against the spin's bundle strips
       const reelStops: number[] = [];
       for (let i = 0; i < 5; i++) {
         const bytePair = hash.substring(i * 4, i * 4 + 4);
         const value = parseInt(bytePair, 16);
-        const reelLength = REEL_STRIPS[i].length;
+        const reelLength = strips[i].length;
         reelStops.push(value % reelLength);
       }
 
@@ -143,8 +188,8 @@ export const fairnessRouter = createRouter({
       for (let reel = 0; reel < 5; reel++) {
         const reelSymbols: number[] = [];
         for (let row = 0; row < 3; row++) {
-          const pos = (reelStops[reel] + row) % REEL_STRIPS[reel].length;
-          reelSymbols.push(REEL_STRIPS[reel][pos]);
+          const pos = (reelStops[reel] + row) % strips[reel].length;
+          reelSymbols.push(strips[reel][pos]);
         }
         symbols.push(reelSymbols);
       }
@@ -193,11 +238,11 @@ export const fairnessRouter = createRouter({
         calculationSteps: [
           `Step 1: hash = SHA-256("${seedForDisplay}" + "${session.clientSeed}" + "${input.nonce}")`,
           `Step 2: hash = "${hash}"`,
-          `Step 3: reel_1 = hex("${hash.substring(0, 4)}") % ${REEL_STRIPS[0].length} = ${reelStops[0]}`,
-          `Step 4: reel_2 = hex("${hash.substring(4, 8)}") % ${REEL_STRIPS[1].length} = ${reelStops[1]}`,
-          `Step 5: reel_3 = hex("${hash.substring(8, 12)}") % ${REEL_STRIPS[2].length} = ${reelStops[2]}`,
-          `Step 6: reel_4 = hex("${hash.substring(12, 16)}") % ${REEL_STRIPS[3].length} = ${reelStops[3]}`,
-          `Step 7: reel_5 = hex("${hash.substring(16, 20)}") % ${REEL_STRIPS[4].length} = ${reelStops[4]}`,
+          `Step 3: reel_1 = hex("${hash.substring(0, 4)}") % ${strips[0].length} = ${reelStops[0]}`,
+          `Step 4: reel_2 = hex("${hash.substring(4, 8)}") % ${strips[1].length} = ${reelStops[1]}`,
+          `Step 5: reel_3 = hex("${hash.substring(8, 12)}") % ${strips[2].length} = ${reelStops[2]}`,
+          `Step 6: reel_4 = hex("${hash.substring(12, 16)}") % ${strips[3].length} = ${reelStops[3]}`,
+          `Step 7: reel_5 = hex("${hash.substring(16, 20)}") % ${strips[4].length} = ${reelStops[4]}`,
         ],
       };
     }),

@@ -15,7 +15,7 @@ const dbPath = path.join(tmpDir, "test.sqlite");
 process.env.ZEUS_DB_PATH = dbPath;
 
 let mc: any;
-let getMathConfig: any;
+let settingsMathConfig: any;
 
 beforeAll(async () => {
   const Database = (await import("better-sqlite3")).default;
@@ -26,7 +26,7 @@ beforeAll(async () => {
   }
   sqlite.close();
   mc = await import("./mc");
-  getMathConfig = (await import("../routers/game")).getMathConfig;
+  settingsMathConfig = (await import("./bundles")).settingsMathConfig;
 });
 
 afterAll(() => {
@@ -87,7 +87,7 @@ describe("positive control: the classic game", () => {
   it(
     "harness reproduces the certified full-process RTP inside its CI",
     () => {
-      const math = getMathConfig();
+      const math = settingsMathConfig();
       const { target, cert } = mc.classicProcessTarget(math);
       // Sanity: the certifier still reports the known production math.
       expect(cert.totalPct).toBeGreaterThan(95.4);

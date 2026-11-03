@@ -1,10 +1,28 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
+import fs from "fs";
+import path from "path";
 import {
   calculateSpin,
   evaluatePaylines,
   checkThunderStrike,
   SYMBOLS,
 } from "./game";
+import { settingsMathConfig } from "../lib/bundles";
+
+// The strict settings-math reader touches the settings store — give it
+// an isolated migrated database like the other engine-level tests.
+const tmpDir = fs.mkdtempSync(path.join("/tmp", "zeus-rtp-test-"));
+process.env.ZEUS_DB_PATH = path.join(tmpDir, "test.sqlite");
+
+beforeAll(async () => {
+  const Database = (await import("better-sqlite3")).default;
+  const sqlite = new Database(process.env.ZEUS_DB_PATH!);
+  const migrationsDir = path.resolve(process.cwd(), "db", "migrations");
+  for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+    sqlite.exec(fs.readFileSync(path.join(migrationsDir, file), "utf8"));
+  }
+  sqlite.close();
+});
 
 /**
  * A4 RTP certification regression.
@@ -34,12 +52,15 @@ describe("A4: RTP certification", () => {
   it(
     "total RTP matches the certified 96.0% (tolerance ±1.5pt at 120k spins)",
     () => {
+      // A4/A5: the engine no longer carries fallback math constants —
+      // the test reads the certified settings mirror directly.
+      const math = settingsMathConfig();
       let paySum = 0; // in betPerLine units; total bet = 20
       let thunderSum = 0;
       let fsSum = 0;
       for (let nonce = 1; nonce <= SPINS; nonce++) {
-        const { symbols, hash } = calculateSpin("rtp-cert-seed", "rtp", nonce);
-        const res = evaluatePaylines(symbols.map((c) => [...c]), 1);
+        const { symbols, hash } = calculateSpin("rtp-cert-seed", "rtp", nonce, math.strips);
+        const res = evaluatePaylines(symbols.map((c) => [...c]), 1, math);
         paySum += res.totalPayout;
         fsSum += res.freeSpinsAwarded;
         if (res.totalPayout === 0 && checkThunderStrike(hash)) {
@@ -50,7 +71,7 @@ describe("A4: RTP certification", () => {
             const row = parseInt(hash.substring(34 + i * 4, 36 + i * 4), 16) % 3;
             g[r][row] = SYMBOLS.ZEUS;
           }
-          const re = evaluatePaylines(g, 1);
+          const re = evaluatePaylines(g, 1, math);
           thunderSum += Math.max(re.totalPayout, 100); // floor 5x total bet = 100 betPerLine
         }
       }

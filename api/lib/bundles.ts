@@ -8,15 +8,22 @@
  * historical spin can be replayed against the exact math that produced
  * it, and the RTP tripwire can audit bundle hashes against this registry.
  *
- * The classic bundle is derived from the EFFECTIVE math config
- * (getMathConfig: settings over certified defaults), so it stays truthful
- * no matter which door the math changed through (RTP Lab publish, Game
- * Config settings edit). When the effective math drifts from the active
- * bundle, the next spin auto-registers the next version and parks the old
- * one — the registry is an append-only history, never an edit.
+ * Classic activation governance (audit 2026-11-04, A4/A5):
+ *  - The engine NEVER falls back to hardcoded constants. The only math
+ *    sources are (a) the active certified bundle and (b) the settings
+ *    mirror that only the RTP Lab publish writes.
+ *  - The active bundle's math_hash is re-verified against the settings
+ *    mirror on EVERY spin. A settings edit that skipped certification
+ *    desyncs the two and the spin refuses (MATH_DESYNC) until the
+ *    operator publishes through the RTP Lab (which runs the certifier
+ *    and enforces the publish bounds).
+ *  - Fresh installs self-bootstrap: the settings default math is
+ *    certified inline (exact enumeration + thunder MC, bounds-checked)
+ *    before it may activate. Nothing activates without a measured cert.
  */
 import crypto from "crypto";
 import { getSqliteClient } from "../queries/connection";
+import { getSetting } from "./settings";
 import type { MathConfig } from "../routers/game";
 
 type SqliteClient = ReturnType<typeof getSqliteClient>;
@@ -91,36 +98,182 @@ function getActiveRow(sqlite: SqliteClient, modeId: string): BundleRow | null {
     .get(modeId) as BundleRow | undefined) ?? null;
 }
 
-/**
- * Return the active classic bundle, registering the next version first if
- * the effective math has drifted from it (or none exists yet). Safe to
- * call inside the spin transaction: reads/writes join the caller's txn.
- */
-export function ensureActiveClassicBundle(
-  sqlite: SqliteClient,
-  math: MathConfig,
-  symbolNames: Record<number, string>,
-  certRtpPercent: number,
-): BundleRow {
-  const mathPart = classicMathPart(math, symbolNames);
-  const mathHash = sha256Hex(canonicalStringify(mathPart));
-  const active = getActiveRow(sqlite, "classic");
-  if (active && active.math_hash === mathHash) return active;
+/* ---- Classic: strict bundle <-> settings binding (A4/A5) ---- */
 
+/** Parse a classic bundle payload into the engine's MathConfig.
+ * Throws (never falls back) when anything is malformed. */
+export function classicCfgFromBundle(payload: unknown, symbolNames: Record<number, string>): MathConfig {
+  const b = payload as Record<string, any>;
+  if (!b || typeof b !== "object" || b.engine !== "lines-5x3") {
+    throw new Error("BUNDLE_INVALID: not a lines-5x3 classic bundle");
+  }
+  const idByName = new Map<string, number>();
+  for (const [idStr, name] of Object.entries(symbolNames)) idByName.set(name, Number(idStr));
+  if (typeof b.paytable !== "object" || !b.paytable) throw new Error("BUNDLE_INVALID: paytable missing");
+  const payouts: Record<number, { 3: number; 4: number; 5: number }> = {};
+  for (const [name, id] of idByName) {
+    const p = b.paytable[name];
+    if (!p || ![3, 4, 5].every((k) => Number.isFinite((p as Record<number, number>)[k]) && (p as Record<number, number>)[k] >= 0)) {
+      throw new Error(`BUNDLE_INVALID: paytable missing/invalid for symbol ${name}`);
+    }
+    const pp = p as Record<number, number>;
+    payouts[id] = { 3: pp[3], 4: pp[4], 5: pp[5] };
+  }
+  if (!Array.isArray(b.reels) || b.reels.length !== 5 ||
+      !b.reels.every((r: unknown) => Array.isArray(r) && r.length >= 10 && r.every((v: unknown) => typeof v === "string" && idByName.has(v)))) {
+    throw new Error("BUNDLE_INVALID: reels must be 5 strips of >=10 known symbol names");
+  }
+  const strips: number[][] = (b.reels as string[][]).map((strip) =>
+    strip.map((name) => idByName.get(name) as number),
+  );
+  const fs = b.free_spins;
+  if (!fs || !["3", "4", "5"].every((k) => Number.isInteger(fs[k]) && fs[k] >= 0 && fs[k] <= 1000)) {
+    throw new Error("BUNDLE_INVALID: free_spins must define integer counts for 3/4/5 scatters");
+  }
+  const th = b.thunder;
+  if (!th || !Number.isInteger(th.denominator) || th.denominator < 1 || th.denominator > 100000 ||
+      !Number.isFinite(th.floor_x) || th.floor_x < 0 || th.floor_x > 100) {
+    throw new Error("BUNDLE_INVALID: thunder must define denominator 1..100000 and floor_x 0..100");
+  }
+  return {
+    payouts,
+    strips,
+    freeSpins: { "3": fs["3"], "4": fs["4"], "5": fs["5"] },
+    thunderDenominator: th.denominator,
+    thunderFloorX: th.floor_x,
+  };
+}
+
+/** The settings mirror (math_* keys) parsed STRICTLY. The settings
+ * registry carries the certified defaults, so this always yields a
+ * coherent config; corrupt values throw instead of falling back. */
+export function settingsMathConfig(): MathConfig {
+  const p = getSetting<Record<string, { 3: number; 4: number; 5: number }>>("math_paytable");
+  const st = getSetting<number[][]>("math_reels");
+  const fs = getSetting<Record<string, number>>("math_free_spins");
+  const th = getSetting<{ chanceDenominator: number; floorX: number }>("math_thunder");
+  if (!p || !st || !fs || !th) throw new Error("MATH_INVALID: math settings are missing");
+  const payouts: Record<number, { 3: number; 4: number; 5: number }> = {};
+  for (let id = 0; id <= 10; id++) {
+    const e = p[String(id)] as Record<number, number> | undefined;
+    if (!e || ![3, 4, 5].every((k) => Number.isFinite(e[k]) && e[k] >= 0)) {
+      throw new Error(`MATH_INVALID: settings paytable invalid for symbol id ${id}`);
+    }
+    payouts[id] = { 3: e[3], 4: e[4], 5: e[5] };
+  }
+  if (!Array.isArray(st) || st.length !== 5 ||
+      !st.every((r) => Array.isArray(r) && r.length >= 10 && r.every((v) => Number.isInteger(v) && v >= 0 && v <= 10))) {
+    throw new Error("MATH_INVALID: settings reels invalid");
+  }
+  if (!["3", "4", "5"].every((k) => Number.isInteger(fs[k]) && fs[k] >= 0 && fs[k] <= 1000)) {
+    throw new Error("MATH_INVALID: settings free spins invalid");
+  }
+  if (!Number.isInteger(th.chanceDenominator) || th.chanceDenominator < 1 || th.chanceDenominator > 100000 ||
+      !Number.isFinite(th.floorX) || th.floorX < 0 || th.floorX > 100) {
+    throw new Error("MATH_INVALID: settings thunder invalid");
+  }
+  return { payouts, strips: st, freeSpins: { "3": fs["3"], "4": fs["4"], "5": fs["5"] }, thunderDenominator: th.chanceDenominator, thunderFloorX: th.floorX };
+}
+
+/** Sync reader for non-spin callers (paytable, admin mirror, tests).
+ * Resolves the ACTIVE bundle only — no fallback math exists. */
+export function getActiveCertifiedClassic(sqlite: SqliteClient, symbolNames: Record<number, string>): { row: BundleRow; cfg: MathConfig } | null {
+  const row = getActiveRow(sqlite, "classic");
+  if (!row) return null;
+  try {
+    const cert = row.cert ? (JSON.parse(row.cert) as { rtp_percent?: unknown }) : null;
+    if (!cert || typeof cert.rtp_percent !== "number" || !(cert.rtp_percent >= 50 && cert.rtp_percent <= 100)) {
+      return null; // uncertified — refuse
+    }
+    const cfg = classicCfgFromBundle(typeof row.bundle === "string" ? JSON.parse(row.bundle) : row.bundle, symbolNames);
+    return { row, cfg };
+  } catch {
+    return null; // malformed bundle or cert — refuse, never fall back
+  }
+}
+
+/** Hash the settings mirror and compare with the active bundle. */
+function settingsMatchActive(sqlite: SqliteClient, symbolNames: Record<number, string>): { row: BundleRow; cfg: MathConfig } | "NO_ACTIVE" | "DESYNC" {
+  const active = getActiveRow(sqlite, "classic");
+  if (!active) return "NO_ACTIVE";
+  const settingsCfg = settingsMathConfig();
+  const settingsHash = sha256Hex(canonicalStringify(classicMathPart(settingsCfg, symbolNames)));
+  if (active.math_hash !== settingsHash) return "DESYNC";
+  const cfg = classicCfgFromBundle(typeof active.bundle === "string" ? JSON.parse(active.bundle) : active.bundle, symbolNames);
+  return { row: active, cfg };
+}
+
+/**
+ * Resolve the classic math for a spin. Bootstrap-safe: when no active
+ * bundle exists, the settings default math is certified inline (exact
+ * enumeration + thunder MC, bounds-checked) before it activates —
+ * nothing goes live without a measured certificate. When an active
+ * bundle exists but the settings mirror drifted from it (an edit that
+ * skipped the RTP Lab), the spin REFUSES (MATH_DESYNC) — certification
+ * is the only door that changes live math.
+ */
+export async function ensureActiveCertifiedClassicBundle(symbolNames: Record<number, string>): Promise<{ row: BundleRow; cfg: MathConfig }> {
+  const sqlite = getSqliteClient();
+  const state = settingsMatchActive(sqlite, symbolNames);
+  if (state === "DESYNC") {
+    throw new Error(
+      "MATH_DESYNC: math settings changed without publishing. Open the RTP Lab and publish (with certification) to activate them.",
+    );
+  }
+  if (state !== "NO_ACTIVE") return state;
+
+  // Bootstrap: certify the settings default math, then activate.
+  const cfg = settingsMathConfig();
+  const paytableForCert: Record<string, { 3: number; 4: number; 5: number }> = {};
+  for (const [id, pays] of Object.entries(cfg.payouts)) {
+    paytableForCert[String(id)] = pays as { 3: number; 4: number; 5: number };
+  }
+  const { certifyMath } = await import("./certify");
+  const cert = certifyMath({
+    paytable: paytableForCert,
+    reels: cfg.strips,
+    freeSpins: cfg.freeSpins,
+    thunder: { chanceDenominator: cfg.thunderDenominator, floorX: cfg.thunderFloorX },
+  });
+  const min = getSetting<number>("rtp_publish_min") ?? 90;
+  const max = getSetting<number>("rtp_publish_max") ?? 98;
+  if (cert.totalPct < min || cert.totalPct > max) {
+    throw new Error(
+      `MATH_NOT_CERTIFIABLE: default math certifies at ${cert.totalPct}%, outside the publish bounds ${min}-${max}%. Classic is disabled until the math is fixed and published.`,
+    );
+  }
+  return activateClassicBundle(sqlite, cfg, symbolNames, { rtpPercent: cert.totalPct, breakdown: cert });
+}
+
+/** Register + activate a classic bundle (the publish door). Parks any
+ * previous active and stores the full certification with the bundle. */
+export function activateClassicBundle(
+  sqlite: SqliteClient,
+  cfg: MathConfig,
+  symbolNames: Record<number, string>,
+  cert: { rtpPercent: number; breakdown?: unknown },
+): { row: BundleRow; cfg: MathConfig } {
   const count = sqlite
     .prepare("SELECT COUNT(*) AS c FROM math_bundles WHERE mode_id = 'classic'")
     .get() as { c: number };
   const bundleId = `zeus-classic-v${count.c + 1}`;
-  const { json, sha256 } = buildClassicBundle(math, symbolNames, bundleId, certRtpPercent);
-  if (active) {
-    sqlite.prepare("UPDATE math_bundles SET status = 'parked' WHERE bundle_id = ?").run(active.bundle_id);
-  }
-  sqlite
-    .prepare(
-      "INSERT INTO math_bundles (bundle_id, mode_id, engine, bundle, sha256, math_hash, status, cert, activated_at) VALUES (?, 'classic', 'lines-5x3', ?, ?, ?, 'active', ?, unixepoch())",
-    )
-    .run(bundleId, json, sha256, mathHash, JSON.stringify({ method: "exact-enumeration (base + free spins) + monte-carlo (thunder strike)", rtp_percent: certRtpPercent }));
-  return sqlite.prepare("SELECT * FROM math_bundles WHERE bundle_id = ?").get(bundleId) as BundleRow;
+  const { json, sha256 } = buildClassicBundle(cfg, symbolNames, bundleId, cert.rtpPercent);
+  const certJson = JSON.stringify({
+    method: "exact-enumeration (base + free spins) + monte-carlo (thunder strike)",
+    rtp_percent: cert.rtpPercent,
+    breakdown: cert.breakdown ?? null,
+  });
+  const park = sqlite.prepare("UPDATE math_bundles SET status = 'parked' WHERE mode_id = 'classic' AND status = 'active'");
+  const insert = sqlite.prepare(
+    "INSERT INTO math_bundles (bundle_id, mode_id, engine, bundle, sha256, math_hash, status, cert, activated_at) VALUES (?, 'classic', 'lines-5x3', ?, ?, ?, 'active', ?, unixepoch())",
+  );
+  const activate = sqlite.transaction(() => {
+    park.run();
+    insert.run(bundleId, json, sha256, sha256Hex(canonicalStringify(classicMathPart(cfg, symbolNames))), certJson);
+  });
+  activate();
+  const row = sqlite.prepare("SELECT * FROM math_bundles WHERE bundle_id = ?").get(bundleId) as BundleRow;
+  return { row, cfg };
 }
 
 /* ---- Cascade bundles (Step 5) ---- */

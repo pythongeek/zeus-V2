@@ -21,6 +21,23 @@ let settings: any;
 let getDb: any;
 let getSqliteClient: any;
 let schema: any;
+let bundles: any;
+let symbolNames: any;
+
+// A4/A5: math overrides go through the PUBLISH door — settings mirror +
+// bundle activation together (a raw settings edit now desyncs and
+// refuses spins with MATH_DESYNC by design).
+async function publishCfg(overrides?: { freeSpins?: Record<string, number>; paytable?: Record<string, any> }) {
+  const { settingsMathConfig } = bundles;
+  const cfg = settingsMathConfig();
+  if (overrides?.freeSpins) cfg.freeSpins = overrides.freeSpins;
+  if (overrides?.paytable) cfg.payouts = overrides.paytable;
+  settings.setSetting("math_paytable", cfg.payouts, 1);
+  settings.setSetting("math_reels", cfg.strips, 1);
+  settings.setSetting("math_free_spins", cfg.freeSpins, 1);
+  settings.setSetting("math_thunder", { chanceDenominator: cfg.thunderDenominator, floorX: cfg.thunderFloorX }, 1);
+  await bundles.activateClassicBundle(getSqliteClient(), cfg, symbolNames, { rtpPercent: 96 });
+}
 
 async function makeSession(serverSeed: string, clientSeed: string, balance: string) {
   const db = getDb();
@@ -88,6 +105,8 @@ beforeAll(async () => {
   ({ gameRouter } = await import("./game"));
   ({ getDb, getSqliteClient } = await import("../queries/connection"));
   schema = await import("../../db/schema");
+  bundles = await import("../lib/bundles");
+  symbolNames = (await import("./game")).SYMBOL_NAMES;
   const client = getSqliteClient();
   for (const [tier, seed, rate] of [
     ["mini", "5", "0.005"],
@@ -107,13 +126,22 @@ afterAll(() => {
 });
 
 describe("B2: settings drive the game", () => {
-  it("math_free_spins override changes the award", async () => {
-    settings.setSetting("math_free_spins", { "3": 3, "4": 12, "5": 20 }, 1);
+  it("math_free_spins publish changes the award", async () => {
+    await publishCfg({ freeSpins: { "3": 3, "4": 12, "5": 20 } });
     const { caller, sessionId } = await makeSession("a5-hunt-15", "a5client", "100");
     const res = await caller.spin({ sessionId, betAmount: "1", currency: "USDT" });
     expect(res.freeSpinsAwarded).toBe(3);
     expect(res.freeSpinsRemaining).toBe(3);
-    settings.setSetting("math_free_spins", { "3": 8, "4": 12, "5": 20 }, 1);
+    await publishCfg({ freeSpins: { "3": 8, "4": 12, "5": 20 } });
+  });
+
+  it("a raw math_free_spins edit without publishing refuses the spin", async () => {
+    settings.setSetting("math_free_spins", { "3": 3, "4": 12, "5": 20 }, 1);
+    const { caller, sessionId } = await makeSession("a5-hunt-15", "a5client", "100");
+    await expect(
+      caller.spin({ sessionId, betAmount: "1", currency: "USDT" }),
+    ).rejects.toThrow("MATH_DESYNC");
+    await publishCfg({ freeSpins: { "3": 8, "4": 12, "5": 20 } });
   });
 
   it("currencies_enabled gates spins", async () => {
@@ -142,7 +170,7 @@ describe("B2: settings drive the game", () => {
     settings.setSetting("features", { freeSpins: true, thunder: true, jackpots: true }, 1);
   });
 
-  it("getPaytable reflects paytable override and declared RTP", async () => {
+  it("getPaytable reflects a published paytable and declared RTP", async () => {
     const pub = gameRouter.createCaller({
       user: undefined,
       req: new Request("http://localhost/api/trpc"),
@@ -153,10 +181,10 @@ describe("B2: settings drive the game", () => {
     const def = settings.SETTING_DEFS.math_paytable.def as any;
     const custom = JSON.parse(JSON.stringify(def));
     custom["10"] = { "3": 4, "4": 12, "5": 999 };
-    settings.setSetting("math_paytable", custom, 1);
+    await publishCfg({ paytable: custom });
     const after = await pub.getPaytable();
     const queen = after.symbols.find((s: any) => s.name === "queen");
     expect(queen.payouts["5"]).toBe(999);
-    settings.setSetting("math_paytable", def, 1);
+    await publishCfg({ paytable: def });
   });
 });

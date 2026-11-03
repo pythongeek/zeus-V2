@@ -21,7 +21,6 @@ let getDb: any;
 let schema: any;
 let settingsLib: any;
 let passwordLib: any;
-let getMathConfig: any;
 let SYMBOL_NAMES: any;
 
 const PARAMS = () => ({ ...tripwire.TRIPWIRE_PARAMS, layer1MinSpins: 1000, ewmaArmSpins: 1000 });
@@ -57,7 +56,6 @@ beforeAll(async () => {
   settingsLib = await import("./settings");
   passwordLib = await import("./password");
   const game = await import("../routers/game");
-  getMathConfig = game.getMathConfig;
   SYMBOL_NAMES = game.SYMBOL_NAMES;
 
   const db = getDb();
@@ -79,11 +77,11 @@ beforeAll(async () => {
     .returning();
   sessionId = session.id;
 
-  const row = bundles.ensureActiveClassicBundle(
+  const { row } = await bundles.activateClassicBundle(
     getSqliteClient(),
-    getMathConfig(),
+    bundles.settingsMathConfig(),
     SYMBOL_NAMES,
-    settingsLib.getSetting("rtp_declared"),
+    { rtpPercent: settingsLib.getSetting("rtp_declared") ?? 96 },
   );
   classicSha = row.sha256;
 });

@@ -18,7 +18,7 @@ process.env.ZEUS_DB_PATH = dbPath;
 let bundles: any;
 let gameRouter: any;
 let fairnessRouter: any;
-let getMathConfig: any;
+let settingsMathConfig: any;
 let SYMBOL_NAMES: any;
 let getDb: any;
 let getSqliteClient: any;
@@ -46,7 +46,7 @@ beforeAll(async () => {
   bundles = await import("./bundles");
   const game = await import("../routers/game");
   gameRouter = game.gameRouter;
-  getMathConfig = game.getMathConfig;
+  settingsMathConfig = bundles.settingsMathConfig;
   SYMBOL_NAMES = game.SYMBOL_NAMES;
   fairnessRouter = (await import("../routers/fairness")).fairnessRouter;
   getDb = (await import("../queries/connection")).getDb;
@@ -69,7 +69,7 @@ describe("canonical hashing", () => {
   });
 
   it("buildClassicBundle: same math same hash; one cell change rehashes", () => {
-    const math = getMathConfig();
+    const math = settingsMathConfig();
     const one = bundles.buildClassicBundle(math, SYMBOL_NAMES, "zeus-classic-v1", 95.95);
     const two = bundles.buildClassicBundle(math, SYMBOL_NAMES, "zeus-classic-v1", 95.95);
     expect(one.sha256).toBe(two.sha256);
@@ -84,28 +84,50 @@ describe("canonical hashing", () => {
   });
 });
 
-describe("registry lifecycle", () => {
-  it("seeds v1 once, then auto-versions on math drift", () => {
+describe("registry lifecycle (A4/A5 governance)", () => {
+  it("bootstraps a self-certified v1, refuses drifted settings, publish re-activates", async () => {
     const sqlite = getSqliteClient();
-    const math = getMathConfig();
-    const rtp = settingsLib.getSetting("rtp_declared") ?? 0;
-    const v1 = bundles.ensureActiveClassicBundle(sqlite, math, SYMBOL_NAMES, rtp);
-    expect(v1.bundle_id).toBe("zeus-classic-v1");
-    expect(v1.status).toBe("active");
-    const again = bundles.ensureActiveClassicBundle(sqlite, math, SYMBOL_NAMES, rtp);
-    expect(again.bundle_id).toBe("zeus-classic-v1");
+    // Empty registry: the bootstrap certifies the settings default math
+    // (bounds-checked) before it may activate.
+    const first = await bundles.ensureActiveCertifiedClassicBundle(SYMBOL_NAMES);
+    expect(first.row.bundle_id).toBe("zeus-classic-v1");
+    expect(first.row.status).toBe("active");
+    expect(first.cfg.strips.length).toBe(5);
+    const cert = JSON.parse(first.row.cert);
+    expect(cert.rtp_percent).toBeGreaterThan(90);
+    expect(cert.rtp_percent).toBeLessThan(99);
+    // Idempotent while settings stay bound.
+    const again = await bundles.ensureActiveCertifiedClassicBundle(SYMBOL_NAMES);
+    expect(again.row.bundle_id).toBe("zeus-classic-v1");
 
-    const drifted = JSON.parse(JSON.stringify(math));
+    // A settings edit WITHOUT publishing desyncs and must refuse spins.
+    const drifted = JSON.parse(JSON.stringify(settingsMathConfig()));
     drifted.payouts[10] = { 3: 4, 4: 12, 5: 61 };
-    const v2 = bundles.ensureActiveClassicBundle(sqlite, drifted, SYMBOL_NAMES, rtp);
-    expect(v2.bundle_id).toBe("zeus-classic-v2");
+    settingsLib.setSetting("math_paytable", drifted.payouts, null);
+    await expect(bundles.ensureActiveCertifiedClassicBundle(SYMBOL_NAMES)).rejects.toThrow("MATH_DESYNC");
+    // The engine reader still resolves the ACTIVE bundle (single truth).
+    const active = bundles.getActiveCertifiedClassic(sqlite, SYMBOL_NAMES);
+    expect(active!.row.bundle_id).toBe("zeus-classic-v1");
+
+    // The publish door activates the new math WITH its certification.
+    const published = await bundles.activateClassicBundle(
+      sqlite,
+      drifted,
+      SYMBOL_NAMES,
+      { rtpPercent: 96.0, breakdown: { totalPct: 96.0 } },
+    );
+    expect(published.row.bundle_id).toBe("zeus-classic-v2");
+    expect(JSON.parse(published.row.cert).breakdown).toBeTruthy();
     const old = bundles.getBundleById(sqlite, "zeus-classic-v1");
     expect(old.status).toBe("parked");
-    const byHash = bundles.getBundleByHash(sqlite, v2.sha256);
+    const byHash = bundles.getBundleByHash(sqlite, published.row.sha256);
     expect(byHash.bundle_id).toBe("zeus-classic-v2");
+    // Desynced mirror was replaced by the publish — ensure resolves again.
+    const afterPublish = await bundles.ensureActiveCertifiedClassicBundle(SYMBOL_NAMES);
+    expect(afterPublish.row.bundle_id).toBe("zeus-classic-v2");
     const modes = bundles.listModes(sqlite);
     expect(modes).toEqual([
-      { modeId: "classic", status: "active", bundleId: "zeus-classic-v2", sha256: v2.sha256, engine: "lines-5x3", certRtp: 0.96 },
+      { modeId: "classic", status: "active", bundleId: "zeus-classic-v2", sha256: published.row.sha256, engine: "lines-5x3", certRtp: 0.96 },
     ]);
   });
 });

@@ -25,12 +25,16 @@ const CLIENT_SEED = "a1-client-seed";
 let fairnessRouter: any;
 let gameRouter: any;
 let calculateSpin: any;
+let settingsMathConfig: any;
+let bundles: any;
+let getSqliteClient: any;
 let SYMBOL_NAMES: any;
 let getDb: any;
 let schema: any;
 let callerFairness: any;
 let callerGame: any;
 let sessionId: number;
+let legacySessionId: number;
 
 beforeAll(async () => {
   // Create the schema in the temp DB from the real migration files,
@@ -52,6 +56,9 @@ beforeAll(async () => {
 
   ({ fairnessRouter } = await import("./fairness"));
   ({ gameRouter, calculateSpin, SYMBOL_NAMES } = await import("./game"));
+  bundles = await import("../lib/bundles");
+  getSqliteClient = (await import("../queries/connection")).getSqliteClient;
+  settingsMathConfig = bundles.settingsMathConfig;
   ({ getDb } = await import("../queries/connection"));
   schema = await import("../../db/schema");
 
@@ -83,9 +90,46 @@ beforeAll(async () => {
     .returning();
   sessionId = session.id;
 
-  const { reelStops, symbols, hash } = calculateSpin(SERVER_SEED, CLIENT_SEED, 1);
+  // A4: activate a certified bundle and stamp the spin with it — the
+  // verifier must replay against THIS math, not a hardcoded strip set.
+  const activated = await bundles.activateClassicBundle(
+    getSqliteClient(),
+    settingsMathConfig(),
+    SYMBOL_NAMES,
+    { rtpPercent: 96 },
+  );
+  const mathCfg = settingsMathConfig();
+  const { reelStops, symbols, hash } = calculateSpin(SERVER_SEED, CLIENT_SEED, 1, mathCfg.strips);
   await db.insert(schema.spins).values({
     sessionId,
+    userId: user.id,
+    nonce: 1,
+    betAmount: "1",
+    currency: "USDT",
+    reelPositions: reelStops,
+    symbolsShown: symbols.map((col: number[]) => col.map((s) => SYMBOL_NAMES[s])),
+    winAmount: "0",
+    winLines: [],
+    hash,
+    modeId: "classic",
+    bundleId: activated.row.bundle_id,
+    bundleSha256: activated.row.sha256,
+  });
+  // A pre-registry spin (no bundle stamp) must NOT verify silently.
+  const [session2] = await db
+    .insert(schema.gameSessions)
+    .values({
+      userId: user.id,
+      serverSeed: SERVER_SEED,
+      serverSeedHash: crypto.createHash("sha256").update(SERVER_SEED).digest("hex"),
+      clientSeed: CLIENT_SEED,
+      nonce: 0,
+      status: "active",
+    })
+    .returning();
+  legacySessionId = session2.id;
+  await db.insert(schema.spins).values({
+    sessionId: legacySessionId,
     userId: user.id,
     nonce: 1,
     betAmount: "1",
@@ -140,6 +184,13 @@ describe("A1: fairness.verify seed handling", () => {
     const res = await callerFairness.verify({ sessionId, nonce: 1 });
     expect(res.verified).toBe(true);
     expect(res.serverSeed).toBe(SERVER_SEED);
+  });
+
+  it("A4: a pre-registry spin reports unverifiable instead of faking a replay", async () => {
+    const res = await callerFairness.verify({ sessionId: legacySessionId, nonce: 1 });
+    expect(res.verified).toBe(false);
+    expect(res.unverifiable).toBe("PRE_REGISTRY");
+    expect(res.hashMatch).toBe(true); // hash binding still shown
   });
 });
 

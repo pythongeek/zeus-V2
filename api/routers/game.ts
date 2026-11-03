@@ -4,7 +4,7 @@ import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { ladderFor, isOnLadder } from "../lib/betting";
 import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
-import { ensureActiveClassicBundle, listModes, getActiveBundle } from "../lib/bundles";
+import { ensureActiveCertifiedClassicBundle, getActiveCertifiedClassic, getActiveBundle, listModes } from "../lib/bundles";
 import { resolveCascade, makeCascadeDraw, type CascadeMath } from "../lib/cascade";
 import { getSetting, getPublicConfig } from "../lib/settings";
 import { toUsdt, tsSec } from "../lib/limits";
@@ -52,88 +52,32 @@ const SYMBOL_NAMES: Record<number, string> = {
   8: "ace", 9: "king", 10: "queen",
 };
 
-// Payout table (multiplier of bet per line)
-const PAYOUTS: Record<number, { 3: number; 4: number; 5: number }> = {
-  [SYMBOLS.ZEUS]: { 3: 50, 4: 200, 5: 1000 },
-  [SYMBOLS.SCATTER]: { 3: 2, 4: 5, 5: 20 },  // Scatter pays anywhere + free spins
-  [SYMBOLS.PEGASUS]: { 3: 30, 4: 100, 5: 500 },
-  [SYMBOLS.TEMPLE]: { 3: 25, 4: 80, 5: 400 },
-  [SYMBOLS.HARP]: { 3: 20, 4: 75, 5: 300 },
-  [SYMBOLS.AMPHORA]: { 3: 15, 4: 40, 5: 200 },
-  [SYMBOLS.HELMET]: { 3: 12, 4: 30, 5: 150 },
-  [SYMBOLS.SHIELD]: { 3: 10, 4: 30, 5: 100 },
-  [SYMBOLS.ACE]: { 3: 5, 4: 18, 5: 75 },
-  [SYMBOLS.KING]: { 3: 5, 4: 18, 5: 75 },
-  [SYMBOLS.QUEEN]: { 3: 4, 4: 12, 5: 60 },
-};
-
-// Reel strips (50 positions each, weighted)
-const REEL_STRIPS = [
-  [0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,0,1,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-  [0,0,10,1, 2,2,2,3,3,3, 4,4,4,5,5,5,5, 6,6,6,6,7,7,7,7, 8,8,8,8,8,9,9,9,9,9, 10,10,10,10,10],
-];
-
-// B2: the game math is admin-configurable through settings. Defaults
-// below are exactly the A4-certified constants (PAYOUTS / REEL_STRIPS /
-// free-spin awards / thunder). Any invalid stored shape falls back to
-// the certified default for that piece. NOTE: changing reels/paytable
-// invalidates fairness verification for spins played under the old math
-// and requires RTP re-certification (see admin UI warning).
+// A4/A5 (audit 2026-11-04): the legacy hardcoded PAYOUTS / REEL_STRIPS /
+// DEFAULT_FREE_SPINS constants are GONE. The engine's only math sources
+// are (a) the active certified bundle and (b) the settings mirror that
+// only the RTP Lab publish writes — both hash-bound; see lib/bundles.ts.
 export interface MathConfig {
-  payouts: typeof PAYOUTS;
+  payouts: Record<number, { 3: number; 4: number; 5: number }>;
   strips: number[][];
   freeSpins: Record<string, number>;
   thunderDenominator: number;
   thunderFloorX: number;
 }
-const DEFAULT_FREE_SPINS: Record<string, number> = { "3": 8, "4": 12, "5": 20 };
 
+/**
+ * Strict reader over the ACTIVE CERTIFIED classic bundle. No fallback
+ * math exists: if classic has no active certified bundle (or its cert
+ * is malformed), this throws and every classic consumer fails loudly
+ * until an operator publishes math through the RTP Lab.
+ */
 export function getMathConfig(): MathConfig {
-  const cfg: MathConfig = {
-    payouts: PAYOUTS,
-    strips: REEL_STRIPS,
-    freeSpins: DEFAULT_FREE_SPINS,
-    thunderDenominator: 200,
-    thunderFloorX: 5,
-  };
-  try {
-    const p = getSetting<Record<string, { 3: number; 4: number; 5: number }>>("math_paytable");
-    if (p && typeof p === "object") {
-      const merged: Record<number, { 3: number; 4: number; 5: number }> = { ...PAYOUTS };
-      let ok = true;
-      for (let id = 0; id <= 10; id++) {
-        const e = (p as any)[String(id)];
-        if (!e || ![3, 4, 5].every((k) => Number.isFinite(e[k]) && e[k] >= 0)) { ok = false; break; }
-        merged[id] = { 3: e[3], 4: e[4], 5: e[5] };
-      }
-      if (ok) cfg.payouts = merged as typeof PAYOUTS;
-    }
-  } catch { /* keep default */ }
-  try {
-    const st = getSetting<number[][]>("math_reels");
-    if (
-      Array.isArray(st) && st.length === 5 &&
-      st.every((r) => Array.isArray(r) && r.length >= 10 && r.every((v) => Number.isInteger(v) && v >= 0 && v <= 10))
-    ) cfg.strips = st;
-  } catch { /* keep default */ }
-  try {
-    const fs = getSetting<Record<string, number>>("math_free_spins");
-    if (fs && ["3", "4", "5"].every((k) => Number.isInteger(fs[k]) && fs[k] >= 0 && fs[k] <= 1000)) {
-      cfg.freeSpins = { "3": fs["3"], "4": fs["4"], "5": fs["5"] };
-    }
-  } catch { /* keep default */ }
-  try {
-    const th = getSetting<{ chanceDenominator: number; floorX: number }>("math_thunder");
-    if (th && Number.isInteger(th.chanceDenominator) && th.chanceDenominator >= 1 && th.chanceDenominator <= 100000 &&
-        Number.isFinite(th.floorX) && th.floorX >= 0 && th.floorX <= 100) {
-      cfg.thunderDenominator = th.chanceDenominator;
-      cfg.thunderFloorX = th.floorX;
-    }
-  } catch { /* keep default */ }
-  return cfg;
+  const active = getActiveCertifiedClassic(getSqliteClient(), SYMBOL_NAMES);
+  if (!active) {
+    throw new Error(
+      "NO_ACTIVE_MATH: classic has no active certified math bundle — publish math in the RTP Lab",
+    );
+  }
+  return active.cfg;
 }
 
 // 20 paylines (row indices for each reel)
@@ -165,7 +109,7 @@ function calculateSpin(
   serverSeed: string,
   clientSeed: string,
   nonce: number,
-  strips: number[][] = REEL_STRIPS
+  strips: number[][],
 ) {
   const hash = crypto
     .createHash("sha256")
@@ -199,10 +143,7 @@ function calculateSpin(
 function evaluatePaylines(
   symbols: number[][],
   betPerLine: number,
-  math: { payouts: typeof PAYOUTS; freeSpins: Record<string, number> } = {
-    payouts: PAYOUTS,
-    freeSpins: DEFAULT_FREE_SPINS,
-  }
+  math: { payouts: Record<number, { 3: number; 4: number; 5: number }>; freeSpins: Record<string, number> },
 ): { lines: Array<{ lineIndex: number; symbol: number; count: number; payout: number; positions: Array<[number, number]> }>; totalPayout: number; scatterCount: number; freeSpinsAwarded: number } {
   const lines: Array<{ lineIndex: number; symbol: number; count: number; payout: number; positions: Array<[number, number]> }> = [];
   let totalPayout = 0;
@@ -482,6 +423,12 @@ export const gameRouter = createRouter({
           return JSON.parse(prior.response);
         }
       }
+      // A4/A5 (audit 2026-11-04): math resolves from the ACTIVE CERTIFIED
+      // bundle only — settings that drifted without an RTP Lab publish
+      // refuse the spin (MATH_DESYNC), and there is no fallback math.
+      // Resolved outside the write-locked transaction because the
+      // first-boot bootstrap runs the certifier (async MC).
+      const classicMath = await ensureActiveCertifiedClassicBundle(SYMBOL_NAMES);
       const runSpin = client.transaction(() => {
         const session = client
           .prepare(
@@ -581,9 +528,10 @@ export const gameRouter = createRouter({
         let outcome: any;
         if (effectiveMode === "classic") {
         outcome = (() => {
-        // Provably fair outcome for this spin (math + feature toggles
-        // are read per spin from admin settings — B2)
-        const math = getMathConfig();
+        // Provably fair outcome for this spin — math comes from the
+        // active certified bundle resolved before the transaction
+        // (A4/A5: no settings fallback, no hardcoded constants).
+        const math = classicMath.cfg;
         const features = getSetting<{ freeSpins: boolean; thunder: boolean; jackpots: boolean }>("features");
         const newNonce = session.nonce + 1;
         const { reelStops, symbols, hash } = calculateSpin(
@@ -884,17 +832,12 @@ export const gameRouter = createRouter({
           );
 
         // Phase 0 (playbook §5.3): stamp the math bundle that resolved
-        // this spin. ensure* auto-registers the next bundle version if
-        // the effective math drifted from the active bundle, so the
-        // stamp is truthful whichever door the math changed through.
+        // this spin. The classic bundle was certified + resolved before
+        // the transaction (MATH_DESYNC / NO_ACTIVE_MATH refuse earlier);
+        // cascade resolves through lib/cascade.
         const bundleRow =
           effectiveMode === "classic"
-            ? ensureActiveClassicBundle(
-                client,
-                math,
-                SYMBOL_NAMES,
-                getSetting<number>("rtp_declared") ?? 0,
-              )
+            ? classicMath.row
             : (outcome.cascadeBundleRow as any);
 
         const spinRow = client
@@ -1422,9 +1365,15 @@ export const gameRouter = createRouter({
     let modes = listModes(client);
     if (modes.length === 0) {
       // First boot before any spin: seed the registry so the classic
-      // mode is visible immediately (ensure is idempotent).
-      ensureActiveClassicBundle(client, getMathConfig(), SYMBOL_NAMES, getSetting<number>("rtp_declared") ?? 0);
-      modes = listModes(client);
+      // mode is visible immediately. The bootstrap self-certifies the
+      // default math (bounds-checked) before it may activate; a failure
+      // leaves the registry empty and classic refuses to spin.
+      try {
+        await ensureActiveCertifiedClassicBundle(SYMBOL_NAMES);
+        modes = listModes(client);
+      } catch {
+        // Registry stays empty — spin/publish will surface the reason.
+      }
     }
     return { ...getPublicConfig(), modes };
   }),
@@ -1463,4 +1412,4 @@ export const gameRouter = createRouter({
     }),
 });
 
-export { SYMBOLS, SYMBOL_NAMES, REEL_STRIPS, PAYLINES, calculateSpin, evaluatePaylines, checkThunderStrike, checkJackpot };
+export { SYMBOLS, SYMBOL_NAMES, PAYLINES, calculateSpin, evaluatePaylines, checkThunderStrike, checkJackpot };

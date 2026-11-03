@@ -240,13 +240,16 @@ describe("G2/G3: alerts + risk signals", () => {
 
   it("big-win alert fires inside the spin when the win clears the threshold", async () => {
     settingsLib.setSetting("alert_big_win_usdt", 1, null);
+    // A4/A5: the engine no longer carries fallback math — hunt against
+    // the strict settings mirror.
+    const huntMath = (await import("../lib/bundles")).settingsMathConfig();
     // Hunt a seed whose nonce-1 win is >= 10x (win >= $10 at $1 bet).
     let seed: string | null = null;
     for (let i = 0; i < 5000 && !seed; i++) {
       const candidate = `g-win-hunt-${i}`;
-      const { symbols, hash } = engine.calculateSpin(candidate, "gclient", 1);
+      const { symbols, hash } = engine.calculateSpin(candidate, "gclient", 1, huntMath.strips);
       if (engine.checkJackpot(hash)) continue;
-      const res = engine.evaluatePaylines(symbols.map((c: number[]) => [...c]), 1);
+      const res = engine.evaluatePaylines(symbols.map((c: number[]) => [...c]), 1, huntMath);
       if (res.totalPayout >= 200) seed = candidate;
     }
     expect(seed).toBeTruthy();

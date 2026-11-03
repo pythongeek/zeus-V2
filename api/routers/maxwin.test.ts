@@ -94,9 +94,10 @@ beforeAll(async () => {
   // no jackpot on that hash.
   for (let i = 0; i < 5000 && !hunted; i++) {
     const seed = `mw-hunt-${i}`;
-    const { symbols, hash } = engine.calculateSpin(seed, "mwclient", 1);
+    const huntMath = (await import("../lib/bundles")).settingsMathConfig();
+    const { symbols, hash } = engine.calculateSpin(seed, "mwclient", 1, huntMath.strips);
     if (engine.checkJackpot(hash)) continue;
-    const res = engine.evaluatePaylines(symbols.map((c: number[]) => [...c]), 1);
+    const res = engine.evaluatePaylines(symbols.map((c: number[]) => [...c]), 1, huntMath);
     if (res.totalPayout >= 100) hunted = { seed, winUnits: res.totalPayout };
   }
   if (!hunted) throw new Error("no suitable seed found");
