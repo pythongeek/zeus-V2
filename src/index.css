@@ -204,6 +204,138 @@
   animation-iteration-count: infinite;
 }
 
+/* === Cascade FX overhaul (2026-11-01): real gravity tumble, blasts,
+   coin showers, scatter lightning, FS burst. ======================== */
+
+/* Gravity tumble: --fall-from is set per cell by CascadeBoard
+   (survivors fall their true row distance, refills slide in as a
+   stack from above the board). Bounce on landing. */
+@keyframes cascade-fall {
+  0% { transform: translateY(var(--fall-from, -110%)); opacity: 0.85; }
+  62% { transform: translateY(4%); opacity: 1; }
+  82% { transform: translateY(-2.5%); }
+  100% { transform: translateY(0); }
+}
+.animate-cascade-fall {
+  animation: cascade-fall 0.42s cubic-bezier(0.3, 0.7, 0.4, 1) both;
+}
+
+/* Blast: winning tile flashes white-hot while shards + ring fly. */
+.blast-cell {
+  animation: blast-cell-flash 0.46s ease-out both;
+  z-index: 10;
+}
+@keyframes blast-cell-flash {
+  0% { background-color: rgba(255, 213, 79, 0.85); box-shadow: 0 0 18px rgba(255, 213, 79, 0.9); }
+  60% { background-color: rgba(255, 170, 0, 0.35); }
+  100% { background-color: rgba(26, 26, 37, 0.8); }
+}
+@keyframes blast-shard {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, 0px))) scale(0.15) rotate(var(--rot, 180deg)); opacity: 0; }
+}
+.animate-blast-shard {
+  animation: blast-shard 0.5s cubic-bezier(0.15, 0.6, 0.4, 1) forwards;
+}
+@keyframes blast-ring {
+  0% { transform: scale(0.35); opacity: 0.95; }
+  100% { transform: scale(2); opacity: 0; }
+}
+.animate-blast-ring {
+  animation: blast-ring 0.45s ease-out forwards;
+}
+
+/* Winning symbol flash at highlight. */
+@keyframes win-flash {
+  0% { filter: brightness(2.4) saturate(1.5) drop-shadow(0 0 10px rgba(255, 213, 79, 0.9)); }
+  100% { filter: brightness(1) saturate(1); }
+}
+.animate-win-flash {
+  animation: win-flash 0.4s ease-out both;
+}
+
+/* Coin shower (board-scoped, clipped by the overlay). */
+@keyframes coin-fall {
+  0% { transform: translate(0, -30px) rotate(0deg); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translate(var(--dx, 0px), 85vh) rotate(540deg); opacity: 0; }
+}
+.animate-coin-fall {
+  animation: coin-fall 0.9s cubic-bezier(0.35, 0, 0.65, 1) forwards;
+}
+
+/* Ladder rung pop when the multiplier climbs. */
+@keyframes rung-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.5); filter: brightness(1.7); }
+  100% { transform: scale(1); }
+}
+.animate-rung-pop {
+  animation: rung-pop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) both;
+}
+
+/* Win counter pop on every step. */
+@keyframes win-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.3); text-shadow: 0 0 14px rgba(244, 208, 63, 0.9); }
+  100% { transform: scale(1); }
+}
+.animate-win-pop {
+  animation: win-pop 0.4s ease-out both;
+}
+
+/* Losing-spin feedback: a black veil pulses over the board once. */
+@keyframes nowin-dim {
+  0% { opacity: 0; }
+  35% { opacity: 0.55; }
+  100% { opacity: 0; }
+}
+.animate-nowin {
+  animation: nowin-dim 0.7s ease-in-out both;
+}
+
+/* Scatter treatment: landing flash, shimmering tracker chip. */
+@keyframes scatter-land {
+  0% { opacity: 0; background: radial-gradient(circle, rgba(255, 243, 196, 0.95) 0%, transparent 70%); }
+  25% { opacity: 1; }
+  100% { opacity: 0; background: radial-gradient(circle, rgba(255, 243, 196, 0.95) 0%, transparent 70%); }
+}
+.animate-scatter-land {
+  animation: scatter-land 0.55s ease-out both;
+}
+@keyframes scatter-shimmer {
+  0%, 100% { box-shadow: 0 0 4px rgba(255, 213, 79, 0.25); }
+  50% { box-shadow: 0 0 16px rgba(255, 213, 79, 0.75); }
+}
+.animate-scatter-shimmer {
+  animation: scatter-shimmer 1.4s ease-in-out infinite;
+}
+
+/* Free-spins award burst: rotating god-rays + banner pop. */
+@keyframes fs-rays-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-fs-rays {
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(255, 213, 79, 0.22) 0deg 9deg,
+    transparent 9deg 24deg
+  );
+  animation: fs-rays-spin 3.2s linear infinite;
+  border-radius: 50%;
+}
+@keyframes fs-burst-pop {
+  0% { transform: scale(0.3); opacity: 0; }
+  22% { transform: scale(1.18); opacity: 1; }
+  70% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+.animate-fs-burst {
+  animation: fs-burst-pop 2.1s ease-out both;
+}
+
 .animate-shimmer {
   animation: shimmer 1s linear infinite;
 }

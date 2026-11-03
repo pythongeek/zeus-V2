@@ -345,6 +345,15 @@ function BuyFeatureButton() {
 
 export default function Game() {
   const store = useGameStore();
+  // C2 mitigation (audit 2026-11-01): the module-level store survives
+  // unmounts, so returning to the game after leaving mid-spin could
+  // find gameState === "spinning" forever — SPIN, mode switch and the
+  // settings gear all dead until a full reload. A fresh mount has no
+  // spin in flight, so force-idle once on entry.
+  useEffect(() => {
+    store.setGameState("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const { t, num, lang } = useLang();
   const { isAuthenticated, user, logout, refresh } = useAuth({
     redirectOnUnauthenticated: true,
@@ -483,16 +492,27 @@ export default function Game() {
     const kick = () => audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
     kick();
     window.addEventListener("pointerdown", kick);
-    return () => window.removeEventListener("pointerdown", kick);
+    return () => {
+      window.removeEventListener("pointerdown", kick);
+      // Full teardown with the game screen (logout / route change):
+      // the old build leaked the storm bed and music onto /login,
+      // where nothing could ever stop them (audit 2026-11-01).
+      audio.stopAllLoops();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
-  // D1: free-spin music bed while free spins remain.
+  // D1: free-spin music bed while free spins remain. The FS bed
+  // REPLACES the base bed (owner report 2026-11-01: layering both
+  // full-length beds read as mud); suspension is reference-counted,
+  // so the base bed swells back the moment FS ends.
   useEffect(() => {
     if (store.freeSpinsRemaining > 0) {
+      audio.suspendMusic("fsBed");
       audio.startLoop("musicFs", ["bgm-freespins.opus", "bgm-freespins.m4a"], "music", 0.9);
     } else {
       audio.stopLoop("musicFs");
+      audio.resumeMusic("fsBed");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.freeSpinsRemaining]);
@@ -830,10 +850,9 @@ export default function Game() {
       setLastResult(null);
       audio.unlock();
       audio.play("ui-click");
-      // Cascade gets the full spin soundscape too (2026-10-31: this
-      // branch previously played nothing but the click — no reel
-      // sound, no ambience, and the music never ducked).
-      audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
+      // Storm ambience removed (owner, 2026-11-01): the wind bed read
+      // as "wave-like noise" under the music — the music channel is
+      // the only bed now, and it self-heals (see audio.ts watchdog).
       audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
       audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
       audio.duckMusic(true);
@@ -907,7 +926,6 @@ export default function Game() {
     setLastResult(null);
     audio.unlock();
     audio.play("ui-click");
-    audio.startLoop("ambience", "storm-bed.wav", "music", 0.7);
     audio.startLoop("music", ["bgm-main.opus", "bgm-main.m4a"], "music", 1);
     audio.startLoop("reels", "reel-spin-loop.wav", "sfx", 0.8);
     // Owner (2026-10-31): while the reels roll the background music
