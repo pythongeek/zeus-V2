@@ -28,6 +28,101 @@ import { TotpSetup } from "@/components/TotpSetup";
 // trail can stand alone in the System section.
 const ALL_GROUPS = ["site", "bets", "features", "currencies", "presentation", "math", "security"];
 
+
+/** A1/A2 (audit 2026-11-04): per-bundle RTP report — never blended,
+ * ±95% band from the paid-spin sample, honest small-sample badges. */
+function RtpReportCard({ enabled }: { enabled: boolean }) {
+  const { t, num } = useLang();
+  const q = trpc.admin.getRtpReport.useQuery(undefined, { enabled, retry: false });
+  const rep: any = q.data;
+  const pct = (v: number | null, digits = 2) => (v === null ? "—" : `${num(v.toFixed(digits))}%`);
+  const rtpColor = (r: any) => {
+    if (r.trueRtp === null) return "text-slate-400";
+    if (r.certRtp !== null && r.rtpLow !== null && r.rtpHigh !== null) {
+      if (r.certRtp >= r.rtpLow && r.certRtp <= r.rtpHigh) return "text-emerald-400";
+      return r.trueRtp > r.certRtp ? "text-red-400" : "text-amber-400";
+    }
+    return r.trueRtp > 103 ? "text-red-400" : "text-slate-200";
+  };
+  return (
+    <Card className="bg-slate-900/80 border-slate-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          📊 {t("rtpTitle")}
+          <span className="flex-1" />
+          <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700" onClick={() => q.refetch()}>
+            {t("refreshBtn")}
+          </Button>
+        </CardTitle>
+        <CardDescription className="text-slate-400">{t("rtpDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading || !rep ? (
+          <p className="text-sm text-slate-500">{t("loading")}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-800">
+                  <th className="py-1.5 pr-3">{t("rtpBundle")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpCert")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpSpins")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpPaidBets")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpTrue")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpBase")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpHitPaid")}</th>
+                  <th className="py-1.5 pr-3">{t("rtpFsRounds")}</th>
+                  <th className="py-1.5">{t("rtpSample")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rep.rows.map((r: any) => (
+                  <tr key={r.modeId + r.bundleId} className="border-b border-slate-900">
+                    <td className="py-1.5 pr-3">
+                      <span className="font-mono text-[11px] text-slate-200">{r.bundleId}</span>
+                      <span className="block text-[10px] text-slate-500">{r.modeId} · {r.bundleStatus}</span>
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono">{pct(r.certRtp)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{num(String(r.spins))}</td>
+                    <td className="py-1.5 pr-3 font-mono">{num(r.paidBets.toFixed(2))}</td>
+                    <td className={`py-1.5 pr-3 font-mono font-bold ${rtpColor(r)}`}>
+                      {pct(r.trueRtp)}
+                      {r.rtpLow !== null && (
+                        <span className="block text-[10px] text-slate-500 font-normal">
+                          [{pct(r.rtpLow)} – {pct(r.rtpHigh)}]
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono">{pct(r.baseRtp)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{pct(r.hitRatePaid, 1)}</td>
+                    <td className="py-1.5 pr-3 font-mono">
+                      {num(String(r.fsRounds))}
+                      {r.zeroFsRounds > 0 && (
+                        <span className="text-amber-400"> ({num(String(r.zeroFsRounds))} × {t("rtpZeroFs")})</span>
+                      )}
+                    </td>
+                    <td className="py-1.5">
+                      {r.sufficient ? (
+                        <span className="text-emerald-400">{t("rtpSampleOk")}</span>
+                      ) : (
+                        <span className="text-slate-500" title={t("rtpSampleWhy")}>{t("rtpSampleInsufficient")}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rep.rows.some((r: any) => !r.sufficient) && (
+              <p className="mt-2 text-[11px] text-slate-500">{t("rtpSampleWhy")}</p>
+            )}
+            <p className="mt-2 text-[11px] text-slate-500">{t("rtpJackpotNote")}</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Section I: system health, exports, alert channels. */
 function fmtBytes(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
@@ -3106,6 +3201,7 @@ export default function Admin() {
                 </CardContent>
               </Card>
               <AccessCard enabled={isAuthenticated && isAdmin} isSuper={isSuper} />
+              <RtpReportCard enabled={isAuthenticated && isAdmin} />
               <HealthCard enabled={isAuthenticated && isAdmin} />
               <ExportsCard enabled={isAuthenticated && isAdmin} />
               <AlertChannelsCard enabled={isAuthenticated && isAdmin} canEdit={isSuper} />

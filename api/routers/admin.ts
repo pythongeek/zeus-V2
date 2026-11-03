@@ -8,6 +8,7 @@ import { toUsdt, getLimits, getUsage, dhakaDayStartSec, tsSec } from "../lib/lim
 import { getMathConfig, SYMBOL_NAMES, type MathConfig } from "./game";
 import { activateClassicBundle, settingsMathConfig } from "../lib/bundles";
 import { certifyMath as certifyBundle, type MathBundle } from "../lib/certify";
+import { computeRtpReport } from "../lib/rtplab";
 import { runReconciliation as executeReconciliation } from "../lib/reconcile";
 import { depositBoostFor, computeBoostMicro } from "../lib/boosts";
 import { hashPassword } from "../lib/password";
@@ -2079,6 +2080,12 @@ export const adminRouter = createRouter({
   }),
 
   /* ================= Section I: system & ops ================= */
+  getRtpReport: adminQuery.query(async () => {
+    // A1/A2 (audit 2026-11-04): per-bundle RTP with certified-RTP
+    // reference, ±95% band and sample-size honesty. Never blended.
+    return computeRtpReport(getSqliteClient());
+  }),
+
   getSystemHealth: adminQuery.query(async () => {
     const fsMod = await import("node:fs");
     const pathMod = await import("node:path");
