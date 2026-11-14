@@ -18,3 +18,7 @@ data/*.sqlite-wal
 # misc
 *.log
 .DS_Store
+
+# QA verification artifacts (never commit)
+qa-data/
+/qa-data

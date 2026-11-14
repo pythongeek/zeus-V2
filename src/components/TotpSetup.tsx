@@ -43,8 +43,12 @@ export function TotpSetup({ onEnabled }: { onEnabled?: () => void }) {
       setRecoveryCodes(res.recoveryCodes);
       setSetupData(null);
       setCode("");
+      // D2: do NOT invalidate auth.me here. The server upgrades the session
+      // to full scope on enable; refreshing immediately re-renders the shell
+      // and unmounts this screen before the admin ever sees the one-time
+      // recovery codes. Only the 2FA status is refreshed now; the session
+      // refresh happens after the codes are acknowledged.
       await utils.authLocal.totpStatus.invalidate();
-      await utils.auth.me.invalidate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     }
@@ -78,10 +82,45 @@ export function TotpSetup({ onEnabled }: { onEnabled?: () => void }) {
             </div>
           ))}
         </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="flex-1 border-slate-700 text-slate-200"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(recoveryCodes.join("\n"));
+                toast.success(t("copied"));
+              } catch {
+                toast.error("Copy failed — select the codes manually");
+              }
+            }}
+          >
+            Copy codes
+          </Button>
+          <Button
+            variant="outline"
+            className="flex-1 border-slate-700 text-slate-200"
+            onClick={() => {
+              const blob = new Blob(
+                [`Zeus / MegaSlot admin recovery codes\n\n${recoveryCodes.join("\n")}\n`],
+                { type: "text/plain" },
+              );
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = "zeus-recovery-codes.txt";
+              a.click();
+              URL.revokeObjectURL(a.href);
+            }}
+          >
+            Download
+          </Button>
+        </div>
         <Button
           className="w-full bg-amber-500 hover:bg-amber-400 text-black font-semibold"
-          onClick={() => {
+          onClick={async () => {
             setRecoveryCodes(null);
+            // Codes are acknowledged — now it is safe to refresh the session.
+            await utils.auth.me.invalidate();
             onEnabled?.();
           }}
         >

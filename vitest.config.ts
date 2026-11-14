@@ -21,6 +21,7 @@ export default defineConfig({
     // fresh clone passes `npm test` with zero setup; a real .env
     // value, when present, wins.
     env: {
+      ZEUS_SPIN_HASH_VERSION: "1",
       APP_SECRET:
         process.env.APP_SECRET ??
         "test-only-secret-not-for-production-0123456789abcdef",

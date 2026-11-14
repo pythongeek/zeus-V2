@@ -63,3 +63,36 @@ export function subMoney(a: string, b: string): string {
 }
 
 export const ZERO_MONEY = 0n;
+
+// ===== FX conversion (GE-02) =====
+// `fx_rates` stores BDT per one unit of each currency (USDT:110, BDT:1,
+// BTC:11,000,000, ETH:380,000). Jackpots are canonical USDT: contributions
+// are converted into USDT micro and payouts are converted back into the
+// player's spin currency, so a BDT player wins the BDT equivalent of the
+// pool shown in the UI instead of a 1:1 USDT amount.
+
+/** Exact rational link between one unit of `currency` and one USDT.
+ *  Derived from the admin `fx_rates` map (values are BDT per unit):
+ *  units-of-currency per USDT = fx.USDT / fx.currency. */
+export type FxRatio = { num: bigint; den: bigint };
+
+export function fxRatio(currency: string, rates: Record<string, number> | undefined): FxRatio {
+  const safe = (v: unknown, fallback: number) =>
+    typeof v === "number" && isFinite(v) && v > 0 ? BigInt(Math.round(v)) : BigInt(fallback);
+  const usdt = safe(rates?.USDT, 110); // BDT per USDT
+  const cur = safe(rates?.[currency], currency === "USDT" ? 110 : 1); // BDT per unit
+  return { num: usdt, den: cur };
+}
+
+/** Convert an amount in `currency` micro units into USDT micro units. */
+export function toUsdtMicro(amountMicro: bigint, fx: FxRatio): bigint {
+  if (fx.num <= 0n) return 0n;
+  return mulDivRound(amountMicro, fx.den, fx.num);
+}
+
+/** Convert USDT micro units into `currency` micro units. */
+export function fromUsdtMicro(usdtMicro: bigint, fx: FxRatio): bigint {
+  if (fx.den <= 0n) return 0n;
+  return mulDivRound(usdtMicro, fx.num, fx.den);
+}
+

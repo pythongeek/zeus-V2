@@ -198,15 +198,34 @@ export const balanceRouter = createRouter({
         ? getSetting<string>("redot_pay_name")
         : getSetting<string>("binance_pay_name");
 
-      const [tx] = await db.insert(transactions).values({
-        userId: ctx.user.id,
-        type: "deposit",
-        currency: input.currency,
-        amount: canonicalMoney(input.amount),
-        toAddress: payId,
-        txHash: input.reference,
-        status: "pending",
-      }).returning();
+      // A5: one payment reference may be submitted exactly once. The DB
+      // partial unique index (0033) is the hard guarantee; this pre-check
+      // turns the violation into a clean, user-facing error.
+      const duplicate = await db.select({ id: transactions.id })
+        .from(transactions)
+        .where(and(eq(transactions.type, "deposit"), eq(transactions.txHash, input.reference)))
+        .then(rows => rows[0]);
+      if (duplicate) {
+        throw new Error("This payment reference has already been submitted");
+      }
+
+      let tx: any;
+      try {
+        [tx] = await db.insert(transactions).values({
+          userId: ctx.user.id,
+          type: "deposit",
+          currency: input.currency,
+          amount: canonicalMoney(input.amount),
+          toAddress: payId,
+          txHash: input.reference,
+          status: "pending",
+        }).returning();
+      } catch (err) {
+        if (String(err).includes("UNIQUE") || String(err).includes("uk_tx_hash_deposit")) {
+          throw new Error("This payment reference has already been submitted");
+        }
+        throw err;
+      }
 
       return {
         txId: tx.id,
@@ -227,7 +246,6 @@ export const balanceRouter = createRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       assertCurrencyEnabled(input.currency);
-      const db = getDb();
       const amountMicro = parseMoney(input.amount);
 
       if (amountMicro <= 0n) throw new Error("Invalid amount");
@@ -299,72 +317,78 @@ export const balanceRouter = createRouter({
         }
       }
 
-      // Check balance
-      const balance = await db.select().from(balances)
-        .where(and(
-          eq(balances.userId, ctx.user.id),
-          eq(balances.currency, input.currency)
-        ))
-        .then(rows => rows[0]);
-
-      if (!balance || parseMoney(balance.available) < amountMicro) {
-        throw new Error("Insufficient balance");
-      }
-
-      // Lock the amount
-      await db.update(balances)
-        .set({
-          available: fmtMoney(parseMoney(balance.available) - amountMicro),
-          locked: fmtMoney(parseMoney(balance.locked || "0") + amountMicro),
-        })
-        .where(eq(balances.id, balance.id));
-
-      // Create withdrawal transaction (fee from admin settings — B2)
+      // A1: the balance check, lock, transaction row, ledger leg and the
+      // large-withdrawal alert run in ONE synchronous BEGIN IMMEDIATE
+      // transaction, with a compare-and-set on the balance row. Parallel
+      // requests or a retry either commit exactly once or fail closed.
       const feeCfg = getSetting<Record<string, string>>("withdraw_fees");
       const fee = parseFloat(
         canonicalMoney(feeCfg?.[input.currency] ?? (input.currency === "BTC" ? "0.0001" : input.currency === "ETH" ? "0.001" : "1")),
       );
-      const [tx] = await db.insert(transactions).values({
-        userId: ctx.user.id,
-        type: "withdrawal",
-        currency: input.currency,
-        amount: fmtMoney(amountMicro),
-        fee: String(fee),
-        toAddress: input.toAddress,
-        status: "pending",
-        holdReason,
-      }).returning();
-
-      // G1: the lock moves available balance — write the ledger leg
-      // so the chain stays complete.
-      sqlite
-        .prepare(
-          "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'withdrawal_lock', ?, ?, ?)",
-        )
-        .run(
-          ctx.user.id,
-          input.currency,
-          fmtMoney(-amountMicro),
-          fmtMoney(parseMoney(balance.available) - amountMicro),
-        );
-
-      // G2: large withdrawal requests raise an inbox alert.
       const bigWdThreshold = getSetting<number>("alert_big_withdrawal_usdt") ?? 1000;
-      if (bigWdThreshold > 0 && amountUsdt >= bigWdThreshold) {
-        sqlite
+
+      const withdrawResult = sqlite.transaction(() => {
+        const balRow = sqlite
+          .prepare("SELECT id, available, locked FROM balances WHERE user_id = ? AND currency = ?")
+          .get(ctx.user.id, input.currency) as any;
+        if (!balRow) throw new Error("Insufficient balance");
+        const availableMicro = parseMoney(balRow.available);
+        if (availableMicro < amountMicro) throw new Error("Insufficient balance");
+
+        const lockedMicro = parseMoney(balRow.locked || "0");
+        const newAvailable = availableMicro - amountMicro;
+        const upd = sqlite
           .prepare(
-            "INSERT INTO admin_alerts (kind, severity, title, details, ref_user_id, ref_id) VALUES ('big_withdrawal', 'warning', ?, ?, ?, ?)",
+            "UPDATE balances SET available = ?, locked = ? WHERE id = ? AND available = ? AND locked = ?",
           )
           .run(
-            `Large withdrawal request: ${fmtMoney(amountMicro)} ${input.currency} (~$${amountUsdt.toFixed(2)})`,
-            JSON.stringify({ txId: tx.id, amount: fmtMoney(amountMicro), currency: input.currency, usdtEq: amountUsdt, toAddress: input.toAddress }),
-            ctx.user.id,
-            String(tx.id),
+            fmtMoney(newAvailable),
+            fmtMoney(lockedMicro + amountMicro),
+            balRow.id,
+            balRow.available,
+            balRow.locked,
           );
-      }
+        if (upd.changes !== 1) {
+          throw new Error("Balance changed — please retry the withdrawal");
+        }
+
+        const ins = sqlite
+          .prepare(
+            "INSERT INTO transactions (user_id, type, currency, amount, fee, to_address, status, hold_reason) VALUES (?, 'withdrawal', ?, ?, ?, ?, 'pending', ?)",
+          )
+          .run(
+            ctx.user.id,
+            input.currency,
+            fmtMoney(amountMicro),
+            String(fee),
+            input.toAddress,
+            holdReason,
+          );
+        const txId = Number(ins.lastInsertRowid);
+
+        sqlite
+          .prepare(
+            "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'withdrawal_lock', ?, ?, ?)",
+          )
+          .run(ctx.user.id, input.currency, fmtMoney(-amountMicro), fmtMoney(newAvailable));
+
+        if (bigWdThreshold > 0 && amountUsdt >= bigWdThreshold) {
+          sqlite
+            .prepare(
+              "INSERT INTO admin_alerts (kind, severity, title, details, ref_user_id, ref_id) VALUES ('big_withdrawal', 'warning', ?, ?, ?, ?)",
+            )
+            .run(
+              `Large withdrawal request: ${fmtMoney(amountMicro)} ${input.currency} (~$${amountUsdt.toFixed(2)})`,
+              JSON.stringify({ txId, amount: fmtMoney(amountMicro), currency: input.currency, usdtEq: amountUsdt, toAddress: input.toAddress }),
+              ctx.user.id,
+              String(txId),
+            );
+        }
+        return { txId };
+      })();
 
       return {
-        txId: tx.id,
+        txId: withdrawResult.txId,
         amount: input.amount,
         currency: input.currency,
         fee: String(fee),

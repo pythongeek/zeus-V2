@@ -434,6 +434,36 @@ export default function Game() {
   const [boardShake, setBoardShake] = useState(false);
   const [recentSpins, setRecentSpins] = useState<Array<{ id: number; winAmount: string; betAmount: string; currency: string; isWin: boolean; createdAt: Date }>>([]);
   const autoSpinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // FW/autoplay lifecycle: once a spin has been queued, a manual SPIN or a
+  // second timer must not start another request; and an unmount/hidden tab
+  // must cancel the chain instead of debiting the player in the background.
+  const autoSpinPendingRef = useRef(false);
+  const gameMountedRef = useRef(true);
+
+  useEffect(() => {
+    gameMountedRef.current = true;
+    const stopChain = () => {
+      autoSpinPendingRef.current = false;
+      if (autoSpinTimer.current) {
+        clearTimeout(autoSpinTimer.current);
+        autoSpinTimer.current = null;
+      }
+      store.setIsAutoSpinning(false);
+      store.setAutoSpinCount(0);
+    };
+    const onVisibility = () => {
+      if (document.hidden) stopChain();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      gameMountedRef.current = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+      stopChain();
+    };
+    // The store actions are stable zustand setters; the chain must survive
+    // renders and only be torn down on unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reel engine (Pixi canvas) — with CSS fallback if WebGL/init fails
   const reelsHostRef = useRef<HTMLDivElement | null>(null);
@@ -582,7 +612,7 @@ export default function Game() {
   // Binance Pay hosted page (big QR, download, open-app).
   const [depMethod, setDepMethod] = useState<"binance" | "redotpay">("binance");
   const [depStep, setDepStep] = useState<"amount" | "pay">("amount");
-  const [wdCurrency, setWdCurrency] = useState<"BTC" | "ETH" | "USDT">("USDT");
+  const [wdCurrency, setWdCurrency] = useState<string>("USDT");
   const [wdAmount, setWdAmount] = useState("");
   const [wdAddress, setWdAddress] = useState("");
   const depositMutation = trpc.balance.deposit.useMutation();
@@ -646,13 +676,13 @@ export default function Game() {
       toast.error(t("errInvalidWithdraw"));
       return;
     }
-    if (wdAddress.trim().length < 26) {
+    if (wdCurrency !== "BDT" && wdAddress.trim().length < 26) {
       toast.error(t("errInvalidAddress"));
       return;
     }
     try {
       await withdrawMutation.mutateAsync({
-        currency: wdCurrency,
+        currency: wdCurrency as "BTC" | "ETH" | "USDT" | "BDT",
         amount: wdAmount,
         toAddress: wdAddress.trim(),
       });
@@ -791,6 +821,9 @@ export default function Game() {
       document.title = `Z click state=${store.gameState} sess=${store.session?.sessionId ?? "none"} bal=${store.balances.find((b) => b.currency === store.activeCurrency)?.available ?? "?"} eng=${engineRef.current ? "ok" : engineFailed ? "fallback" : "null"}`;
     }
     if (store.gameState === "spinning") return;
+    // A queued auto/free spin owns the chain; a manual tap here would create
+    // a second concurrent spin for the same result window.
+    if (autoSpinPendingRef.current) return;
     if (!store.session) {
       await handleStartSession();
       return;
@@ -1210,7 +1243,15 @@ export default function Game() {
     // Free-spin auto-consume (A5): while the server says free spins
     // remain, keep spinning (they are free) until the count reaches zero.
     if (!store.isAutoSpinning && (result.freeSpinsRemaining ?? 0) > 0) {
+      autoSpinPendingRef.current = true;
       autoSpinTimer.current = setTimeout(() => {
+        autoSpinTimer.current = null;
+        autoSpinPendingRef.current = false;
+        if (!gameMountedRef.current || document.hidden) {
+          store.setIsAutoSpinning(false);
+          store.setAutoSpinCount(0);
+          return;
+        }
         store.setGameState("idle");
         handleSpin();
       }, 1600);
@@ -1228,7 +1269,15 @@ export default function Game() {
         toast.info(t("autoSpinPaused"));
       } else if (nextCount > 0) {
         store.setAutoSpinCount(nextCount);
+        autoSpinPendingRef.current = true;
         autoSpinTimer.current = setTimeout(() => {
+          autoSpinTimer.current = null;
+          autoSpinPendingRef.current = false;
+          if (!gameMountedRef.current || document.hidden) {
+            store.setIsAutoSpinning(false);
+            store.setAutoSpinCount(0);
+            return;
+          }
           store.setGameState("idle");
           handleSpin();
         }, 1500);
@@ -1805,6 +1854,15 @@ export default function Game() {
                   const count = parseInt(e.target.value);
                   store.setAutoSpinCount(count);
                   store.setIsAutoSpinning(count > 0);
+                  if (count === 0) {
+                    // FW: turning autoplay off must also cancel the queued
+                    // spin, otherwise it fires after the player stopped.
+                    autoSpinPendingRef.current = false;
+                    if (autoSpinTimer.current) {
+                      clearTimeout(autoSpinTimer.current);
+                      autoSpinTimer.current = null;
+                    }
+                  }
                 }}
                 className="bg-[#1A1A25] border border-[#2A2A35] rounded-full px-3 py-2.5 text-xs text-white focus:outline-none"
                 disabled={store.gameState === "spinning"}
@@ -2233,7 +2291,14 @@ for (let i = 0; i < 5; i++) {
                         </button>
                       </div>
                       {depRail.name ? (
-                        <div className="text-[#9E9EAC]">{t("depositPayName")}: {depRail.name}</div>
+                        <div className="text-[#9E9EAC]">
+                          {t("depositPayName")}: {String(depRail.name).replace(/CryptoFlip/gi, "MegaSlot")}
+                        </div>
+                      ) : null}
+                      {depCurrency === "BDT" ? (
+                        <div className="text-[#D4AF37] text-[11px] leading-relaxed">
+                          Binance Pay receives USDT. Send the USDT equivalent shown by your wallet; your BDT balance is credited after operator approval.
+                        </div>
                       ) : null}
                       <div className="text-[#5E5E6E]">{t("depositVerifyNote")}</div>
                     </div>
@@ -2287,12 +2352,17 @@ for (let i = 0; i < 5; i++) {
                 <div className="flex gap-2">
                   <select
                     value={wdCurrency}
-                    onChange={(e) => setWdCurrency(e.target.value as "BTC" | "ETH" | "USDT")}
+                    onChange={(e) => setWdCurrency(e.target.value)}
                     className="bg-[#12121A] border border-[#2A2A35] rounded px-2 text-sm text-white"
                   >
-                    <option value="BTC">BTC</option>
-                    <option value="ETH">ETH</option>
-                    <option value="USDT">USDT</option>
+                    {/* FW-03: offer exactly what the server enables. BDT is the
+                        default player currency and now withdrawable through the
+                        manual payout queue (bKash/Nagad/bank details). */}
+                    {((store.config?.currencies_enabled as string[] | undefined) ?? ["USDT", "BDT"])
+                      .filter((c) => c === "USDT" || c === "BDT" || c === "BTC" || c === "ETH")
+                      .map((c) => (
+                        <option key={c} value={c}>{c === "BDT" ? "BDT (bKash/Nagad/bank)" : c}</option>
+                      ))}
                   </select>
                   <Input
                     type="number"
@@ -2305,7 +2375,7 @@ for (let i = 0; i < 5; i++) {
                   />
                 </div>
                 <Input
-                  placeholder={t("addressPlaceholder")}
+                  placeholder={wdCurrency === "BDT" ? "bKash/Nagad number or bank account" : t("addressPlaceholder")}
                   value={wdAddress}
                   onChange={(e) => setWdAddress(e.target.value)}
                   className="bg-[#12121A] border-[#2A2A35] font-mono text-xs"

@@ -4,9 +4,11 @@ import { getDb } from "../queries/connection";
 import { gameSessions, spins } from "../../db/schema";
 import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
-import { SYMBOL_NAMES } from "./game";
+import { SYMBOL_NAMES, PAYLINES, SYMBOLS, hashSeedV1, hashSeedV2 } from "./game";
 import { getBundleByHash, classicCfgFromBundle } from "../lib/bundles";
+import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
 import { getSqliteClient } from "../queries/connection";
+import { getSetting } from "../lib/settings";
 
 export const fairnessRouter = createRouter({
   verify: authedQuery
@@ -141,11 +143,16 @@ export const fairnessRouter = createRouter({
         }
       }
 
-      // Recalculate the hash (strip-independent)
-      const hash = crypto
-        .createHash("sha256")
-        .update(session.serverSeed + session.clientSeed + String(input.nonce))
-        .digest("hex");
+      // GE-01: hash version and the client seed come from the spin row.
+      // Historical rows are v1 (no stamp) and keep verifying; new rows are
+      // v2 (length-prefixed fields) and store the seed that was used, so a
+      // later changeSeed cannot rewrite history.
+      const hashVersion = Number((spin as any).hashVersion ?? 1);
+      const spinClientSeed =
+        ((spin as any).clientSeed as string | null) || session.clientSeed;
+      const hash = hashVersion >= 2
+        ? hashSeedV2(session.serverSeed, spinClientSeed, input.nonce)
+        : hashSeedV1(session.serverSeed, spinClientSeed, input.nonce);
 
       if (!strips) {
         // Legacy spins played before the registry existed carry no
@@ -183,66 +190,145 @@ export const fairnessRouter = createRouter({
         reelStops.push(value % reelLength);
       }
 
-      // Get visible symbols
-      const symbols: number[][] = [];
+      // GE-05: rebuild the RAW (pre-transform) grid. `symbols_shown` stores
+      // the post-Thunder grid, so verifying against it was impossible for
+      // genuine thunder wins.
+      const baseGrid: number[][] = [];
       for (let reel = 0; reel < 5; reel++) {
         const reelSymbols: number[] = [];
         for (let row = 0; row < 3; row++) {
           const pos = (reelStops[reel] + row) % strips[reel].length;
           reelSymbols.push(strips[reel][pos]);
         }
-        symbols.push(reelSymbols);
+        baseGrid.push(reelSymbols);
       }
 
-      // better-sqlite3/drizzle returns json-mode columns already parsed,
-      // while the D1 shape returns raw text — accept both. The previous
-      // unconditional JSON.parse coerced the parsed array to a comma-joined
-      // string and threw, so verify failed for every real spin.
-      const storedSymbols = typeof spin.symbolsShown === "string"
-        ? JSON.parse(spin.symbolsShown)
-        : spin.symbolsShown;
-      const storedPositions = typeof spin.reelPositions === "string"
-        ? JSON.parse(spin.reelPositions)
-        : spin.reelPositions;
+      // better-sqlite3/drizzle returns JSON columns already parsed; the D1
+      // shape returns raw text. Accept both.
+      const asJson = (v: unknown) => (typeof v === "string" ? JSON.parse(v) : v);
+      const storedSymbols = asJson((spin as any).symbolsShown);
+      const storedPositions = asJson((spin as any).reelPositions);
+      const storedBase = (spin as any).baseSymbols ? asJson((spin as any).baseSymbols) : null;
+      const thunderMeta = (spin as any).thunder ? asJson((spin as any).thunder) : null;
 
-      // Verify match
+      const baseSymbolNames = baseGrid.map((col) => col.map((s) => SYMBOL_NAMES[s]));
+
+      // Replay the exact transform recorded at spin time (GE-05).
+      const replayGrid = baseGrid.map((col) => col.slice());
+      const transforms: Array<{ reel: number; row: number }> =
+        Array.isArray(thunderMeta?.transforms) ? thunderMeta.transforms : [];
+      for (const t of transforms) {
+        if (
+          t && Number.isInteger(t.reel) && Number.isInteger(t.row) &&
+          replayGrid[t.reel] && replayGrid[t.reel][t.row] !== undefined
+        ) {
+          replayGrid[t.reel][t.row] = SYMBOLS.ZEUS;
+        }
+      }
+      const replayNames = replayGrid.map((col) => col.map((s) => SYMBOL_NAMES[s]));
+
+      // GE-05: recompute the paid win from the certified bundle. Jackpot
+      // awards are pool transfers, not multiplier outcomes, so for those the
+      // game win is verified as a lower bound and reported separately.
+      const cfg = classicCfgFromBundle(
+        typeof bundleRowC!.bundle === "string" ? JSON.parse(bundleRowC!.bundle) : bundleRowC!.bundle,
+        SYMBOL_NAMES,
+      );
+      const betMicro = parseMoney((spin as any).betAmount as string);
+      let lineWinMicro = 0n;
+      let scatterCount = 0;
+      for (const line of PAYLINES) {
+        const first = replayGrid[0][line[0]];
+        let matchSymbol = first === SYMBOLS.ZEUS ? -1 : first;
+        let matchCount = 1;
+        for (let reel = 1; reel < 5; reel++) {
+          const sym = replayGrid[reel][line[reel]];
+          if (sym === SYMBOLS.ZEUS || sym === matchSymbol || matchSymbol === -1) {
+            if (matchSymbol === -1 && sym !== SYMBOLS.ZEUS) matchSymbol = sym;
+            matchCount++;
+          } else {
+            break;
+          }
+        }
+        if (matchSymbol === -1) matchSymbol = SYMBOLS.ZEUS;
+        const payoutRow = cfg.payouts[matchSymbol];
+        if (matchCount >= 3 && payoutRow) {
+          const p = payoutRow[matchCount as 3 | 4 | 5] || 0;
+          if (p > 0) lineWinMicro += mulDivRound(betMicro, BigInt(p), BigInt(PAYLINES.length));
+        }
+      }
+      for (let reel = 0; reel < 5; reel++) {
+        for (let row = 0; row < 3; row++) {
+          if (replayGrid[reel][row] === SYMBOLS.SCATTER) scatterCount++;
+        }
+      }
+      let recomputedWin = lineWinMicro;
+      if (scatterCount >= 3) {
+        const p = cfg.payouts[SYMBOLS.SCATTER]?.[Math.min(scatterCount, 5) as 3 | 4 | 5] || 0;
+        recomputedWin += betMicro * BigInt(p);
+      }
+      if (transforms.length > 0) {
+        const floorX = Number((cfg as any).thunderFloorX ?? 0);
+        const floorMicro = mulDivRound(betMicro, BigInt(Math.round(floorX * 100)), 100n);
+        if (recomputedWin < floorMicro) recomputedWin = floorMicro;
+      }
+      const maxWinX = getSetting<number>("max_win_x");
+      if (typeof maxWinX === "number" && maxWinX > 0) {
+        const capMicro = mulDivRound(betMicro, BigInt(Math.round(maxWinX * 100)), 100n);
+        if (recomputedWin > capMicro) recomputedWin = capMicro;
+      }
+
       const hashMatch = hash === spin.hash;
       const positionsMatch = JSON.stringify(reelStops) === JSON.stringify(storedPositions);
-      // Stored symbols are NAMES (e.g. "zeus"); the recalculated grid is
-      // numeric ids — map to names before comparing. The previous direct
-      // comparison could never match, so verified was always false.
-      const symbolsMatch =
-        JSON.stringify(symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]))) ===
-        JSON.stringify(storedSymbols);
+      const baseMatch = storedBase
+        ? JSON.stringify(baseSymbolNames) === JSON.stringify(storedBase)
+        : null;
+      // symbols_shown is the post-transform grid for thunder spins.
+      const symbolsMatch = JSON.stringify(replayNames) === JSON.stringify(storedSymbols);
+      const jackpotSpin = !!(spin as any).isJackpot;
+      const storedWin = parseMoney((spin as any).winAmount);
+      const winMatch = jackpotSpin ? storedWin >= recomputedWin : storedWin === recomputedWin;
 
       return {
-        verified: hashMatch && positionsMatch && symbolsMatch,
+        verified:
+          hashMatch && positionsMatch && symbolsMatch && winMatch && baseMatch !== false,
         // Phase 0 (playbook §5.3): the reveal record binds the spin to
         // the exact math bundle that resolved it, resolvable by hash
         // via fairness.bundleByHash. Null for pre-registry spins.
         modeId: (spin as any).modeId ?? "classic",
         bundleId: (spin as any).bundleId ?? null,
         bundleSha256: (spin as any).bundleSha256 ?? null,
+        hashVersion,
         serverSeed: revealed ? session.serverSeed : null,
         serverSeedHash: session.serverSeedHash,
-        clientSeed: session.clientSeed,
+        clientSeed: spinClientSeed,
         nonce: input.nonce,
         hash,
         storedHash: spin.hash,
         hashMatch,
         positionsMatch,
         symbolsMatch,
+        baseMatch,
+        winMatch,
+        thunderReplayed: transforms.length,
+        // Jackpot transfers are pool movements, not claimable from the
+        // bundle; flagged so the UI does not imply full verification.
+        jackpotIncluded: jackpotSpin,
+        storedWin: fmtMoney(storedWin),
+        recomputedWin: fmtMoney(recomputedWin),
         reelPositions: reelStops,
-        symbols: symbols.map(col => col.map(s => SYMBOL_NAMES[s])),
+        baseSymbols: baseSymbolNames,
+        symbols: replayNames,
         winAmount: spin.winAmount,
         calculationSteps: [
-          `Step 1: hash = SHA-256("${seedForDisplay}" + "${session.clientSeed}" + "${input.nonce}")`,
+          `Step 1: hash = SHA-256(${hashVersion >= 2 ? "v2 length-prefixed" : "v1 concatenation"}("${seedForDisplay}", "${spinClientSeed}", ${input.nonce}))`,
           `Step 2: hash = "${hash}"`,
           `Step 3: reel_1 = hex("${hash.substring(0, 4)}") % ${strips[0].length} = ${reelStops[0]}`,
           `Step 4: reel_2 = hex("${hash.substring(4, 8)}") % ${strips[1].length} = ${reelStops[1]}`,
           `Step 5: reel_3 = hex("${hash.substring(8, 12)}") % ${strips[2].length} = ${reelStops[2]}`,
           `Step 6: reel_4 = hex("${hash.substring(12, 16)}") % ${strips[3].length} = ${reelStops[3]}`,
           `Step 7: reel_5 = hex("${hash.substring(16, 20)}") % ${strips[4].length} = ${reelStops[4]}`,
+          `Step 8: ${transforms.length} thunder transform(s) replayed; win recomputed from the certified paytable = ${fmtMoney(recomputedWin)}`,
         ],
       };
     }),

@@ -28,8 +28,15 @@ export function useAuth(options?: UseAuthOptions) {
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: async () => {
-      await utils.invalidate();
-      navigate(redirectPath);
+      // D3: clear the cached identity *before* navigating so the game shell
+      // cannot keep rendering an authenticated UI after the server cleared
+      // the session (shared-device risk).
+      utils.auth.me.setData(undefined, null as any);
+      try {
+        await utils.invalidate();
+      } finally {
+        navigate(redirectPath);
+      }
     },
   });
 

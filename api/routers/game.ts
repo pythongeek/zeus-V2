@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb, getSqliteClient } from "../queries/connection";
-import { parseMoney, fmtMoney, mulDivRound } from "../lib/money";
+import { parseMoney, fmtMoney, mulDivRound, fxRatio, toUsdtMicro, fromUsdtMicro } from "../lib/money";
 import { ladderFor, isOnLadder } from "../lib/betting";
 import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
 import { ensureActiveCertifiedClassicBundle, getActiveCertifiedClassic, getActiveBundle, listModes } from "../lib/bundles";
@@ -104,17 +104,35 @@ const PAYLINES = [
   [0,0,2,0,0], // Top to bottom spike
 ];
 
+// GE-01: production uses the length-prefixed v2 hash. The legacy v1 hash is
+// retained for historical spins; the env override exists only so the engine
+// test fixtures (which curate seeds for a specific outcome) stay deterministic.
+const SPIN_HASH_VERSION = Number(process.env.ZEUS_SPIN_HASH_VERSION ?? "2") || 2;
+
 // Provably fair spin calculation
+// GE-01: v2 hashes length-prefixed fields. The old v1 concatenation allowed
+// seed/nonce boundary collisions (sha256(seed+"X1"+"1") == sha256(seed+"X"+"11")),
+// which let a player replay an observed win at a higher bet after changing the
+// client seed. v1 is kept only to verify historical spins (hash_version=1).
+export function hashSeedV1(serverSeed: string, clientSeed: string, nonce: number): string {
+  return crypto.createHash("sha256").update(serverSeed + clientSeed + String(nonce)).digest("hex");
+}
+
+export function hashSeedV2(serverSeed: string, clientSeed: string, nonce: number): string {
+  const payload = `v2|${serverSeed.length}:${serverSeed}|${clientSeed.length}:${clientSeed}|${nonce}`;
+  return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
 function calculateSpin(
   serverSeed: string,
   clientSeed: string,
   nonce: number,
   strips: number[][],
+  hashVersion: number = SPIN_HASH_VERSION,
 ) {
-  const hash = crypto
-    .createHash("sha256")
-    .update(serverSeed + clientSeed + String(nonce))
-    .digest("hex");
+  const hash = hashVersion >= 2
+    ? hashSeedV2(serverSeed, clientSeed, nonce)
+    : hashSeedV1(serverSeed, clientSeed, nonce);
 
   // Use first 10 bytes (20 hex chars) for 5 reel stops
   const reelStops: number[] = [];
@@ -452,6 +470,13 @@ export const gameRouter = createRouter({
           ? (session.free_spins_currency as string)
           : input.currency;
 
+        // GE-02: jackpot pools are canonical USDT. The bet is converted into
+        // USDT for contributions and the payout is converted back into the
+        // player's spin currency, so the amount shown in the UI is the amount
+        // actually paid (previously a BDT player saw ৳801 but was credited
+        // 7.282 BDT — a 110x under-payment).
+        const jackpotFx = fxRatio(spinCurrency, getSetting<Record<string, number>>("fx_rates"));
+
         // Step 5: mode selection. Paid spins take the requested
         // mode; free spins always play out in the mode that awarded
         // them (recorded on the session when they were granted).
@@ -539,7 +564,11 @@ export const gameRouter = createRouter({
           session.client_seed,
           newNonce,
           math.strips,
+          SPIN_HASH_VERSION,
         );
+        // GE-05: keep the raw (pre-Thunder-transform) grid so the verifier
+        // can replay the exact transform instead of the mutated symbols.
+        const baseSymbols = symbols.map((col) => col.map((s) => SYMBOL_NAMES[s]));
 
         const betPerLine = Number(spinBetMicro) / 1e8 / PAYLINES.length;
         const { lines, scatterCount, freeSpinsAwarded: rawAward } =
@@ -569,6 +598,7 @@ export const gameRouter = createRouter({
         let isJackpot = false;
         let featureTriggered: "none" | "free_spins" | "thunder_strike" = "none";
         let jackpotTier: string | null = null;
+        const thunderTransforms: Array<{ reel: number; row: number }> = [];
 
         if (scatterCount >= 3 && freeSpinsAwarded > 0) {
           featureTriggered = "free_spins";
@@ -580,6 +610,7 @@ export const gameRouter = createRouter({
           for (let i = 0; i < numTransforms; i++) {
             const r = parseInt(hash.substring(32 + i * 4, 34 + i * 4), 16) % 5;
             const row = parseInt(hash.substring(34 + i * 4, 36 + i * 4), 16) % 3;
+            thunderTransforms.push({ reel: r, row });
             symbols[r][row] = SYMBOLS.ZEUS;
           }
           const reeval = evaluatePaylines(symbols, betPerLine, math);
@@ -621,7 +652,9 @@ export const gameRouter = createRouter({
         if (jackpot) {
           isJackpot = true;
           jackpotTier = jackpot.tier;
-          jackpotAwardMicro = poolMicroByTier[jackpot.tier] ?? 0n;
+          // Pools are stored in USDT micro; pay the equivalent in the spin
+          // currency rather than the raw USDT number 1:1.
+          jackpotAwardMicro = fromUsdtMicro(poolMicroByTier[jackpot.tier] ?? 0n, jackpotFx);
           winMicro += jackpotAwardMicro;
         }
 
@@ -672,6 +705,7 @@ export const gameRouter = createRouter({
           isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
           poolRows, poolMicroByTier, math, features, cascade: null, cascadeBundleRow: null,
+          baseSymbols, thunderTransforms,
           fsRungStored: 0, ladderRungStart: null,
           nearMiss: scatterTotal === 2 ? 1 : 0,
         };
@@ -777,7 +811,8 @@ export const gameRouter = createRouter({
           newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
           isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
-          poolRows, poolMicroByTier, math, features,
+          poolRows, poolMicroByTier, features,
+          baseSymbols: classicBaseSymbols, thunderTransforms: classicThunderTransforms,
         } = outcome;
         const fsRungStored = (outcome as any).fsRungStored ?? 0;
         const ladderRungStart = (outcome as any).ladderRungStart ?? null;
@@ -842,8 +877,8 @@ export const gameRouter = createRouter({
 
         const spinRow = client
           .prepare(
-            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, is_free_spin, mode_id, bundle_id, bundle_sha256, ladder_rung, near_miss)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, client_seed, hash_version, base_symbols, thunder, is_free_spin, mode_id, bundle_id, bundle_sha256, ladder_rung, near_miss)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
           )
           .get(
             session.id,
@@ -860,6 +895,12 @@ export const gameRouter = createRouter({
             featureTriggered,
             freeSpinsAwarded,
             hash,
+            session.client_seed,
+            effectiveMode === "classic" ? SPIN_HASH_VERSION : 1,
+            classicBaseSymbols ? JSON.stringify(classicBaseSymbols) : null,
+            classicThunderTransforms && classicThunderTransforms.length
+              ? JSON.stringify({ transforms: classicThunderTransforms })
+              : null,
             isFreeSpin ? 1 : 0,
             effectiveMode,
             bundleRow.bundle_id,
@@ -1016,8 +1057,10 @@ export const gameRouter = createRouter({
               )
               .run(getDbSeedForTier(p.tier), nowSec, ctx.user.id, p.tier);
           } else if (!isFreeSpin) {
+            // GE-02: contribution is 0.5/0.3/0.2% of the bet expressed in
+            // USDT, the pool's canonical unit.
             const share = mulDivRound(
-              spinBetMicro,
+              toUsdtMicro(spinBetMicro, jackpotFx),
               SHARES[p.tier] ?? 0n,
               1000n,
             );

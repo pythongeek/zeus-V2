@@ -119,6 +119,13 @@ export const spins = sqliteTable("spins", {
   featureTriggered: text("feature_triggered", { enum: ["none", "free_spins", "thunder_strike"] }).default("none").notNull(),
   freeSpinsAwarded: integer("free_spins_awarded", { mode: "number" }).default(0).notNull(),
   hash: text("hash").notNull(),
+  // GE-01/GE-05: fairness stamping. v1 rows predate the length-prefixed hash
+  // and stored no per-spin client seed; new rows pin both so a later seed
+  // change cannot rewrite history and the verifier can replay the raw grid.
+  clientSeed: text("client_seed"),
+  hashVersion: integer("hash_version", { mode: "number" }).default(1).notNull(),
+  baseSymbols: text("base_symbols", { mode: "json" }),
+  thunder: text("thunder", { mode: "json" }),
   // Phase 0 (playbook §5.3): mode/bundle binding — which math resolved
   // this spin. Legacy rows keep bundleId null (pre-registry).
   modeId: text("mode_id").default("classic").notNull(),

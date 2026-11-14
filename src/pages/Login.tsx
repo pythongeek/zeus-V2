@@ -76,6 +76,14 @@ function AuthForm() {
         setTotpStep(true);
         return;
       }
+      // AP1/D2: an admin who must still enrol in 2FA gets a setup-scoped
+      // session. Send them to the forced-enrolment page instead of silently
+      // landing in the game (which left the recovery codes unreachable).
+      if ((res as { requiresSetup?: boolean }).requiresSetup) {
+        toast.info(t("totpRequiredTitle"));
+        navigate("/security");
+        return;
+      }
       await afterAuth(t("welcomeBackToast"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("loginFailed"));

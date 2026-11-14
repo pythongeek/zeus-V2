@@ -159,14 +159,16 @@ describe("B2: settings drive the game", () => {
     settings.setSetting("jackpot_shares", { mini: 10, major: 3, mega: 2 }, 1);
     const a = await makeSession("contrib-seed", "a6client", "100");
     await a.caller.spin({ sessionId: a.sessionId, betAmount: "10", currency: "USDT" });
-    // (Earlier tests in this file already added 0.01 of contributions.)
-    expect(pool("mini").current_amount).toBe("5.11"); // +10 per 1000 of 10 = +0.10
+    // GE-02: pools are canonical USDT. Earlier BDT contributions are
+    // converted at 1 USDT = 110 BDT, so the running total is 5.10504545
+    // (0.00504545 from earlier BDT bets + 0.1 from this USDT bet at 10/1000).
+    expect(pool("mini").current_amount).toBe("5.10504545");
     settings.setSetting("jackpot_shares", { mini: 5, major: 3, mega: 2 }, 1);
 
     settings.setSetting("features", { freeSpins: true, thunder: true, jackpots: false }, 1);
     const b = await makeSession("contrib-seed", "a6client", "100");
     await b.caller.spin({ sessionId: b.sessionId, betAmount: "10", currency: "USDT" });
-    expect(pool("mini").current_amount).toBe("5.11"); // unchanged
+    expect(pool("mini").current_amount).toBe("5.10504545"); // unchanged
     settings.setSetting("features", { freeSpins: true, thunder: true, jackpots: true }, 1);
   });
 

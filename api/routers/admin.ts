@@ -856,144 +856,168 @@ export const adminRouter = createRouter({
   approveDeposit: adminQuery
     .input(z.object({ txId: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      const tx = await db.select().from(transactions)
-        .where(and(eq(transactions.id, input.txId), eq(transactions.type, "deposit")))
-        .then(rows => rows[0]);
-      if (!tx) throw new Error("Deposit transaction not found");
-      if (tx.status !== "pending") throw new Error(`Transaction is ${tx.status}, not pending`);
+      // A2: single synchronous BEGIN IMMEDIATE transaction. The status
+      // transition is a compare-and-set, so two approvers (or a retry)
+      // cannot credit the same deposit twice; the balance update is also
+      // conditional on the value that was read.
+      const sqlite = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
 
-      const amountMicro = parseMoney(tx.amount);
+      const preTx = sqlite
+        .prepare("SELECT id, user_id, currency, amount, status FROM transactions WHERE id = ? AND type = 'deposit'")
+        .get(input.txId) as any;
+      if (!preTx) throw new Error("Deposit transaction not found");
+      if (preTx.status !== "pending") throw new Error(`Transaction is ${preTx.status}, not pending`);
 
-      await db.update(transactions)
-        .set({ status: "confirmed", processedAt: new Date() })
-        .where(eq(transactions.id, tx.id));
+      const preAmountMicro = parseMoney(preTx.amount);
+      const preCurrency = preTx.currency as string;
+      const preUserId = Number(preTx.user_id);
 
-      const bal = await db.select().from(balances)
-        .where(and(eq(balances.userId, tx.userId), eq(balances.currency, tx.currency)))
-        .then(rows => rows[0]);
+      // Bonus/reload planning is read-only; resolve it before the write lock
+      // so no asynchronous work happens inside the transaction callback.
+      const boostCfg = depositBoostFor(preCurrency, preAmountMicro);
+      const boostMicro = boostCfg ? computeBoostMicro(preAmountMicro, boostCfg.pct) : 0n;
 
-      // G1: every available-balance movement writes a ledger leg so
-      // the chain stays complete (deposits previously credited with
-      // no leg, which made true reconciliation impossible).
-      let newAvailable: bigint;
-      if (bal) {
-        newAvailable = parseMoney(bal.available) + amountMicro;
-        await db.update(balances)
-          .set({
-            available: fmtMoney(newAvailable),
-            totalDeposited: fmtMoney(parseMoney(bal.totalDeposited || "0") + amountMicro),
-            updatedAt: new Date(),
-          })
-          .where(eq(balances.id, bal.id));
-      } else {
-        newAvailable = amountMicro;
-        await db.insert(balances).values({
-          userId: tx.userId,
-          currency: tx.currency,
-          available: canonicalMoney(tx.amount),
-          totalDeposited: canonicalMoney(tx.amount),
-        });
-      }
-      getSqliteClient()
-        .prepare(
-          "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'deposit_credit', ?, ?, ?)",
-        )
-        .run(tx.userId, tx.currency, fmtMoney(amountMicro), fmtMoney(newAvailable));
-
-      // Step 4: deposit boost. When a boost is active for this
-      // currency/amount, grant a bonus-bucket credit recorded in
-      // bonus_ledger; wagering and conversion happen on spins.
-      let boostGranted: bigint | null = null;
-      const boostCfg = depositBoostFor(tx.currency, amountMicro);
-      if (boostCfg) {
-        const bonusMicro = computeBoostMicro(amountMicro, boostCfg.pct);
-        if (bonusMicro > 0n) {
-          const client = getSqliteClient();
-          const brow = client
-            .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
-            .get(tx.userId, tx.currency) as any;
-          const newBonus = (brow ? parseMoney(brow.bonus || "0") : 0n) + bonusMicro;
-          const nowSec = Math.floor(Date.now() / 1000);
-          client
-            .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
-            .run(fmtMoney(newBonus), tx.userId, tx.currency);
-          client
-            .prepare(
-              "INSERT INTO bonus_ledger (user_id, kind, currency, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at) VALUES (?, 'deposit_boost', ?, ?, ?, ?, '0', 'active', ?, ?)",
-            )
-            .run(
-              tx.userId,
-              tx.currency,
-              fmtMoney(bonusMicro),
-              fmtMoney(bonusMicro),
-              boostCfg.wageringMultiplier,
-              tx.id,
-              nowSec + boostCfg.expiryDays * 86400,
-            );
-          client
-            .prepare(
-              "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')",
-            )
-            .run(tx.userId, tx.currency, fmtMoney(bonusMicro), fmtMoney(newBonus));
-          boostGranted = bonusMicro;
-        }
-      }
-
-      // Step 12: reload bonus. If the player armed an opt-in and
-      // this approved deposit matches the offer, grant the bonus on
-      // the same rails and consume the opt-in. (Binance deposits are
-      // approved asynchronously, so the bonus attaches here — at
-      // approval — rather than on a countdown card.)
-      let reloadGranted: bigint | null = null;
+      let reloadOffer: any = null;
+      let reloadMicro = 0n;
       if (getSetting<boolean>("reload_enabled") !== false) {
         const { activeOffers, reloadBonusMicro } = await import("../lib/reload");
-        const client = getSqliteClient();
-        const nowSecR = Math.floor(Date.now() / 1000);
-        const optin = client
+        const optin = sqlite
           .prepare(
             "SELECT * FROM reload_optins WHERE user_id = ? AND status = 'armed' AND expires_at > ? ORDER BY id DESC LIMIT 1",
           )
-          .get(tx.userId, nowSecR) as any;
+          .get(preUserId, nowSec) as any;
         if (optin) {
           const offer = activeOffers(getSetting("reload_offers")).find((o) => o.id === optin.offer_id);
           if (offer) {
-            const bonusMicro = reloadBonusMicro(offer, tx.currency, amountMicro);
-            if (bonusMicro) {
-              const brow = client
-                .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
-                .get(tx.userId, tx.currency) as any;
-              const newBonus = (brow ? parseMoney(brow.bonus || "0") : 0n) + bonusMicro;
-              client
-                .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
-                .run(fmtMoney(newBonus), tx.userId, tx.currency);
-              client
-                .prepare(
-                  "INSERT INTO bonus_ledger (user_id, kind, currency, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at) VALUES (?, 'reload', ?, ?, ?, ?, '0', 'active', ?, ?)",
-                )
-                .run(tx.userId, tx.currency, fmtMoney(bonusMicro), fmtMoney(bonusMicro), offer.wagering, tx.id, nowSecR + offer.expiryDays * 86400);
-              client
-                .prepare(
-                  "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')",
-                )
-                .run(tx.userId, tx.currency, fmtMoney(bonusMicro), fmtMoney(newBonus));
-              client
-                .prepare("UPDATE reload_optins SET status = 'consumed', deposit_tx_id = ?, consumed_at = ? WHERE id = ?")
-                .run(tx.id, nowSecR, optin.id);
-              reloadGranted = bonusMicro;
-            }
+            reloadOffer = { optinId: optin.id, offer };
+            reloadMicro = reloadBonusMicro(offer, preCurrency, preAmountMicro) ?? 0n;
           }
         }
       }
 
+      const result = sqlite.transaction(() => {
+        const tx = sqlite
+          .prepare("SELECT id, user_id, currency, amount, status FROM transactions WHERE id = ? AND type = 'deposit'")
+          .get(input.txId) as any;
+        if (!tx) throw new Error("Deposit transaction not found");
+
+        const claimed = sqlite
+          .prepare("UPDATE transactions SET status = 'confirmed', processed_at = ? WHERE id = ? AND status = 'pending'")
+          .run(nowSec, input.txId);
+        if (claimed.changes !== 1) {
+          throw new Error(`Transaction is ${tx.status}, not pending`);
+        }
+
+        const userId = Number(tx.user_id);
+        const currency = tx.currency as string;
+        const amountMicro = parseMoney(tx.amount);
+
+        const bal = sqlite
+          .prepare("SELECT id, available, total_deposited FROM balances WHERE user_id = ? AND currency = ?")
+          .get(userId, currency) as any;
+        let newAvailable: bigint;
+        if (bal) {
+          newAvailable = parseMoney(bal.available) + amountMicro;
+          const upd = sqlite
+            .prepare("UPDATE balances SET available = ?, total_deposited = ? WHERE id = ? AND available = ?")
+            .run(
+              fmtMoney(newAvailable),
+              fmtMoney(parseMoney(bal.total_deposited || "0") + amountMicro),
+              bal.id,
+              bal.available,
+            );
+          if (upd.changes !== 1) throw new Error("Balance changed during approval — please retry");
+        } else {
+          newAvailable = amountMicro;
+          sqlite
+            .prepare("INSERT INTO balances (user_id, currency, available, total_deposited) VALUES (?, ?, ?, ?)")
+            .run(userId, currency, fmtMoney(amountMicro), fmtMoney(amountMicro));
+        }
+
+        sqlite
+          .prepare(
+            "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'deposit_credit', ?, ?, ?)",
+          )
+          .run(userId, currency, fmtMoney(amountMicro), fmtMoney(newAvailable));
+
+        let boostGranted: bigint | null = null;
+        if (boostCfg && boostMicro > 0n) {
+          const brow = sqlite
+            .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
+            .get(userId, currency) as any;
+          const newBonus = (brow ? parseMoney(brow.bonus || "0") : 0n) + boostMicro;
+          sqlite
+            .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
+            .run(fmtMoney(newBonus), userId, currency);
+          sqlite
+            .prepare(
+              "INSERT INTO bonus_ledger (user_id, kind, currency, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at) VALUES (?, 'deposit_boost', ?, ?, ?, ?, '0', 'active', ?, ?)",
+            )
+            .run(
+              userId,
+              currency,
+              fmtMoney(boostMicro),
+              fmtMoney(boostMicro),
+              boostCfg.wageringMultiplier,
+              input.txId,
+              nowSec + boostCfg.expiryDays * 86400,
+            );
+          sqlite
+            .prepare(
+              "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')",
+            )
+            .run(userId, currency, fmtMoney(boostMicro), fmtMoney(newBonus));
+          boostGranted = boostMicro;
+        }
+
+        let reloadGranted: bigint | null = null;
+        if (reloadOffer && reloadMicro > 0n) {
+          const brow = sqlite
+            .prepare("SELECT bonus FROM balances WHERE user_id = ? AND currency = ?")
+            .get(userId, currency) as any;
+          const newBonus = (brow ? parseMoney(brow.bonus || "0") : 0n) + reloadMicro;
+          sqlite
+            .prepare("UPDATE balances SET bonus = ? WHERE user_id = ? AND currency = ?")
+            .run(fmtMoney(newBonus), userId, currency);
+          sqlite
+            .prepare(
+              "INSERT INTO bonus_ledger (user_id, kind, currency, amount, remaining, wagering_multiplier, wagered, status, ref_tx_id, expires_at) VALUES (?, 'reload', ?, ?, ?, ?, '0', 'active', ?, ?)",
+            )
+            .run(
+              userId,
+              currency,
+              fmtMoney(reloadMicro),
+              fmtMoney(reloadMicro),
+              reloadOffer.offer.wagering,
+              input.txId,
+              nowSec + reloadOffer.offer.expiryDays * 86400,
+            );
+          sqlite
+            .prepare(
+              "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after, bucket) VALUES (?, 'bonus_credit', ?, ?, ?, 'bonus')",
+            )
+            .run(userId, currency, fmtMoney(reloadMicro), fmtMoney(newBonus));
+          sqlite
+            .prepare("UPDATE reload_optins SET status = 'consumed', deposit_tx_id = ?, consumed_at = ? WHERE id = ?")
+            .run(input.txId, nowSec, reloadOffer.optinId);
+          reloadGranted = reloadMicro;
+        }
+
+        return { userId, currency, amount: tx.amount as string, boostGranted, reloadGranted };
+      })();
+
       await writeAudit(ctx, "admin.approveDeposit", {
-        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency,
-        ...(boostGranted !== null
-          ? { boostGranted: fmtMoney(boostGranted), boostPct: boostCfg?.pct }
+        txId: input.txId,
+        userId: result.userId,
+        amount: result.amount,
+        currency: result.currency,
+        ...(result.boostGranted !== null
+          ? { boostGranted: fmtMoney(result.boostGranted), boostPct: boostCfg?.pct }
           : {}),
-        ...(reloadGranted !== null ? { reloadGranted: fmtMoney(reloadGranted) } : {}),
+        ...(result.reloadGranted !== null ? { reloadGranted: fmtMoney(result.reloadGranted) } : {}),
       });
-      return { success: true, txId: tx.id };
+      return { success: true, txId: input.txId };
     }),
 
   // D1: deposits can now be rejected (previously approve-only, so a
@@ -1089,85 +1113,108 @@ export const adminRouter = createRouter({
   approveWithdraw: adminQuery
     .input(z.object({ txId: z.number(), totpCode: z.string().regex(/^\d{6}$/).optional() }))
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
+      // A3: one synchronous BEGIN IMMEDIATE transaction. The status
+      // transition is a CAS (pending -> confirming -> confirmed), the
+      // balance update is conditional on the locked value that was read,
+      // so a double approve cannot pay twice.
+      const sqlite = getSqliteClient();
       const adminId = ctx.user?.id;
       if (!adminId) throw new Error("Unauthorized");
-      const tx = await db.select().from(transactions)
-        .where(and(eq(transactions.id, input.txId), eq(transactions.type, "withdrawal")))
-        .then(rows => rows[0]);
-      if (!tx) throw new Error("Withdrawal transaction not found");
-      if (tx.status !== "pending" && tx.status !== "confirming") {
-        throw new Error(`Transaction is ${tx.status}, not pending`);
-      }
-      if (tx.holdReason) {
-        throw new Error("Withdrawal is on hold — release the hold before approving");
-      }
+      const nowSec = Math.floor(Date.now() / 1000);
 
-      const usdtEq = toUsdt(parseFloat(tx.amount), tx.currency);
-      const dualAbove = getSetting<number>("withdrawal_dual_approval_usdt") ?? 100;
-
-      // Stage 1 of dual approval: record who approved first, park.
-      if (tx.status === "pending" && dualAbove > 0 && usdtEq > dualAbove) {
-        await db.update(transactions)
-          .set({ status: "confirming", approvedBy: adminId, approvedAt: new Date() })
-          .where(eq(transactions.id, tx.id));
-        await writeAudit(ctx, "admin.withdrawFirstApproval", {
-          txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, usdtEq,
-        });
-        return { success: true, txId: tx.id, stage: "awaiting-second" as const };
-      }
-
-      // Stage 2 must come from a different admin than stage 1.
-      if (tx.status === "confirming" && tx.approvedBy != null && tx.approvedBy === adminId) {
-        throw new Error("Dual approval requires a different admin for the second approval");
-      }
-
-      // 2FA re-confirmation for large payouts.
-      const totpAbove = getSetting<number>("withdrawal_2fa_above_usdt") ?? 1000;
-      if (totpAbove > 0 && usdtEq > totpAbove) {
-        const me = await db.select().from(users).where(eq(users.id, adminId)).then(r => r[0]);
-        if (!me?.totpEnabled || !me.totpSecret) {
-          throw new Error("Enroll in two-factor authentication before approving large payouts");
+      const result = sqlite.transaction(() => {
+        const tx = sqlite
+          .prepare(
+            "SELECT id, user_id, currency, amount, status, approved_by, hold_reason, to_address FROM transactions WHERE id = ? AND type = 'withdrawal'",
+          )
+          .get(input.txId) as any;
+        if (!tx) throw new Error("Withdrawal transaction not found");
+        if (tx.status !== "pending" && tx.status !== "confirming") {
+          throw new Error(`Transaction is ${tx.status}, not pending`);
         }
-        if (!input.totpCode) {
-          throw new Error("A two-factor code is required to approve payouts above this amount");
+        if (tx.hold_reason) {
+          throw new Error("Withdrawal is on hold — release the hold before approving");
         }
-        const secret = decryptSecret(me.totpSecret);
-        if (!secret || !verifyTotp(secret, input.totpCode)) {
-          throw new Error("Invalid two-factor code");
+
+        const amountMicro = parseMoney(tx.amount);
+        const usdtEq = toUsdt(parseFloat(tx.amount), tx.currency);
+        const dualAbove = getSetting<number>("withdrawal_dual_approval_usdt") ?? 100;
+
+        // Stage 1 of dual approval: record who approved first, park.
+        if (tx.status === "pending" && dualAbove > 0 && usdtEq > dualAbove) {
+          const first = sqlite
+            .prepare(
+              "UPDATE transactions SET status = 'confirming', approved_by = ?, approved_at = ? WHERE id = ? AND status = 'pending'",
+            )
+            .run(adminId, nowSec, input.txId);
+          if (first.changes !== 1) throw new Error("Transaction changed while approving — please retry");
+          return { stage: "awaiting-second" as const, usdtEq, userId: Number(tx.user_id), amount: tx.amount as string, currency: tx.currency as string };
         }
-      }
 
-      const amountMicro = parseMoney(tx.amount);
+        // Stage 2 must come from a different admin than stage 1.
+        if (tx.status === "confirming" && tx.approved_by != null && Number(tx.approved_by) === adminId) {
+          throw new Error("Dual approval requires a different admin for the second approval");
+        }
 
-      // Locked funds leave the system; withdrawal total is recorded.
-      const bal = await db.select().from(balances)
-        .where(and(eq(balances.userId, tx.userId), eq(balances.currency, tx.currency)))
-        .then(rows => rows[0]);
-      if (!bal) throw new Error("User balance row missing");
+        // 2FA re-confirmation for large payouts (reads inside the txn).
+        const totpAbove = getSetting<number>("withdrawal_2fa_above_usdt") ?? 1000;
+        if (totpAbove > 0 && usdtEq > totpAbove) {
+          const me = sqlite
+            .prepare("SELECT totp_enabled, totp_secret FROM users WHERE id = ?")
+            .get(adminId) as any;
+          if (!me?.totp_enabled || !me.totp_secret) {
+            throw new Error("Enroll in two-factor authentication before approving large payouts");
+          }
+          if (!input.totpCode) {
+            throw new Error("A two-factor code is required to approve payouts above this amount");
+          }
+          const secret = decryptSecret(me.totp_secret);
+          if (!secret || !verifyTotp(secret, input.totpCode)) {
+            throw new Error("Invalid two-factor code");
+          }
+        }
 
-      const lockedMicro = parseMoney(bal.locked || "0");
-      if (lockedMicro < amountMicro) {
-        throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
-      }
+        const bal = sqlite
+          .prepare("SELECT id, locked, total_withdrawn FROM balances WHERE user_id = ? AND currency = ?")
+          .get(tx.user_id, tx.currency) as any;
+        if (!bal) throw new Error("User balance row missing");
+        const lockedMicro = parseMoney(bal.locked || "0");
+        if (lockedMicro < amountMicro) {
+          throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
+        }
 
-      await db.update(balances)
-        .set({
-          locked: fmtMoney(lockedMicro - amountMicro),
-          totalWithdrawn: fmtMoney(parseMoney(bal.totalWithdrawn || "0") + amountMicro),
-          updatedAt: new Date(),
-        })
-        .where(eq(balances.id, bal.id));
+        const upd = sqlite
+          .prepare("UPDATE balances SET locked = ?, total_withdrawn = ? WHERE id = ? AND locked = ?")
+          .run(
+            fmtMoney(lockedMicro - amountMicro),
+            fmtMoney(parseMoney(bal.total_withdrawn || "0") + amountMicro),
+            bal.id,
+            bal.locked,
+          );
+        if (upd.changes !== 1) throw new Error("Balance changed during approval — please retry");
 
-      await db.update(transactions)
-        .set({ status: "confirmed", processedAt: new Date() })
-        .where(eq(transactions.id, tx.id));
+        const cas = sqlite
+          .prepare(
+            "UPDATE transactions SET status = 'confirmed', processed_at = ? WHERE id = ? AND status IN ('pending', 'confirming')",
+          )
+          .run(nowSec, input.txId);
+        if (cas.changes !== 1) throw new Error("Transaction changed while approving — please retry");
 
-      await writeAudit(ctx, "admin.approveWithdraw", {
-        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, toAddress: tx.toAddress,
-        usdtEq, firstApprovedBy: tx.approvedBy ?? null, totpConfirmed: totpAbove > 0 && usdtEq > totpAbove,
+        return { stage: "executed" as const, usdtEq, userId: Number(tx.user_id), amount: tx.amount as string, currency: tx.currency as string };
+      })();
+
+      const auditAction = result.stage === "awaiting-second" ? "admin.withdrawFirstApproval" : "admin.approveWithdraw";
+      await writeAudit(ctx, auditAction, {
+        txId: input.txId,
+        userId: result.userId,
+        amount: result.amount,
+        currency: result.currency,
+        usdtEq: result.usdtEq,
+        ...(result.stage === "awaiting-second"
+          ? {}
+          : { totpConfirmed: (getSetting<number>("withdrawal_2fa_above_usdt") ?? 1000) > 0 && result.usdtEq > (getSetting<number>("withdrawal_2fa_above_usdt") ?? 1000) }),
       });
-      return { success: true, txId: tx.id, stage: "executed" as const };
+      return { success: true, txId: input.txId, stage: result.stage };
     }),
 
   // D3: record the actual payout once the money has been sent —
@@ -1277,53 +1324,71 @@ export const adminRouter = createRouter({
   rejectWithdraw: adminQuery
     .input(z.object({ txId: z.number(), reason: z.string().max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      const tx = await db.select().from(transactions)
-        .where(and(eq(transactions.id, input.txId), eq(transactions.type, "withdrawal")))
-        .then(rows => rows[0]);
-      if (!tx) throw new Error("Withdrawal transaction not found");
-      if (tx.status !== "pending" && tx.status !== "confirming") {
-        throw new Error(`Transaction is ${tx.status}, not pending`);
-      }
+      // A4: one synchronous transaction. The cancellation is a CAS and the
+      // refund is conditional on the locked value read, so a concurrent
+      // second reject cannot refund twice.
+      const sqlite = getSqliteClient();
+      const nowSec = Math.floor(Date.now() / 1000);
 
-      const amountMicro = parseMoney(tx.amount);
+      const result = sqlite.transaction(() => {
+        const tx = sqlite
+          .prepare(
+            "SELECT id, user_id, currency, amount, status, approved_by FROM transactions WHERE id = ? AND type = 'withdrawal'",
+          )
+          .get(input.txId) as any;
+        if (!tx) throw new Error("Withdrawal transaction not found");
+        if (tx.status !== "pending" && tx.status !== "confirming") {
+          throw new Error(`Transaction is ${tx.status}, not pending`);
+        }
 
-      // Refund: locked funds return to available.
-      const bal = await db.select().from(balances)
-        .where(and(eq(balances.userId, tx.userId), eq(balances.currency, tx.currency)))
-        .then(rows => rows[0]);
-      if (!bal) throw new Error("User balance row missing");
+        const cas = sqlite
+          .prepare(
+            "UPDATE transactions SET status = 'cancelled', processed_at = ? WHERE id = ? AND status IN ('pending', 'confirming')",
+          )
+          .run(nowSec, input.txId);
+        if (cas.changes !== 1) throw new Error("Transaction changed while rejecting — please retry");
 
-      const lockedMicro = parseMoney(bal.locked || "0");
-      if (lockedMicro < amountMicro) {
-        throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
-      }
+        const amountMicro = parseMoney(tx.amount);
+        const bal = sqlite
+          .prepare("SELECT id, available, locked FROM balances WHERE user_id = ? AND currency = ?")
+          .get(tx.user_id, tx.currency) as any;
+        if (!bal) throw new Error("User balance row missing");
 
-      const unlockedAvailable = parseMoney(bal.available) + amountMicro;
-      await db.update(balances)
-        .set({
-          locked: fmtMoney(lockedMicro - amountMicro),
-          available: fmtMoney(unlockedAvailable),
-          updatedAt: new Date(),
-        })
-        .where(eq(balances.id, bal.id));
+        const lockedMicro = parseMoney(bal.locked || "0");
+        if (lockedMicro < amountMicro) {
+          throw new Error(`Locked balance ${bal.locked} is less than withdrawal ${tx.amount} — refusing`);
+        }
+        const unlockedAvailable = parseMoney(bal.available) + amountMicro;
+        const upd = sqlite
+          .prepare("UPDATE balances SET locked = ?, available = ? WHERE id = ? AND locked = ?")
+          .run(fmtMoney(lockedMicro - amountMicro), fmtMoney(unlockedAvailable), bal.id, bal.locked);
+        if (upd.changes !== 1) throw new Error("Balance changed while rejecting — please retry");
 
-      // G1: the unlock is an available-balance movement — ledger leg.
-      getSqliteClient()
-        .prepare(
-          "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'withdrawal_unlock', ?, ?, ?)",
-        )
-        .run(tx.userId, tx.currency, fmtMoney(amountMicro), fmtMoney(unlockedAvailable));
+        sqlite
+          .prepare(
+            "INSERT INTO ledger_entries (user_id, kind, currency, amount, balance_after) VALUES (?, 'withdrawal_unlock', ?, ?, ?)",
+          )
+          .run(tx.user_id, tx.currency, fmtMoney(amountMicro), fmtMoney(unlockedAvailable));
 
-      await db.update(transactions)
-        .set({ status: "cancelled", processedAt: new Date() })
-        .where(eq(transactions.id, tx.id));
+        return {
+          userId: Number(tx.user_id),
+          amount: tx.amount as string,
+          currency: tx.currency as string,
+          wasStage: tx.status as string,
+          firstApprovedBy: tx.approved_by ?? null,
+        };
+      })();
 
       await writeAudit(ctx, "admin.rejectWithdraw", {
-        txId: tx.id, userId: tx.userId, amount: tx.amount, currency: tx.currency, reason: input.reason ?? null,
-        wasStage: tx.status, firstApprovedBy: tx.approvedBy ?? null,
+        txId: input.txId,
+        userId: result.userId,
+        amount: result.amount,
+        currency: result.currency,
+        reason: input.reason ?? null,
+        wasStage: result.wasStage,
+        firstApprovedBy: result.firstApprovedBy,
       });
-      return { success: true, txId: tx.id };
+      return { success: true, txId: input.txId };
     }),
 
   // ===== B1: game settings (admin control plane) =====
