@@ -42,6 +42,7 @@ const USER_FACING_EXACT = new Set([
   "Deposit below minimum",
   "Deposit above maximum",
   "This payment reference has already been submitted",
+  "Registration is not available in your jurisdiction",
   "Daily withdrawal limit reached",
   "Withdrawal is on hold — release the hold before approving",
   "Dual approval requires a different admin for the second approval",

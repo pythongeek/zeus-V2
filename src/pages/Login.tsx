@@ -243,10 +243,11 @@ function AuthForm() {
               defaultValue="BD"
               className="w-full bg-[#12121A] border border-[#2A2A35] rounded-md h-9 px-2 text-sm text-white"
             >
-              {["BD", "IN", "PK", "NP", "LK", "US", "GB", "AE", "SA", "QA", "MY", "SG", "AU", "CA", "DE", "FR", "IT", "ES", "BR", "NG", "KE", "ZA", "CU", "IR", "KP", "SY"].map((c) => (
+              {["BD", "IN", "PK", "NP", "LK", "US", "GB", "AE", "SA", "QA", "MY", "SG", "AU", "CA", "DE", "FR", "IT", "ES", "BR", "NG", "KE", "ZA"].map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
+            <p className="text-[10px] leading-4 text-[#6E6E80]">{t("countryLegalNote")}</p>
           </div>
           <label className="flex items-start gap-2 text-xs text-[#8A8AA0] cursor-pointer">
             <input

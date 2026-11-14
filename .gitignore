@@ -22,3 +22,5 @@ data/*.sqlite-wal
 # QA verification artifacts (never commit)
 qa-data/
 /qa-data
+
+/node_modules

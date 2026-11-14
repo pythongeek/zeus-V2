@@ -73,24 +73,46 @@ app.use("*", async (c, next) => {
   );
   const p = c.req.path;
   if (p.startsWith("/api/")) return;
-  if (p.startsWith("/assets/")) {
+  const status = c.res.status;
+  const contentType = c.res.headers.get("content-type") || "";
+  // Only a real, successfully served static file may be cached immutable.
+  // A 404 (missing hashed asset) or an HTML fallback must never be cached:
+  // caching the SPA shell under /assets/*.js for a year is unrecoverable.
+  if (p.startsWith("/assets/") && status < 400 && !contentType.includes("text/html")) {
     c.header("Cache-Control", "public, max-age=31536000, immutable");
-  } else if ((c.res.headers.get("content-type") || "").includes("text/html")) {
-    c.header("Cache-Control", "no-cache");
+  } else {
+    c.header("Cache-Control", "no-store");
   }
 });
 
 // Static assets + SPA fallback for client-side routes
 app.use("*", serveStatic({ root: "./dist/public" }));
 app.get("*", (c) => {
-  if (c.req.path.startsWith("/api/")) {
+  const p = c.req.path;
+  if (p.startsWith("/api/")) {
     return c.json({ error: "Not Found" }, 404);
+  }
+  // Missing asset (or any file-looking) URL: a real 404, never the SPA
+  // shell. A stale hashed chunk must fail fast and be replaced on reload
+  // instead of being cached for a year as HTML under a .js/.webp/.wav URL.
+  if (p.startsWith("/assets/") || /\.[a-z0-9]{2,5}$/i.test(p)) {
+    return c.body("Not Found", 404, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
   }
   const indexPath = path.join(distPublic, "index.html");
   if (fs.existsSync(indexPath)) {
-    return c.html(fs.readFileSync(indexPath, "utf-8"));
+    // The SPA shell must always be revalidated: a deploy changes the hashed
+    // bundle names behind it.
+    return c.html(fs.readFileSync(indexPath, "utf-8"), 200, {
+      "Cache-Control": "no-store",
+    });
   }
-  return c.text("Not Found", 404);
+  return c.body("Not Found", 404, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
 });
 
 serve({ fetch: app.fetch, port }, () => {

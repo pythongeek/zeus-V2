@@ -269,7 +269,7 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     labelEn: "Blocked jurisdictions (Step 17 — sanctioned only; BD is NOT blocked: worldwide launch)", labelBn: "ব্লক করা jurisdiction (ধাপ ১৭)",
   } as any,
   kyc_withdrawal_threshold_bdt: {
-    type: "number", scope: "admin", def: 10000, group: "security",
+    type: "number", scope: "public", def: 10000, group: "security",
     labelEn: "KYC required above this cumulative withdrawal total (BDT equivalent)", labelBn: "এই মোট উত্তোলনের উপরে KYC বাধ্যতামূলক (টাকা সমমূল্য)",
   },
   buy_feature_enabled: {

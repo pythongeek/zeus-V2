@@ -93,7 +93,7 @@ interface GameStore {
   // Turbo mode
   turboMode: boolean;
   setTurboMode: (turbo: boolean) => void;
-  // C4: Lite mode — CSS reels instead of the Pixi canvas (persisted)
+  // C4: Lite mode — reduced animation on the CSS reel board (persisted)
   liteMode: boolean;
   setLiteMode: (lite: boolean, persist?: boolean) => void;
 

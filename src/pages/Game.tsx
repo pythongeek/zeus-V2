@@ -3,7 +3,6 @@ import { useNavigate } from "react-router";
 import { useGameStore } from "@/stores/gameStore";
 import { useAuth } from "@/hooks/useAuth";
 import { trpc } from "@/providers/trpc";
-import { ReelEngine, type WinLine } from "@/game/ReelEngine";
 import { useLang, LanguageToggle } from "@/i18n";
 import { Celebration, type CelebrationData, type CelebrationTier } from "@/components/Celebration";
 import { LiveTicker } from "@/components/LiveTicker";
@@ -465,50 +464,6 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reel engine (Pixi canvas) — with CSS fallback if WebGL/init fails
-  const reelsHostRef = useRef<HTMLDivElement | null>(null);
-  const engineRef = useRef<ReelEngine | null>(null);
-  const reelSymbolsRef = useRef<string[][]>([]);
-  const [engineFailed, setEngineFailed] = useState(false);
-  const [boardReady, setBoardReady] = useState(false);
-  const winLineColors = [0xd4af37, 0x00e676, 0x4fc3f7, 0xff5252, 0xba68c8];
-
-  // Create/destroy the engine with auth state
-  useEffect(() => {
-    if (!isAuthenticated || store.liteMode || !reelsHostRef.current || engineRef.current || engineFailed) return;
-    let cancelled = false;
-    try {
-      setBoardReady(false);
-      const engine = new ReelEngine(reelsHostRef.current, 5);
-      engine
-        .init()
-        .then(() => {
-          if (cancelled) {
-            engine.destroy();
-            return;
-          }
-          engine.setSymbols(reelSymbolsRef.current);
-          engineRef.current = engine;
-          setBoardReady(true);
-        })
-        .catch((err) => {
-          console.error("ReelEngine init failed — falling back to CSS reels", err);
-          setEngineFailed(true);
-        });
-      return () => {
-        cancelled = true;
-        if (engineRef.current === engine) engineRef.current = null;
-        engine.destroy();
-      };
-    } catch (err) {
-      console.error("ReelEngine construction failed — falling back to CSS reels", err);
-      setEngineFailed(true);
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated, engineFailed, store.liteMode]);
-
   // Keep ref in sync with grid state
   // Base-game music: "Crown of the Storm" (owner-supplied own
   // composition, 2026-10-30) — a seamless 158s loop normalised to a
@@ -555,45 +510,6 @@ export default function Game() {
     else audio.stopCelebrationSting();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [celebration]);
-
-  // C4: FPS guard — if this device cannot hold a smooth frame rate with
-  // the Pixi renderer, drop to Lite mode (CSS reels) automatically.
-  const fpsGuardDoneRef = useRef(false);
-  useEffect(() => {
-    if (store.liteMode || engineFailed || fpsGuardDoneRef.current || !isAuthenticated) return;
-    let frames = 0;
-    let slowWindows = 0;
-    let raf = 0;
-    let windowStart = performance.now();
-    const tick = (now: number) => {
-      frames++;
-      if (now - windowStart >= 1000) {
-        slowWindows = frames < 35 ? slowWindows + 1 : 0;
-        frames = 0;
-        windowStart = now;
-        if (slowWindows >= 3) {
-          fpsGuardDoneRef.current = true;
-          store.setLiteMode(true, false);
-          toast.info(t("liteModeAuto"));
-          return;
-        }
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    // U1: never measure during page load — startup jank (bundle parse,
-    // texture upload, first layout) used to trip this guard on healthy
-    // phones. Start after a grace period; cleanup clears both handles.
-    const startTimer = setTimeout(() => {
-      windowStart = performance.now();
-      raf = requestAnimationFrame(tick);
-    }, 3500);
-    return () => { clearTimeout(startTimer); cancelAnimationFrame(raf); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, store.liteMode, engineFailed]);
-
-  useEffect(() => {
-    reelSymbolsRef.current = reelSymbols;
-  }, [reelSymbols]);
 
   // tRPC queries and mutations
   const userBalancesQuery = trpc.balance.get.useQuery();
@@ -816,9 +732,12 @@ export default function Game() {
   };
 
   const handleSpin = useCallback(async () => {
-    const debug = new URLSearchParams(window.location.search).has("debug");
+    // Dev-only diagnostics. `import.meta.env.DEV` is statically false in
+    // production builds, so this block (and the ?debug lookup) is removed
+    // from the shipped bundle by Vite's define/replace pass.
+    const debug = import.meta.env.DEV && new URLSearchParams(window.location.search).has("debug");
     if (debug) {
-      document.title = `Z click state=${store.gameState} sess=${store.session?.sessionId ?? "none"} bal=${store.balances.find((b) => b.currency === store.activeCurrency)?.available ?? "?"} eng=${engineRef.current ? "ok" : engineFailed ? "fallback" : "null"}`;
+      document.title = `Z click state=${store.gameState} sess=${store.session?.sessionId ?? "none"} bal=${store.balances.find((b) => b.currency === store.activeCurrency)?.available ?? "?"}`;
     }
     if (store.gameState === "spinning") return;
     // A queued auto/free spin owns the chain; a manual tap here would create
@@ -964,15 +883,12 @@ export default function Game() {
     // Owner (2026-10-31): while the reels roll the background music
     // pauses (ducks to a whisper) so the reel sounds own the mix.
     audio.duckMusic(true);
-    engineRef.current?.clearWinLines();
     setWinCells(new Set());
     if (debug) document.title = `Z firing sess=${store.session.sessionId}`;
 
-    // Start the Pixi reel engine immediately
-    engineRef.current?.spin(reelSymbolsRef.current, {
-      turbo: store.turboMode,
-      stopDelays: store.turboMode ? (store.config?.turbo_delays ?? [120, 180, 240, 300, 360]) : (store.config?.normal_delays ?? [350, 500, 650, 800, 950]),
-    });
+    // The board is CSS-only: the request is fired immediately and the
+    // per-reel stop schedule below drives the visual settle from the
+    // server result (no client renderer to seed).
 
     try {
       const result = await spinWithRecovery({
@@ -991,7 +907,6 @@ export default function Game() {
 
       const finalSymbols: string[][] = result.symbols;
       setReelSymbols(finalSymbols);
-      engineRef.current?.setFinalSymbols(finalSymbols);
 
       // Scatter anticipation: 2+ thunderbolts across reels 1-4 => tease reel 5
       const scattersEarly = finalSymbols
@@ -1001,7 +916,6 @@ export default function Game() {
       const anticipate = scattersEarly >= 2;
 
       const baseDelays: number[] = store.turboMode ? (store.config?.turbo_delays ?? [120, 180, 240, 300, 360]) : (store.config?.normal_delays ?? [350, 500, 650, 800, 950]);
-      const engine = engineRef.current;
       // Step 7: near-miss tease — presentation ONLY, on the server's
       // settled-outcome flag (exactly 2 scatters). The result is
       // already final; the last reel simply lands later (1,800ms
@@ -1028,13 +942,10 @@ export default function Game() {
         setTimeout(() => {
           setLiteStopped(i + 1);
           if ((anticipate || nearMissTease) && i === 3) {
-            engine?.setAnticipation(4);
             audio.startLoop("anticipation", "anticipation-loop.wav", "sfx", 0.9);
           }
-          engine?.stopReel(i);
           audio.play(`reel-stop-${i + 1}`);
           if (i === 4) {
-            engine?.setAnticipation(null);
             audio.stopLoop("reels");
             audio.stopLoop("anticipation");
             // Wait for bounce-settle before evaluating results
@@ -1142,17 +1053,8 @@ export default function Game() {
     }
 
     if (winAmount > 0) {
-      // Draw animated win lines on the Pixi canvas
-      if (result.winLines?.length && engineRef.current) {
-        const winLines: WinLine[] = result.winLines
-          .filter((line: any) => Array.isArray(line.positions) && line.positions.length >= 2)
-          .map((line: any, idx: number) => ({
-            positions: line.positions as Array<[number, number]>,
-            color: winLineColors[idx % winLineColors.length],
-            payout: line.payout ? parseFloat(line.payout) : undefined,
-          }));
-        engineRef.current.showWinLines(winLines);
-      }
+      // Win highlighting is server-driven (result.winLines positions);
+      // the CSS board renders the glow, nothing is computed locally.
       if (result.winLines?.length) {
         setWinCells(new Set(
           (result.winLines as any[])
@@ -1375,6 +1277,16 @@ export default function Game() {
   const depMin = (depCfg.deposit_min as Record<string, string> | undefined)?.[depCurrency];
   const depMax = (depCfg.deposit_max as Record<string, string> | undefined)?.[depCurrency];
 
+  // Anonymous visitors are redirected to /login by the useAuth guard above.
+  // Until the session is known, render only the blank stage: this keeps the
+  // login journey from requesting the game board's 11 symbol WebPs (~1.1 MB)
+  // and from running the board layout/effects for a page that is about to
+  // be replaced. Authenticated players are unaffected (isAuthenticated=true
+  // renders the board below).
+  if (!isAuthenticated) {
+    return <div className="min-h-screen bg-[#0A0A0F]" />;
+  }
+
   return (
     <div className="min-h-screen bg-[#0A0A0F] text-white overflow-hidden relative">
       {/* Lightning flash overlay */}
@@ -1595,7 +1507,7 @@ export default function Game() {
             <div key={pos} className={`absolute ${pos} w-2.5 h-2.5 rounded-full bg-gradient-to-br from-[#F4D03F] to-[#996E20] shadow-[0_0_6px_rgba(212,175,55,0.6)]`} />
           ))}
 
-          {/* Reels Container — Pixi-powered reel engine (with CSS fallback) */}
+          {/* Reels Container — CSS reel board (single renderer, no Pixi) */}
           <div className="bg-[#0A0A0F] rounded-xl p-2">
             {store.mode === "cascade" ? (
               <CascadeBoard
@@ -1609,11 +1521,11 @@ export default function Game() {
                 fsAwarded={cascadeFsAwarded}
                 spinning={cascadeSpinning}
               />
-            ) : engineFailed || store.liteMode ? (
+            ) : (
               <div className="grid grid-cols-5 gap-1">
                 {reelSymbols.map((reel, reelIndex) => (
                   <div key={reelIndex} className="relative overflow-hidden bg-[#0D0D14] rounded-lg">
-                    {store.gameState === "spinning" && reelIndex >= liteStopped ? (
+                    {store.gameState === "spinning" && !store.liteMode && reelIndex >= liteStopped ? (
                       <div className="relative w-full aspect-[1/3] overflow-hidden">
                         <div className="animate-reel-scroll flex flex-col">
                           {liteScrollSymbols(reelIndex).map((sym, i) => (
@@ -1634,37 +1546,6 @@ export default function Game() {
                     )}
                   </div>
                 ))}
-              </div>
-            ) : (
-              <div className="relative">
-                <div ref={reelsHostRef} className="w-full aspect-[5/3] min-h-[220px] max-sm:min-h-0" />
-                {!boardReady && (
-                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#0A0A0F]/85 rounded-lg">
-                    <div className="w-10 h-10 rounded-full border-2 border-[#2A2A35] border-t-[#D4AF37] animate-spin" />
-                    <div className="text-xs tracking-widest text-[#9E9EAC]">{t("loading")}</div>
-                  </div>
-                )}
-                {/* Scatter badges over the settled Pixi board: the
-                    thunderbolt is the free-spins trigger and must read
-                    as SCATTER, like on the Lite board. */}
-                {boardReady && store.gameState !== "spinning" && (
-                  <div className="absolute inset-0 z-10 grid grid-cols-5 grid-rows-3 pointer-events-none">
-                    {Array.from({ length: 3 }).flatMap((_, row) =>
-                      Array.from({ length: 5 }).map((_, reel) => (
-                        <div key={`${reel}:${row}`} className="relative animate-bounce-in">
-                          {reelSymbols[reel]?.[row] === "thunderbolt" && (
-                            <>
-                              <span className="absolute inset-x-[6%] top-[6%] bottom-[12%] scatter-glow rounded-md" />
-                              <span className="absolute bottom-[7%] inset-x-[10%] text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/70 py-px rounded">
-                                {t("scatterBadge")}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      )),
-                    )}
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -1799,7 +1680,10 @@ export default function Game() {
           <div className="mt-2 sm:mt-4 flex items-center justify-center gap-5 sm:gap-9">
             <div className="flex flex-col gap-2">
               <button
+                type="button"
                 onClick={() => store.setTurboMode(!store.turboMode)}
+                aria-label={t("ariaTurbo")}
+                aria-pressed={store.turboMode}
                 title={t("turbo")}
                 className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full border flex items-center justify-center transition-all ${
                   store.turboMode
@@ -1810,7 +1694,10 @@ export default function Game() {
                 <Zap className="w-5 h-5" />
               </button>
               <button
+                type="button"
                 onClick={() => store.setLiteMode(!store.liteMode)}
+                aria-label={t("ariaLite")}
+                aria-pressed={store.liteMode}
                 title={t("liteMode")}
                 className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full border flex items-center justify-center transition-all ${
                   store.liteMode
@@ -1826,6 +1713,8 @@ export default function Game() {
             <div className="flex flex-col items-center gap-1">
               <button
                 id="spin-btn"
+                type="button"
+                aria-label={t("ariaSpin")}
                 onClick={handleSpin}
                 disabled={store.gameState === "spinning"}
                 className={`relative w-20 h-20 sm:w-28 sm:h-28 rounded-full transition-all duration-200 ${
@@ -1849,6 +1738,7 @@ export default function Game() {
             {/* Auto Spin */}
             <div className="flex flex-col items-center gap-1.5">
               <select
+                aria-label={t("ariaAutoplay")}
                 value={store.autoSpinCount}
                 onChange={(e) => {
                   const count = parseInt(e.target.value);
@@ -1878,7 +1768,7 @@ export default function Game() {
         </div>
 
         {/* Debug celebration triggers (only with ?debug=1) */}
-      {new URLSearchParams(window.location.search).has("debug") && (
+      {import.meta.env.DEV && new URLSearchParams(window.location.search).has("debug") && (
         <div className="fixed bottom-2 left-2 z-[70] flex gap-1">
           {(["big", "mega", "jackpot"] as const).map((tier) => (
             <button key={tier} onClick={() => setCelebration({ tier, title: tier === "big" ? t("bigWin") : tier === "mega" ? t("megaWin") : t("jackpotWin"), amount: 123.4567, amountText: (n: number) => `USDT${n.toFixed(2)}`, bdtText: (n: number) => `৳${n.toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}` })} className="px-2 py-1 text-[10px] rounded bg-slate-800 text-slate-300 border border-slate-600">
@@ -2388,6 +2278,12 @@ for (let i = 0; i < 5; i++) {
                 >
                   {withdrawMutation.isPending ? "..." : t("withdraw")}
                 </Button>
+                <p className="text-[11px] leading-4 text-[#D4AF37]">
+                  {/* Phase 6: KYC disclosure with the live admin threshold. */}
+                  KYC: identity verification is required before cumulative withdrawals exceed ৳
+                  {Number(store.config?.kyc_withdrawal_threshold_bdt ?? 10000).toLocaleString("en-US")}.
+                  Withdrawals below that threshold are paid normally (see Terms).
+                </p>
                 <p className="text-xs text-[#5E5E6E]">
                   {t("withdrawNote")}
                 </p>

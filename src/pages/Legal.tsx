@@ -1,12 +1,60 @@
 import { Link } from "react-router";
 import { LanguageToggle, useLang } from "@/i18n";
+import { trpc } from "@/providers/trpc";
 
 /**
  * F3: legal pages — Terms, Privacy, Responsible Gaming.
  * Full text in English and Bangla; rendered in the active language.
+ * Phase 6: operator identity, support channel, KYC and country-eligibility
+ * disclosures are published on every legal page.
  */
 
 type Section = { h: string; p: string };
+
+function OperatorBlock() {
+  const data = trpc.game.getConfig.useQuery(undefined, { staleTime: 60_000 });
+  const cfg = (data.data ?? {}) as Record<string, unknown>;
+  const telegram = typeof cfg.support_telegram === "string" ? cfg.support_telegram.trim() : "";
+  const hours = typeof cfg.support_hours === "string" ? cfg.support_hours.trim() : "";
+  const kycThreshold = Number(cfg.kyc_withdrawal_threshold_bdt ?? 0) || 10000;
+  return (
+    <section
+      data-testid="operator-disclosure"
+      className="mb-8 rounded-lg border border-[#2A2A35] bg-[#12121C] p-4 text-sm leading-6 text-[#B8B8C8]"
+    >
+      <h2 className="text-base font-semibold text-[#D4AF37] mb-2">Operator &amp; support</h2>
+      <p>
+        Zeus Thunder is operated under the <strong>MegaSlot</strong> brand. Operator legal
+        entity, registration and licence details are published on{" "}
+        <a className="text-[#D4AF37] hover:underline" href="https://megaslot.online/legal">
+          megaslot.online/legal
+        </a>
+        .
+      </p>
+      <p className="mt-2">
+        Support:{" "}
+        {telegram ? (
+          <a className="text-[#D4AF37] hover:underline" href={telegram} target="_blank" rel="noreferrer noopener">
+            Telegram support channel
+          </a>
+        ) : (
+          <span>contact details are shown in the game&apos;s Help section</span>
+        )}
+        {hours ? <> · Support hours: {hours}</> : null}
+      </p>
+      <p className="mt-2">
+        KYC: identity verification is required before cumulative withdrawals exceed ৳
+        {kycThreshold.toLocaleString("en-US")}. You can request verification at any time via
+        support.
+      </p>
+      <p className="mt-2">
+        Eligibility: 18+. Players from sanctioned jurisdictions (CU, IR, KP, SY) cannot
+        register or play. You are responsible for confirming online gambling is legal in your
+        own jurisdiction.
+      </p>
+    </section>
+  );
+}
 
 function LegalShell({ title, sections }: { title: string; sections: Section[] }) {
   const { t } = useLang();
@@ -25,6 +73,7 @@ function LegalShell({ title, sections }: { title: string; sections: Section[] })
         >
           {title}
         </h1>
+        <OperatorBlock />
         <div className="space-y-6">
           {sections.map((s) => (
             <section key={s.h}>
@@ -53,6 +102,7 @@ const TERMS: Record<"en" | "bn", Section[]> = {
     { h: "6. Responsible gaming", p: "You can set daily deposit and loss limits, session limits and self-exclusion periods at any time in Settings. Self-exclusion cannot be cancelled early. Gambling should be entertainment, never a way to make money or recover losses." },
     { h: "7. Liability", p: "The game is provided as-is. To the maximum extent permitted by law, our liability is limited to the balance held in your account. Nothing in these terms removes rights you have under applicable consumer law." },
     { h: "8. Changes", p: "We may update these terms; material changes will be announced in the game. Continued play after an announcement constitutes acceptance." },
+    { h: "9. Operator, KYC and country eligibility", p: "The game is operated under the MegaSlot brand; the operator's legal entity and licence details are published on megaslot.online/legal and in the Operator & support block on this page. Identity verification (KYC) is required before cumulative withdrawals exceed the threshold shown in the Wallet; withdrawals below it are paid normally. Players from sanctioned jurisdictions cannot register or play, and you must not use the service if online gambling is illegal where you live. Providing a false country of residence is a breach of these terms." },
   ],
   bn: [
     { h: "১. যোগ্যতা", p: "অ্যাকাউন্ট খুলতে বা খেলতে আপনার বয়স কমপক্ষে ১৮ বছর হতে হবে (অথবা আপনার এলাকার আইনি জুয়া খেলার বয়স, যেটি বেশি)। প্রতি ব্যক্তির একটি মাত্র অ্যাকাউন্ট। ডুপ্লিকেট বা অপ্রাপ্তবয়স্কদের অ্যাকাউন্ট বন্ধ করে দেওয়া হবে।" },
@@ -63,6 +113,7 @@ const TERMS: Record<"en" | "bn", Section[]> = {
     { h: "৬. দায়িত্বশীল গেমিং", p: "সেটিংসে যেকোনো সময় দৈনিক ডিপোজিট ও ক্ষতির সীমা, সেশন সীমা এবং স্ব-বর্জনের সময়কাল সেট করতে পারবেন। স্ব-বর্জন আগে বাতিল করা যায় না। জুয়া হওয়া উচিত বিনোদন, অর্থ উপার্জন বা ক্ষতি পুষিয়ে নেওয়ার উপায় কখনোই নয়।" },
     { h: "৭. দায়বদ্ধতা", p: "গেমটি যেমন আছে তেমনভাবে দেওয়া হয়। আইন অনুমোদিত সর্বোচ্চ সীমা পর্যন্ত আমাদের দায়বদ্ধতা আপনার অ্যাকাউন্টের ব্যালেন্স পর্যন্ত সীমিত। এই শর্তাবলী প্রযোজ্য ভোক্তা আইনে আপনার অধিকার হ্রাস করে না।" },
     { h: "৮. পরিবর্তন", p: "আমরা এই শর্তাবলী আপডেট করতে পারি; গুরুত্বপূর্ণ পরিবর্তন গেমে ঘোষণা করা হবে। ঘোষণার পর খেলা চালিয়ে যাওয়া সম্মতি হিসেবে গণ্য হবে।" },
+    { h: "৯. অপারেটর, KYC ও দেশের যোগ্যতা", p: "গেমটি মেগাস্লট ব্র্যান্ডের অধীনে পরিচালিত; অপারেটরের আইনি সত্তা ও লাইসেন্সের তথ্য megaslot.online/legal এবং এই পৃষ্ঠার Operator & support অংশে প্রকাশিত। ওয়ালেটে দেখানো সীমার বেশি ক্রমপুঞ্জিত উত্তোলনের আগে পরিচয় যাচাই (KYC) বাধ্যতামূলক; এর নিচে স্বাভাবিকভাবে পরিশোধ হয়। নিষিদ্ধ অঞ্চলের খেলোয়াড়রা নিবন্ধন বা খেলতে পারবেন না, এবং আপনার এলাকায় অনলাইন জুয়া অবৈধ হলে সেবা ব্যবহার করা যাবে না। ভুল দেশের তথ্য দেওয়া এই শর্তাবলীর লঙ্ঘন।" },
   ],
 };
 
@@ -74,6 +125,7 @@ const PRIVACY: Record<"en" | "bn", Section[]> = {
     { h: "Retention", p: "Transaction and game records are kept while your account is active and for a reasonable period afterwards for accounting, dispute and audit purposes, after which they are deleted or anonymised." },
     { h: "Your rights", p: "You may request a copy of your data or ask us to correct or delete it (subject to records we must keep by law) by contacting support through the channels shown in the game." },
     { h: "Security", p: "Passwords are stored as scrypt hashes, sessions use signed httpOnly cookies, and administrative access is restricted and audit-logged." },
+    { h: "Operator & contact", p: "The game is operated under the MegaSlot brand; operator identity and licence details are published on megaslot.online/legal. For any privacy request, contact support through the Telegram channel shown in the Operator & support block above. Country of residence is collected to enforce jurisdictional blocking and is retained as part of your account record." },
   ],
   bn: [
     { h: "আমরা যা সংগ্রহ করি", p: "আপনার দেওয়া অ্যাকাউন্ট তথ্য (নাম, ইমেল বা ফোন), আপনার গেম ও লেনদেনের ইতিহাস, সেবা পরিচালনা ও নিরাপত্তার জন্য প্রয়োজনীয় ডিভাইস ও সংযোগ তথ্য, এবং আপনার দায়িত্বশীল-গেমিং সেটিংস।" },
@@ -82,6 +134,7 @@ const PRIVACY: Record<"en" | "bn", Section[]> = {
     { h: "সংরক্ষণ", p: "আপনার অ্যাকাউন্ট সক্রিয় থাকাকালীন এবং হিসাব, বিরোধ ও অডিটের জন্য তারপর যুক্তিসঙ্গত সময় পর্যন্ত লেনদেন ও গেম রেকর্ড রাখা হয়; এরপর সেগুলো মুছে ফেলা বা বেনামি করা হয়।" },
     { h: "আপনার অধিকার", p: "গেমে দেখানো মাধ্যমে সাপোর্টে যোগাযোগ করে আপনি আপনার তথ্যের অনুলিপি চাইতে, সংশোধন বা মুছে ফেলার অনুরোধ করতে পারেন (আইনত রাখতে বাধ্য রেকর্ড ব্যতীত)।" },
     { h: "নিরাপত্তা", p: "পাসওয়ার্ড scrypt হ্যাশ হিসেবে সংরক্ষিত হয়, সেশনে স্বাক্ষরিত httpOnly কুকি ব্যবহৃত হয়, এবং অ্যাডমিন অ্যাক্সেস সীমাবদ্ধ ও অডিট-লগভুক্ত।" },
+    { h: "অপারেটর ও যোগাযোগ", p: "গেমটি মেগাস্লট ব্র্যান্ডের অধীনে পরিচালিত; অপারেটরের পরিচয় ও লাইসেন্সের তথ্য megaslot.online/legal-এ প্রকাশিত। গোপনীয়তা সংক্রান্ত যেকোনো অনুরোধে উপরের Operator & support অংশে দেখানো টেলিগ্রাম চ্যানেলে সাপোর্টে যোগাযোগ করুন। এখতিয়ারভিত্তিক ব্লকিং কার্যকর করতে বসবাসের দেশ সংগ্রহ করা হয় এবং তা আপনার অ্যাকাউন্ট রেকর্ডের অংশ হিসেবে সংরক্ষিত থাকে।" },
   ],
 };
 

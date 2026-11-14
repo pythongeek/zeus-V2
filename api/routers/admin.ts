@@ -11,7 +11,7 @@ import { certifyMath as certifyBundle, type MathBundle } from "../lib/certify";
 import { computeRtpReport } from "../lib/rtplab";
 import { runReconciliation as executeReconciliation } from "../lib/reconcile";
 import { depositBoostFor, computeBoostMicro } from "../lib/boosts";
-import { hashPassword } from "../lib/password";
+import { hashPasswordAsync } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
 import { decryptSecret, verifyTotp } from "../lib/totp";
@@ -747,7 +747,7 @@ export const adminRouter = createRouter({
       for (let i = 0; i < 14; i++) temp += alphabet[crypto.randomInt(alphabet.length)];
       await db
         .update(users)
-        .set({ passwordHash: hashPassword(temp), sessionEpoch: (target.sessionEpoch ?? 0) + 1 })
+        .set({ passwordHash: await hashPasswordAsync(temp), sessionEpoch: (target.sessionEpoch ?? 0) + 1 })
         .where(eq(users.id, input.userId));
       await writeAudit(ctx, "admin.resetPlayerPassword", { userId: input.userId });
       return { success: true, tempPassword: temp };
@@ -2533,3 +2533,4 @@ export const adminRouter = createRouter({
       }));
     }),
 });
+

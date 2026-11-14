@@ -5,7 +5,7 @@ import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
 import { createRouter, publicQuery, authedQuery } from "./middleware";
 import { signSessionToken } from "./kimi/session";
-import { hashPassword, verifyPassword } from "./lib/password";
+import { hashPasswordAsync, verifyPasswordAsync } from "./lib/password";
 import { getDb } from "./queries/connection";
 import { clientIp, looksLikeBot, rateLimit } from "./lib/rate-limit";
 import { getSetting } from "./lib/settings";
@@ -179,7 +179,7 @@ export const authLocalRouter = createRouter({
           name: input.name.trim(),
           email: email ?? null,
           phone: phone ?? null,
-          passwordHash: hashPassword(input.password),
+          passwordHash: await hashPasswordAsync(input.password),
           role: "user",
           country: country ?? null,
           lastSignInAt: new Date(),
@@ -225,7 +225,7 @@ export const authLocalRouter = createRouter({
       // AP3: failed attempts are audited (identifier only) for the
       // admin Access view; auditing must never break login itself.
       const failed = new Error("Invalid credentials");
-      if (!row || !row.passwordHash || !verifyPassword(input.password, row.passwordHash)) {
+      if (!row || !row.passwordHash || !(await verifyPasswordAsync(input.password, row.passwordHash))) {
         try {
           await writeAudit(ctx, row?.id ?? null, "auth.loginFailed", {
             identifier: input.identifier,
@@ -480,7 +480,7 @@ export const authLocalRouter = createRouter({
         .then(rows => rows[0]);
 
       if (!row?.passwordHash) throw new Error("This account has no password set");
-      if (!verifyPassword(input.currentPassword, row.passwordHash)) {
+      if (!(await verifyPasswordAsync(input.currentPassword, row.passwordHash))) {
         throw new Error("Current password is incorrect");
       }
       const pwError = validatePasswordStrength(input.newPassword);
@@ -488,9 +488,10 @@ export const authLocalRouter = createRouter({
 
       await db
         .update(users)
-        .set({ passwordHash: hashPassword(input.newPassword), updatedAt: new Date() })
+        .set({ passwordHash: await hashPasswordAsync(input.newPassword), updatedAt: new Date() })
         .where(eq(users.id, row.id));
 
       return { success: true };
     }),
 });
+
