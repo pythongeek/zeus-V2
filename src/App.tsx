@@ -14,6 +14,7 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 const TermsPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.TermsPage })));
 const PrivacyPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.PrivacyPage })));
 const ResponsibleGamingPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.ResponsibleGamingPage })));
+const OperatorPage = lazy(() => import("./pages/Legal").then((m) => ({ default: m.OperatorPage })));
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
         <Route path="/terms" element={<TermsPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/responsible-gaming" element={<ResponsibleGamingPage />} />
+        <Route path="/operator" element={<OperatorPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>

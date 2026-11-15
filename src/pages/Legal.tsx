@@ -15,8 +15,16 @@ function OperatorBlock() {
   const data = trpc.game.getConfig.useQuery(undefined, { staleTime: 60_000 });
   const cfg = (data.data ?? {}) as Record<string, unknown>;
   const telegram = typeof cfg.support_telegram === "string" ? cfg.support_telegram.trim() : "";
+  const email = typeof cfg.support_email === "string" ? cfg.support_email.trim() : "";
   const hours = typeof cfg.support_hours === "string" ? cfg.support_hours.trim() : "";
   const kycThreshold = Number(cfg.kyc_withdrawal_threshold_bdt ?? 0) || 10000;
+  const rows: Array<{ k: string; v: string }> = [
+    { k: "Brand", v: "MegaSlot · Zeus Thunder" },
+    { k: "Legal entity", v: String(cfg.operator_legal_entity ?? "").trim() },
+    { k: "Registration / jurisdiction", v: String(cfg.operator_registration_number ?? "").trim() },
+    { k: "Registered address", v: String(cfg.operator_registered_address ?? "").trim() },
+    { k: "Licence", v: String(cfg.operator_licence ?? "").trim() },
+  ];
   return (
     <section
       data-testid="operator-disclosure"
@@ -24,13 +32,18 @@ function OperatorBlock() {
     >
       <h2 className="text-base font-semibold text-[#D4AF37] mb-2">Operator &amp; support</h2>
       <p>
-        Zeus Thunder is operated under the <strong>MegaSlot</strong> brand. Operator legal
-        entity, registration and licence details are published on{" "}
-        <a className="text-[#D4AF37] hover:underline" href="https://megaslot.online/legal">
-          megaslot.online/legal
-        </a>
-        .
+        Zeus Thunder is operated under the <strong>MegaSlot</strong> brand.
       </p>
+      <dl className="mt-2 space-y-1">
+        {rows.map((r) => (
+          <div key={r.k} className="flex flex-wrap gap-x-2">
+            <dt className="text-[#8A8AA0]">{r.k}:</dt>
+            <dd className={r.v ? "text-white" : "text-[#FFB86B]"}>
+              {r.v || "Not yet published — pending operator confirmation"}
+            </dd>
+          </div>
+        ))}
+      </dl>
       <p className="mt-2">
         Support:{" "}
         {telegram ? (
@@ -38,8 +51,9 @@ function OperatorBlock() {
             Telegram support channel
           </a>
         ) : (
-          <span>contact details are shown in the game&apos;s Help section</span>
+          <span>support Telegram is not configured yet</span>
         )}
+        {email ? <> · <a className="text-[#D4AF37] hover:underline" href={`mailto:${email}`}>{email}</a></> : null}
         {hours ? <> · Support hours: {hours}</> : null}
       </p>
       <p className="mt-2">
@@ -168,4 +182,13 @@ export function PrivacyPage() {
 export function ResponsibleGamingPage() {
   const { lang, t } = useLang();
   return <LegalShell title={t("rgTitle")} sections={RG[lang]} />;
+}
+
+/**
+ * Phase 6: public operator/legal page. Owner fills the operator_* settings in
+ * the admin panel and this page (served at /operator, and /legal via the
+ * megaslot.online redirect) publishes them without a redeploy.
+ */
+export function OperatorPage() {
+  return <LegalShell title="Operator & Legal" sections={[]} />;
 }

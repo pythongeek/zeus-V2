@@ -73,15 +73,26 @@ export function totp(secretBase32: string, atMs: number = Date.now()): string {
   return hotp(secretBase32, Math.floor(atMs / 1000 / 30));
 }
 
-/** Accept the current step plus one step either side (clock skew). */
-export function verifyTotp(secretBase32: string, code: string, atMs: number = Date.now()): boolean {
+/** Accept the current step plus one step either side (clock skew) and
+ *  return the matched time-step, or null. Callers MUST consume the counter
+ *  (api/lib/totp-store.ts) so a captured code cannot be replayed. */
+export function verifyTotpCounter(
+  secretBase32: string,
+  code: string,
+  atMs: number = Date.now(),
+): number | null {
   const clean = code.replace(/\s+/g, "");
-  if (!/^\d{6}$/.test(clean)) return false;
+  if (!/^\d{6}$/.test(clean)) return null;
   const counter = Math.floor(atMs / 1000 / 30);
   for (const delta of [-1, 0, 1]) {
-    if (hotp(secretBase32, counter + delta) === clean) return true;
+    if (hotp(secretBase32, counter + delta) === clean) return counter + delta;
   }
-  return false;
+  return null;
+}
+
+/** Backwards-compatible boolean view; stateful callers use verifyTotpCounter. */
+export function verifyTotp(secretBase32: string, code: string, atMs: number = Date.now()): boolean {
+  return verifyTotpCounter(secretBase32, code, atMs) !== null;
 }
 
 export function otpauthUrl(secretBase32: string, account: string): string {

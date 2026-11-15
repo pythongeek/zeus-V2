@@ -13,10 +13,15 @@ const lastSpinAt = new Map<number, number>();
 
 const MAX_BUCKETS = 50_000;
 
+/**
+ * P6-04: the rate-limit key must not be client-controlled. nginx replaces
+ * X-Real-IP with $remote_addr; X-Forwarded-For is append-only and therefore
+ * attacker-influenced, so it is ignored entirely here.
+ */
 export function clientIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") || "unknown";
+  const real = req.headers.get("x-real-ip");
+  if (real && real.trim()) return real.trim();
+  return "unknown";
 }
 
 /** Returns true when the hit is ALLOWED (and records it). */

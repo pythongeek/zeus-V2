@@ -2,6 +2,9 @@ import * as cookie from "cookie";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
 import { createRouter, authedQuery } from "./middleware";
+import { getDb } from "./queries/connection";
+import { users } from "@db/schema";
+import { eq } from "drizzle-orm";
 
 /** Strip sensitive columns before any user object crosses the wire. */
 function publicUser(user: {
@@ -33,6 +36,11 @@ function publicUser(user: {
 export const authRouter = createRouter({
   me: authedQuery.query((opts) => publicUser(opts.ctx.user)),
   logout: authedQuery.mutation(async ({ ctx }) => {
+    // P6-05: revoke every session for this account, not only the cookie.
+    await getDb()
+      .update(users)
+      .set({ sessionEpoch: (ctx.user.sessionEpoch ?? 0) + 1 })
+      .where(eq(users.id, ctx.user.id));
     const opts = getSessionCookieOptions(ctx.req.headers);
     ctx.resHeaders.append(
       "set-cookie",

@@ -14,7 +14,9 @@ import { depositBoostFor, computeBoostMicro } from "../lib/boosts";
 import { hashPasswordAsync } from "../lib/password";
 import { getSqliteClient } from "../queries/connection";
 import crypto from "crypto";
-import { decryptSecret, verifyTotp } from "../lib/totp";
+import { decryptSecret, verifyTotpCounter } from "../lib/totp";
+import { consumeTotpCounter } from "../lib/totp-store";
+import { assertSafeWebhookUrl } from "../lib/net-safety";
 import { count, sum, desc, eq, and, or, inArray, like } from "drizzle-orm";
 import type { TrpcContext } from "../context";
 
@@ -788,9 +790,36 @@ export const adminRouter = createRouter({
       isActive: z.boolean(),
     }))
     .mutation(async ({ ctx, input }) => {
+      if (!ctx.user) throw new Error("Unauthorized");
+      const actor = ctx.user;
       const db = getDb();
+      const target = await db
+        .select({ id: users.id, role: users.role, isActive: users.isActive })
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .then((rows) => rows[0]);
+      if (!target) throw new Error("User not found");
+      // P6-06: prevent self-lockout and admin-on-admin (owner) lockout.
+      if (target.id === actor.id) throw new Error("Cannot change your own account state");
+      if (target.role !== "user" && actor.role !== "super_admin") {
+        throw new Error("Only a super admin can change another admin's account state");
+      }
+      if (!input.isActive && target.role !== "user") {
+        const remaining = await db
+          .select({ n: count() })
+          .from(users)
+          .where(and(eq(users.role, "super_admin"), eq(users.isActive, true)));
+        if (target.role === "super_admin" && (remaining[0]?.n ?? 0) <= 1) {
+          throw new Error("At least one super admin must remain");
+        }
+      }
       await db.update(users).set({ isActive: input.isActive }).where(eq(users.id, input.userId));
-      await writeAudit(ctx, "admin.updateUserActive", { ...input });
+      await writeAudit(ctx, "admin.updateUserActive", {
+        userId: input.userId,
+        role: target.role,
+        fromActive: target.isActive,
+        toActive: input.isActive,
+      });
       return { success: true, userId: input.userId, isActive: input.isActive };
     }),
 
@@ -1169,8 +1198,11 @@ export const adminRouter = createRouter({
             throw new Error("A two-factor code is required to approve payouts above this amount");
           }
           const secret = decryptSecret(me.totp_secret);
-          if (!secret || !verifyTotp(secret, input.totpCode)) {
-            throw new Error("Invalid two-factor code");
+          const matched = secret ? verifyTotpCounter(secret, input.totpCode) : null;
+          if (matched === null) throw new Error("Invalid two-factor code");
+          // P6-03: a payout code is single-use, even inside the approval txn.
+          if (!consumeTotpCounter(adminId, matched)) {
+            throw new Error("This two-factor code has already been used");
           }
         }
 
@@ -1393,8 +1425,17 @@ export const adminRouter = createRouter({
 
   // ===== B1: game settings (admin control plane) =====
 
-  getSettings: adminQuery.query(async () => {
-    return getAllSettings();
+  getSettings: adminQuery.query(async ({ ctx }) => {
+    const all = getAllSettings();
+    // P6-09: the day-to-day admin tier sees operational values, but not
+    // alert transports/secrets (webhook URLs are bearer-like capabilities).
+    if (ctx.user?.role === "super_admin") return all;
+    const secretish = /webhook|telegram|secret|token|api_key|password/i;
+    return all.map((row: any) =>
+      secretish.test(String(row.key)) && row.scope === "admin"
+        ? { ...row, value: "", restricted: true }
+        : row,
+    );
   }),
 
   // AP2: settings writes are a super-admin power (reads stay admin-tier).
@@ -1403,6 +1444,10 @@ export const adminRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const changed: string[] = [];
       for (const [key, value] of Object.entries(input.entries)) {
+        // P6-11: never store an SSRF-capable alert webhook.
+        if (key === "alert_webhook_url" && typeof value === "string" && value.trim()) {
+          assertSafeWebhookUrl(value.trim());
+        }
         setSetting(key, value, ctx.user?.id ?? null);
         changed.push(key);
       }
@@ -2273,7 +2318,10 @@ export const adminRouter = createRouter({
       const client = getSqliteClient();
       const LIMIT = 10000;
       const esc = (v: unknown): string => {
-        const s = v === null || v === undefined ? "" : String(v);
+        let s = v === null || v === undefined ? "" : String(v);
+        // P6-10: Excel/Sheets executes leading = + - @ (and tab/CR) as a
+        // formula; prefix such cells so an exported player name cannot run.
+        if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
       const fmtTs = (v: unknown): string => {
@@ -2393,6 +2441,8 @@ export const adminRouter = createRouter({
     };
     if (webhook) {
       try {
+        // P6-11: validate even for a value that predates the write guard.
+        assertSafeWebhookUrl(webhook);
         const res = await fetch(webhook, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

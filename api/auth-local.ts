@@ -9,9 +9,10 @@ import { hashPasswordAsync, verifyPasswordAsync } from "./lib/password";
 import { getDb } from "./queries/connection";
 import { clientIp, looksLikeBot, rateLimit } from "./lib/rate-limit";
 import { getSetting } from "./lib/settings";
+import { consumeTotpCounter } from "./lib/totp-store";
 import {
   generateTotpSecret,
-  verifyTotp as verifyTotpCode,
+  verifyTotpCounter,
   otpauthUrl,
   encryptSecret,
   decryptSecret,
@@ -307,7 +308,15 @@ export const authLocalRouter = createRouter({
       if (!row?.totpEnabled || !row.totpSecret) {
         throw new Error("Two-factor is not set up yet");
       }
-      let ok = verifyTotpCode(decryptSecret(row.totpSecret), input.code);
+      const matchedCounter = verifyTotpCounter(decryptSecret(row.totpSecret), input.code);
+      // P6-03: a code is single-use; consume the time-step atomically.
+      let ok = false;
+      if (matchedCounter !== null) {
+        if (!consumeTotpCounter(row.id, matchedCounter)) {
+          throw new Error("This two-factor code has already been used");
+        }
+        ok = true;
+      }
       if (!ok) {
         // One-time recovery code path (hashes only are stored).
         const rc = await db
@@ -405,7 +414,8 @@ export const authLocalRouter = createRouter({
         .then(rows => rows[0]);
       if (!row?.totpSecret) throw new Error("Two-factor is not set up yet");
       if (row.totpEnabled) throw new Error("Two-factor is already enabled");
-      if (!verifyTotpCode(decryptSecret(row.totpSecret), input.code)) {
+      const enableCounter = verifyTotpCounter(decryptSecret(row.totpSecret), input.code);
+      if (enableCounter === null || !consumeTotpCounter(row.id, enableCounter)) {
         throw new Error("Invalid two-factor code");
       }
       await db
@@ -448,7 +458,8 @@ export const authLocalRouter = createRouter({
       if (!row?.totpEnabled || !row.totpSecret) {
         throw new Error("Two-factor is not set up yet");
       }
-      if (!verifyTotpCode(decryptSecret(row.totpSecret), input.code)) {
+      const disableCounter = verifyTotpCounter(decryptSecret(row.totpSecret), input.code);
+      if (disableCounter === null || !consumeTotpCounter(row.id, disableCounter)) {
         throw new Error("Invalid two-factor code");
       }
       await db
@@ -486,10 +497,17 @@ export const authLocalRouter = createRouter({
       const pwError = validatePasswordStrength(input.newPassword);
       if (pwError) throw new Error(pwError);
 
+      // P6-05: a password change revokes every previously minted session.
       await db
         .update(users)
-        .set({ passwordHash: await hashPasswordAsync(input.newPassword), updatedAt: new Date() })
+        .set({
+          passwordHash: await hashPasswordAsync(input.newPassword),
+          sessionEpoch: (row.sessionEpoch ?? 0) + 1,
+          updatedAt: new Date(),
+        })
         .where(eq(users.id, row.id));
+      // Keep the caller signed in with a fresh epoch-scoped cookie.
+      await issueSession(ctx, row.unionId);
 
       return { success: true };
     }),

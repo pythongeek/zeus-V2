@@ -5,6 +5,7 @@ import {
   hotp,
   totp,
   verifyTotp,
+  verifyTotpCounter,
   generateTotpSecret,
   encryptSecret,
   decryptSecret,
@@ -57,6 +58,14 @@ describe("totp (RFC 6238 vectors, 6-digit truncation)", () => {
     expect(verifyTotp(RFC_SECRET_B32, code, t + 90_000)).toBe(false);
     expect(verifyTotp(RFC_SECRET_B32, "000000", t)).toBe(false);
     expect(verifyTotp(RFC_SECRET_B32, "abc123", t)).toBe(false);
+  });
+  it("P6-03: returns the matched counter so the caller can block replay", () => {
+    const t = 1_700_000_000_000;
+    const step = Math.floor(t / 1000 / 30);
+    const code = totp(RFC_SECRET_B32, t);
+    expect(verifyTotpCounter(RFC_SECRET_B32, code, t)).toBe(step);
+    // the matched step stays the code's own step (delta=-1), so the guard\n    // consumes exactly that step and later steps remain usable\n    expect(verifyTotpCounter(RFC_SECRET_B32, code, t + 30_000)).toBe(step);
+    expect(verifyTotpCounter(RFC_SECRET_B32, "000000", t)).toBe(null);
   });
 });
 

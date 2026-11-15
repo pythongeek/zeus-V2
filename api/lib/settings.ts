@@ -44,6 +44,30 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "string", scope: "public", def: "", group: "site",
     labelEn: "Support Telegram URL", labelBn: "সাপোর্ট টেলিগ্রাম লিংক",
   },
+  support_email: {
+    type: "string", scope: "public", def: "", group: "site",
+    labelEn: "Support email address", labelBn: "সাপোর্ট ইমেইল",
+  },
+  operator_legal_entity: {
+    type: "string", scope: "public", def: "", group: "legal",
+    labelEn: "Operator legal entity (published on /legal)",
+    labelBn: "অপারেটরের আইনি সত্তা",
+  },
+  operator_registration_number: {
+    type: "string", scope: "public", def: "", group: "legal",
+    labelEn: "Company registration number / jurisdiction",
+    labelBn: "কোম্পানি নিবন্ধন নম্বর / এখতিয়ার",
+  },
+  operator_registered_address: {
+    type: "string", scope: "public", def: "", group: "legal",
+    labelEn: "Operator registered address",
+    labelBn: "অপারেটরের নিবন্ধিত ঠিকানা",
+  },
+  operator_licence: {
+    type: "string", scope: "public", def: "", group: "legal",
+    labelEn: "Licence authority and number (or written unlicensed position)",
+    labelBn: "লাইসেন্স কর্তৃপক্ষ ও নম্বর",
+  },
   maintenance_message: {
     type: "string", scope: "public", def: "", group: "site",
     labelEn: "Maintenance message (shown on the maintenance screen; empty = default text)", labelBn: "রক্ষণাবেক্ষণের বার্তা (রক্ষণাবেক্ষণ স্ক্রিনে দেখানো হয়; খালি = ডিফল্ট লেখা)",

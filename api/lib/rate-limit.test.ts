@@ -22,14 +22,17 @@ describe("rateLimit sliding window", () => {
   });
 });
 
-describe("clientIp", () => {
-  it("prefers the first x-forwarded-for hop, falls back to x-real-ip", () => {
-    const req = new Request("http://x", {
+describe("clientIp (P6-04)", () => {
+  it("trusts only the nginx-set X-Real-IP and ignores client-supplied X-Forwarded-For", () => {
+    const spoofed = new Request("http://x", {
       headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8", "x-real-ip": "9.9.9.9" },
     });
-    expect(clientIp(req)).toBe("1.2.3.4");
-    const req2 = new Request("http://x", { headers: { "x-real-ip": "9.9.9.9" } });
-    expect(clientIp(req2)).toBe("9.9.9.9");
+    expect(clientIp(spoofed)).toBe("9.9.9.9");
+    // rotating XFF alone cannot change the rate-limit key
+    const onlyXff = new Request("http://x", { headers: { "x-forwarded-for": "1.2.3.4" } });
+    expect(clientIp(onlyXff)).toBe("unknown");
+    const real = new Request("http://x", { headers: { "x-real-ip": "9.9.9.9" } });
+    expect(clientIp(real)).toBe("9.9.9.9");
     expect(clientIp(new Request("http://x"))).toBe("unknown");
   });
 });

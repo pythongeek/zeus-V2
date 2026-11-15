@@ -136,6 +136,8 @@ describe("I1/I2/I3: system, exports, alert channels", () => {
   });
 
   it("test alert channel posts to the configured webhook; telegram reports missing token", async () => {
+    // Local capture server is plain http; the SSRF guard is bypassed only under this explicit test flag.
+    process.env.ZEUS_ALLOW_PRIVATE_WEBHOOKS = "1";
     await superCaller.updateSettings({
       entries: { alert_webhook_url: `http://127.0.0.1:${capture.port}/hook` },
     });
@@ -153,6 +155,7 @@ describe("I1/I2/I3: system, exports, alert channels", () => {
     expect(res2.telegram.ok).toBe(false);
     expect(res2.telegram.error).toContain("TELEGRAM_BOT_TOKEN");
     await superCaller.updateSettings({ entries: { alert_telegram_chat_id: "", alert_webhook_url: "" } });
+    delete process.env.ZEUS_ALLOW_PRIVATE_WEBHOOKS;
 
     // Plain admins cannot fire the test button.
     await expect(plainCaller.testAlertChannel()).rejects.toThrow();

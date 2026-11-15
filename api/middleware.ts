@@ -43,6 +43,14 @@ const USER_FACING_EXACT = new Set([
   "Deposit above maximum",
   "This payment reference has already been submitted",
   "Registration is not available in your jurisdiction",
+  "This two-factor code has already been used",
+  "Passwordless login is not available for admin accounts",
+  "Cannot change your own account state",
+  "Only a super admin can change another admin's account state",
+  "Webhook URL must use https",
+  "Webhook URL must be a public host",
+  "Webhook URL is not a valid URL",
+  "Admin full-scope session required",
   "Daily withdrawal limit reached",
   "Withdrawal is on hold — release the hold before approving",
   "Dual approval requires a different admin for the second approval",
@@ -84,6 +92,13 @@ const t = initTRPC.context<TrpcContext>().create({
           data: { ...shape.data, code: "BAD_REQUEST", httpStatus: 400 },
         };
       }
+      // P6-12: never leak internal exception text to clients; keep the
+      // detail in the server journal for operators.
+      console.error("[trpc] internal error:", error.message);
+      return {
+        ...shape,
+        message: "Something went wrong — please try again",
+      };
     }
     return shape;
   },

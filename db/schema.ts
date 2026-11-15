@@ -19,6 +19,8 @@ export const users = sqliteTable("users", {
   // (api/lib/totp.ts); totpEnabled flips only after a code verifies.
   totpSecret: text("totp_secret"),
   totpEnabled: integer("totp_enabled", { mode: "boolean" }).default(false).notNull(),
+  // P6-03: last accepted TOTP time-step. Enforces single use of a code.
+  lastTotpCounter: integer("last_totp_counter"),
   // AP3: session epoch — session JWTs carry the epoch they were
   // minted at; bumping it (force sign-out) revokes every existing
   // session for the account without touching the password.

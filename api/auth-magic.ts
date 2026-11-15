@@ -4,7 +4,7 @@ import * as crypto from "crypto";
 import * as cookie from "cookie";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
-import { createRouter, adminQuery, publicQuery } from "./middleware";
+import { createRouter, adminFullQuery, publicQuery } from "./middleware";
 import { signSessionToken } from "./kimi/session";
 import { getDb } from "./queries/connection";
 import { users, verificationCodes } from "@db/schema";
@@ -18,9 +18,18 @@ function hashToken(token: string, identifier: string): string {
 }
 
 async function issueSession(ctx: TrpcContext, unionId: string) {
+  // P6-01/P6-05: magic-link sessions carry the account epoch like every
+  // other mint, so force sign-out revokes them too.
+  const db = getDb();
+  const epochRow = await db
+    .select({ sessionEpoch: users.sessionEpoch })
+    .from(users)
+    .where(eq(users.unionId, unionId))
+    .then((rows) => rows[0]);
   const token = await signSessionToken({
     unionId,
     clientId: "zeus-local",
+    epoch: epochRow?.sessionEpoch ?? 0,
   });
   const opts = getSessionCookieOptions(ctx.req.headers);
   ctx.resHeaders.append(
@@ -37,20 +46,27 @@ async function issueSession(ctx: TrpcContext, unionId: string) {
 
 export const authMagicRouter = createRouter({
   /** Admin: create a one-time passwordless login link for a user. */
-  createLoginLink: adminQuery
+  createLoginLink: adminFullQuery
     .input(z.object({ email: z.string().email() }))
     .mutation(async ({ input }) => {
       const db = getDb();
       const email = input.email.trim().toLowerCase();
 
       const user = await db
-        .select({ id: users.id, unionId: users.unionId, isActive: users.isActive })
+        .select({ id: users.id, unionId: users.unionId, isActive: users.isActive, role: users.role })
         .from(users)
         .where(eq(users.email, email))
         .then(rows => rows[0]);
 
       if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "No account with that email" });
       if (!user.isActive) throw new TRPCError({ code: "FORBIDDEN", message: "Account disabled" });
+      // P6-01: a passwordless link must never bypass admin 2FA.
+      if (user.role !== "user") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Passwordless login is not available for admin accounts",
+        });
+      }
 
       // Invalidate previous unconsumed links for this identity
       await db
@@ -126,6 +142,13 @@ export const authMagicRouter = createRouter({
 
       if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
       if (!user.isActive) throw new TRPCError({ code: "FORBIDDEN", message: "Account disabled" });
+      // Defence in depth: even a stale link cannot mint an admin session.
+      if (user.role !== "user") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Passwordless login is not available for admin accounts",
+        });
+      }
 
       await db
         .update(users)
