@@ -312,6 +312,10 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     type: "boolean", scope: "public", def: false, group: "features",
     labelEn: "Cascade mode enabled (Step 5 — activate only with a certified, active cascade bundle)", labelBn: "ক্যাসকেড মোড চালু (ধাপ ৫)",
   },
+  unified_game: {
+    type: "boolean", scope: "public", def: false, group: "features",
+    labelEn: "Unified game (U3): one game, classic base, scatters award Olympus Cascade free spins. Activate only after the unified bundle is certified (U4).", labelBn: "ইউনিফাইড গেম (U3): একটি গেম, ক্লাসিক বেস, স্ক্যাটারে অলিম্পাস ক্যাসকেড ফ্রি স্পিন",
+  },
   ticker_enabled: {
     type: "boolean", scope: "public", def: true, group: "features",
     labelEn: "Live win ticker enabled (Step 9)", labelBn: "লাইভ জয়ের টিকার চালু (ধাপ ৯)",

@@ -439,6 +439,9 @@ export default function Game() {
   // and the auto-spin total the countdown progress is measured against.
   const [fsRoundWon, setFsRoundWon] = useState(0);
   const autoSpinTotalRef = useRef(0);
+  // U3: the unified game (one game, two acts) once admin enables
+  // it. Off by default until the U4 certification passes.
+  const unifiedOn = (store.config as any)?.unified_game === true;
   // In-flight startSession promise — see handleStartSession.
   const sessionStartRef = useRef<Promise<any> | null>(null);
   // Step 6: cascade playback state.
@@ -1162,6 +1165,15 @@ export default function Game() {
       // the response, never from local award math; retriggers add up).
       if (typeof result.freeSpinsRemaining === "number") {
         store.setFreeSpinsRemaining(result.freeSpinsRemaining);
+        // U3: the response carries the mode the remaining free
+        // spins play in (a converted round, or a banked one). The
+        // board and the auto-consume chain follow the round, not
+        // the player's last toggle.
+        const fsMode = (result as any).freeSpinsMode as "classic" | "cascade" | null;
+        if (result.freeSpinsAwarded > 0 && fsMode) {
+          lastModeRef.current = fsMode;
+          store.setMode(fsMode);
+        }
         if (result.freeSpinsAwarded > 0) {
           store.setFreeSpinsTotal(
             result.isFreeSpin
@@ -1173,6 +1185,12 @@ export default function Game() {
         if (result.freeSpinsAwarded > 0 && !result.isFreeSpin) { fsWinTotalRef.current = 0; setFsRoundWon(0); }
         if (result.freeSpinsRemaining === 0) {
           store.setFreeSpinsTotal(0);
+          // U3: under the unified game the board morphs back to
+          // the classic base game when the bonus round ends.
+          if (unifiedOn && store.mode === "cascade") {
+            store.setMode("classic");
+            lastModeRef.current = "classic";
+          }
           // D2: free-spin outro theatre — celebrate the session total.
           if (fsWinTotalRef.current > 0) {
             setBigWinText(t("freeSpinsComplete", { amount: fsWinTotalRef.current.toFixed(2), cur: store.activeCurrency }));
@@ -1527,6 +1545,10 @@ export default function Game() {
         {/* Step 6: mode selector (classic default) + disclosure */}
         {(store.config as any)?.cascade_enabled ? (
           <div className="w-full max-w-[520px] mx-auto mb-1.5 sm:mb-3 space-y-1.5 sm:space-y-2">
+            {unifiedOn ? (
+              <p className="text-[11px] sm:text-xs leading-snug text-center text-[#F4D03F] px-1">{t("unifiedBonusNote")}</p>
+            ) : (
+            <>
             <div className="flex rounded-full overflow-hidden border border-[#D4AF37]/40">
               {(["classic", "cascade"] as const).map((m) => (
                 <button
@@ -1555,6 +1577,8 @@ export default function Game() {
                 )}
               </p>
               </>
+            )}
+            </>
             )}
           </div>
         ) : null}
@@ -1601,7 +1625,7 @@ export default function Game() {
             header, jackpots, stage strip, mode selector, result
             line and control panel as tightened in this pass.
             Desktop widths are untouched. */}
-        <div className={`relative bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-sm:max-w-[min(100%,calc((100dvh-36rem)*1.2))]" : "max-sm:max-w-[min(100%,calc((100dvh-32.5rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
+        <div key={store.mode} className={`relative animate-bounce-in bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-sm:max-w-[min(100%,calc((100dvh-36rem)*1.2))]" : "max-sm:max-w-[min(100%,calc((100dvh-32.5rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
           {/* Greek key pattern border */}
           <div className="absolute inset-0 rounded-2xl border border-[#996E20]/40 pointer-events-none" />
           {/* Corner bolts */}

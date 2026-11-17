@@ -573,7 +573,34 @@ export const gameRouter = createRouter({
         const betPerLine = Number(spinBetMicro) / 1e8 / PAYLINES.length;
         const { lines, scatterCount, freeSpinsAwarded: rawAward } =
           evaluatePaylines(symbols, betPerLine, math);
-        const freeSpinsAwarded = features.freeSpins ? rawAward : 0;
+        let freeSpinsAwarded = features.freeSpins ? rawAward : 0;
+        // U3 unified game: a PAID classic spin that triggers free
+        // spins awards an Olympus Cascade round instead, when the
+        // unified_game setting is on. The award count comes from
+        // the active cascade bundle's own fsTable, using the same
+        // lookup resolveCascade performs, so the two never drift
+        // apart. Retriggers inside a free-spin round are not
+        // converted: they keep the round's own mode and table.
+        // With no certified cascade bundle active, or cascade
+        // dark, the classic award stands unchanged.
+        let fsModeStored: string | null = null;
+        if (!isFreeSpin && freeSpinsAwarded > 0 && getSetting<boolean>("unified_game") === true) {
+          const bundleRowU = getActiveBundle(client, "cascade");
+          if (bundleRowU && getSetting<boolean>("cascade_enabled") === true) {
+            try {
+              const cmathU = (JSON.parse(bundleRowU.bundle) as any).math as CascadeMath;
+              const thresholdU = cmathU.scatterThreshold ?? 4;
+              const converted =
+                cmathU.fsTable[String(Math.min(scatterCount, thresholdU + 2))] ??
+                cmathU.fsTable[String(thresholdU)] ??
+                0;
+              if (typeof converted === "number" && converted > 0) {
+                freeSpinsAwarded = converted;
+                fsModeStored = "cascade";
+              }
+            } catch { /* bundle unreadable: keep the classic award */ }
+          }
+        }
 
         // Exact win in micro units, recomputed from line multipliers —
         // evaluatePaylines works in floats; money never does (A3).
@@ -704,6 +731,7 @@ export const gameRouter = createRouter({
           newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
           isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
+          fsModeStored,
           poolRows, poolMicroByTier, math, features, cascade: null, cascadeBundleRow: null,
           baseSymbols, thunderTransforms,
           fsRungStored: 0, ladderRungStart: null,
@@ -814,6 +842,7 @@ export const gameRouter = createRouter({
           poolRows, poolMicroByTier, features,
           baseSymbols: classicBaseSymbols, thunderTransforms: classicThunderTransforms,
         } = outcome;
+        const fsModeForStore = (outcome as any).fsModeStored ?? null;
         const fsRungStored = (outcome as any).fsRungStored ?? 0;
         const ladderRungStart = (outcome as any).ladderRungStart ?? null;
         const nearMissFlag = (outcome as any).nearMiss ?? 0;
@@ -861,7 +890,7 @@ export const gameRouter = createRouter({
             fsRemainingAfter,
             fsBetStored,
             fsCurrencyStored,
-            fsRemainingAfter > 0 ? effectiveMode : "classic",
+            fsRemainingAfter > 0 ? (fsModeForStore ?? effectiveMode) : "classic",
             fsRungStored,
             session.id,
           );
@@ -1092,6 +1121,7 @@ export const gameRouter = createRouter({
           jackpotAwardMicro,
           isFreeSpin,
           fsRemainingAfter,
+          fsModeStored: fsModeForStore,
           spinBetMicro,
           spinCurrency,
           mode: effectiveMode,
@@ -1156,6 +1186,7 @@ export const gameRouter = createRouter({
         cascade: (out as any).cascade ?? null,
         nearMiss: (out as any).nearMiss ?? false,
         freeSpinsRemaining: out.fsRemainingAfter,
+        freeSpinsMode: out.fsRemainingAfter > 0 ? ((out as any).fsModeStored ?? (out as any).mode ?? "classic") : null,
         betUsed: fmtMoney(out.spinBetMicro),
         currencyUsed: out.spinCurrency,
       };
