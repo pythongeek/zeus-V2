@@ -312,6 +312,74 @@
   animation: scatter-shimmer 1.4s ease-in-out infinite;
 }
 
+
+/* Symbol idle life + win power (classic board), tiered by symbol value:
+   ZEUS breathes gold, the scatter crackles, premium symbols glow softly,
+   the rest stay calm so the board reads clean. Win states hit harder:
+   winning tiles surge and pulse while the rest of the board dims.
+   Transform/filter only (cheap on low-end phones); Lite mode skips the
+   idle loops in the component, reduced motion silences all of it below. */
+@keyframes sym-idle-mythic {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 5px rgba(255, 213, 79, 0.45)); }
+  50% { filter: brightness(1.16) drop-shadow(0 0 15px rgba(255, 213, 79, 0.9)); }
+}
+.animate-sym-mythic { animation: sym-idle-mythic 3.2s ease-in-out infinite; }
+
+@keyframes sym-idle-premium {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 3px rgba(180, 210, 255, 0.35)); }
+  50% { filter: brightness(1.1) drop-shadow(0 0 10px rgba(180, 210, 255, 0.65)); }
+}
+.animate-sym-premium { animation: sym-idle-premium 4.2s ease-in-out infinite; }
+
+@keyframes sym-idle-scatter {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 4px rgba(120, 200, 255, 0.5)); }
+  6% { filter: brightness(1.45) drop-shadow(0 0 14px rgba(160, 220, 255, 0.95)); }
+  9% { filter: brightness(1.05) drop-shadow(0 0 5px rgba(120, 200, 255, 0.55)); }
+  53% { filter: brightness(1.35) drop-shadow(0 0 12px rgba(160, 220, 255, 0.9)); }
+  56% { filter: brightness(1) drop-shadow(0 0 4px rgba(120, 200, 255, 0.5)); }
+}
+.animate-sym-scatter { animation: sym-idle-scatter 2.9s linear infinite; }
+
+/* Shine sweep across mythic/premium tiles (the tile clips it). */
+.sym-shine::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  background: linear-gradient(115deg, transparent 32%, rgba(255, 255, 255, 0.26) 50%, transparent 68%);
+  transform: translateX(-130%);
+  animation: sym-shine-sweep 5.6s ease-in-out infinite;
+}
+@keyframes sym-shine-sweep {
+  0% { transform: translateX(-130%); }
+  16% { transform: translateX(130%); }
+  100% { transform: translateX(130%); }
+}
+
+/* Win surge: winning tiles pulse; mythic + scatter hit harder with a
+   bigger scale, a white-hot peak and a micro-shake. */
+@keyframes sym-win-pulse {
+  0%, 100% { transform: scale(1.1); filter: brightness(1.2) drop-shadow(0 0 10px rgba(255, 213, 79, 0.85)); }
+  50% { transform: scale(1.18); filter: brightness(1.38) drop-shadow(0 0 18px rgba(255, 213, 79, 1)); }
+}
+.animate-sym-win { animation: sym-win-pulse 0.85s ease-in-out infinite; }
+
+@keyframes sym-win-big {
+  0%, 100% { transform: scale(1.14) rotate(0deg); filter: brightness(1.3) drop-shadow(0 0 14px rgba(255, 213, 79, 0.95)); }
+  25% { transform: scale(1.24) rotate(-1.6deg); filter: brightness(1.65) drop-shadow(0 0 24px rgba(255, 240, 180, 1)); }
+  55% { transform: scale(1.2) rotate(1.4deg); filter: brightness(1.45) drop-shadow(0 0 18px rgba(255, 213, 79, 0.95)); }
+}
+.animate-sym-win-big { animation: sym-win-big 0.7s ease-in-out infinite; }
+
+/* One-shot gold burst on the winning cell as the win lands. */
+.win-cell-burst::before {
+  content: ""; position: absolute; inset: 0; border-radius: 0.5rem; pointer-events: none; z-index: 20;
+  box-shadow: inset 0 0 0 2px rgba(255, 224, 130, 0.95), 0 0 22px rgba(255, 213, 79, 0.75);
+  animation: win-cell-burst 0.65s ease-out both;
+}
+@keyframes win-cell-burst {
+  0% { opacity: 0; transform: scale(0.82); }
+  30% { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.18); }
+}
+
 /* Free-spins award burst: rotating god-rays + banner pop. */
 @keyframes fs-rays-spin {
   from { transform: rotate(0deg); }
@@ -493,6 +561,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .zeus-idle, .zeus-spin, .zeus-strike, .zeus-scatter, .bolt-flicker, .bolt-flare, .animate-board-shake, .scatter-glow {
+    animation: none;
+  }
+  .animate-sym-mythic, .animate-sym-premium, .animate-sym-scatter, .animate-sym-win, .animate-sym-win-big, .sym-shine::after, .win-cell-burst::before {
     animation: none;
   }
   .bolt-strike-path { animation: none; opacity: 0; }

@@ -77,12 +77,42 @@ const SYMBOL_MARKS: Record<string, string> = {
   ace: "A", king: "K", queen: "Q",
 };
 
-function SymbolTile({ symbol, spinning, win }: { symbol: string; spinning: boolean; win: boolean }) {
+// Display tiers for symbol animation, by value: ZEUS is the mythic top
+// symbol, the thunderbolt is the scatter, pegasus + temple are premium,
+// the gear is mid and the stone letters are base. Animation only, the
+// server math never reads this.
+const SYMBOL_TIER: Record<string, "mythic" | "scatter" | "premium" | "mid" | "base"> = {
+  zeus: "mythic", thunderbolt: "scatter",
+  pegasus: "premium", temple: "premium",
+  helmet: "mid", shield: "mid", harp: "mid", amphora: "mid",
+  ace: "base", king: "base", queen: "base",
+};
+
+function SymbolTile({ symbol, spinning, win, dimmed, lite, delay }: { symbol: string; spinning: boolean; win: boolean; dimmed?: boolean; lite?: boolean; delay?: number }) {
   const [failed, setFailed] = useState(false);
   const { t } = useLang();
   const isScatter = symbol === "thunderbolt";
+  const tier = SYMBOL_TIER[symbol] ?? "base";
+  const idleClass = spinning || lite || win
+    ? ""
+    : tier === "mythic"
+      ? "animate-sym-mythic"
+      : tier === "scatter"
+        ? "animate-sym-scatter"
+        : tier === "premium"
+          ? "animate-sym-premium"
+          : "";
+  const winClass = win ? (tier === "mythic" || tier === "scatter" ? "animate-sym-win-big" : "animate-sym-win") : "";
+  const shine = !lite && (tier === "mythic" || tier === "premium") ? "sym-shine" : "";
+  const borderClass = isScatter
+    ? "border-[#FFD54F]/80"
+    : tier === "mythic"
+      ? "border-[#FFD54F]/60"
+      : tier === "premium"
+        ? "border-[#7FB2FF]/40"
+        : "border-[#2A2A35]";
   return (
-    <div className={`relative w-full h-full rounded-md bg-gradient-to-b from-[#23202F] to-[#12101C] border overflow-hidden ${isScatter ? "border-[#FFD54F]/80" : "border-[#2A2A35]"}`}>
+    <div className={`relative w-full h-full rounded-md bg-gradient-to-b from-[#23202F] to-[#12101C] border overflow-hidden transition-[filter] duration-300 ${borderClass} ${shine} ${dimmed ? "brightness-[0.5] saturate-[0.65]" : ""}`}>
       <span
         className="absolute inset-0 flex items-center justify-center font-bold text-[#D4AF37]/80"
         style={{ fontFamily: "Cinzel, serif", fontSize: "1.5rem" }}
@@ -96,7 +126,8 @@ function SymbolTile({ symbol, spinning, win }: { symbol: string; spinning: boole
           onError={() => setFailed(true)}
           className={`absolute inset-0 w-full h-full object-contain ${
             spinning ? "blur-[2px]" : ""
-          } ${win ? "scale-110 drop-shadow-[0_0_14px_rgba(255,213,79,0.95)]" : ""}`}
+          } ${winClass} ${idleClass}`}
+          style={idleClass ? { animationDelay: `${delay ?? 0}s` } : undefined}
           draggable={false}
         />
       )}
@@ -1538,8 +1569,8 @@ export default function Game() {
                     ) : (
                       <div className={`flex flex-col ${store.gameState === "spinning" && reelIndex === liteStopped - 1 ? "animate-reel-land" : ""}`}>
                         {reel.map((symbol, rowIndex) => (
-                          <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${symbol === "thunderbolt" ? "scatter-glow rounded-lg" : ""} ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse" : ""}`}>
-                            <SymbolTile symbol={symbol} spinning={false} win={winCells.has(`${reelIndex}:${rowIndex}`)} />
+                          <div key={rowIndex} className={`relative w-full aspect-square flex items-center justify-center p-1 ${symbol === "thunderbolt" ? "scatter-glow rounded-lg" : ""} ${winCells.has(`${reelIndex}:${rowIndex}`) ? "ring-2 ring-[#FFD54F] rounded-lg animate-pulse win-cell-burst" : ""}`}>
+                            <SymbolTile symbol={symbol} spinning={false} win={winCells.has(`${reelIndex}:${rowIndex}`)} dimmed={winCells.size > 0 && !winCells.has(`${reelIndex}:${rowIndex}`)} lite={store.liteMode} delay={((reelIndex * 3 + rowIndex) % 7) * 0.33} />
                           </div>
                         ))}
                       </div>
