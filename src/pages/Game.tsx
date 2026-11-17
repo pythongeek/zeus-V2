@@ -4,7 +4,16 @@ import { useGameStore } from "@/stores/gameStore";
 import { useAuth } from "@/hooks/useAuth";
 import { trpc } from "@/providers/trpc";
 import { useLang, LanguageToggle } from "@/i18n";
-import { Celebration, type CelebrationData, type CelebrationTier } from "@/components/Celebration";
+// U2: win moments render in the Win Stage strip below the board; the
+// celebration data shape lives here now (the GSAP overlay is gone).
+type WinTier = "big" | "mega" | "jackpot";
+interface WinStageData {
+  tier: WinTier;
+  title: string;
+  amount: number;
+  amountText: (n: number) => string;
+  bdtText: (n: number) => string;
+}
 import { LiveTicker } from "@/components/LiveTicker";
 import { RedEnvelope } from "@/components/RedEnvelope";
 import { ReloadOffers } from "@/components/ReloadOffers";
@@ -457,7 +466,7 @@ export default function Game() {
   const lastModeRef = useRef<"classic" | "cascade">("classic");
   const [bigWinText, setBigWinText] = useState("");
   const [lightningFlash, setLightningFlash] = useState(false);
-  const [celebration, setCelebration] = useState<CelebrationData | null>(null);
+  const [celebration, setCelebration] = useState<WinStageData | null>(null);
   // Stage Zeus + scatter presentation (2026-10-30): cascade scatter
   // count from the server result, classic scatter count from the
   // settled grid, and the thunder-throw / board-shake triggers.
@@ -1118,10 +1127,13 @@ export default function Game() {
         setLightningFlash(true);
         setTimeout(() => setLightningFlash(false), 800);
         if (!celebrationsOff) {
-          setCelebration({ tier: "jackpot" as CelebrationTier, title: t("jackpotWin"), amount: winAmount, amountText, bdtText });
+          setCelebration({ tier: "jackpot" as WinTier, title: t("jackpotWin"), amount: winAmount, amountText, bdtText });
           store.setBigWinAmount(winAmount);
           store.setBigWinAnimation(true);
         }
+        // U2: the strip does not block play, so the game no longer
+        // waits for a dismissal to leave the spinning state.
+        store.setGameState("winning");
       } else if (ratio >= bigX) {
         audio.play("lightning-crack");
         audio.play(ratio >= megaX ? "win-mega" : "win-big");
@@ -1129,10 +1141,11 @@ export default function Game() {
         setLightningFlash(true);
         setTimeout(() => setLightningFlash(false), 800);
         if (!celebrationsOff) {
-          const tier: CelebrationTier = ratio >= megaX ? "mega" : "big";
+          const tier: WinTier = ratio >= megaX ? "mega" : "big";
           setCelebration({ tier, title: tier === "mega" ? t("megaWin") : t("bigWin"), amount: winAmount, amountText, bdtText });
           store.setBigWinAmount(winAmount);
           store.setBigWinAnimation(true);
+          store.setGameState("winning");
         } else {
           store.setGameState("winning");
         }
@@ -1258,6 +1271,27 @@ export default function Game() {
     // game state (it idles and re-spins) — do not clobber it.
     if (store.freeSpinsRemaining <= 0) store.setGameState("idle");
   };
+
+  // U2: the Win Stage strip never blocks play, so its cards dismiss
+  // themselves: tier moments first (they outrank a feature card
+  // queued behind them), then the feature announcement. Tap to
+  // dismiss still works through closeCelebration / closeBigWin.
+  useEffect(() => {
+    if (!celebration) return;
+    const id = setTimeout(closeCelebration, celebration.tier === "jackpot" ? 5000 : 3500);
+    return () => clearTimeout(id);
+  }, [celebration]);
+  useEffect(() => {
+    if (!showBigWin || celebration) return;
+    const id = setTimeout(() => {
+      setShowBigWin(false);
+      store.setBigWinAnimation(false);
+      // Mirror closeCelebration's guard: while free spins remain,
+      // the auto-consume chain owns the game state.
+      if (store.freeSpinsRemaining <= 0) store.setGameState("idle");
+    }, 3200);
+    return () => clearTimeout(id);
+  }, [showBigWin, celebration]);
 
   // Keyboard shortcut
   useEffect(() => {
@@ -1626,6 +1660,51 @@ export default function Game() {
           </div>
         </div>
 
+        {/* U2 Win Stage strip: tier moments and feature announcements
+            live below the board now. Nothing overlays the game, cards
+            dismiss themselves, and a tap dismisses early. The coin
+            shower is clipped inside the strip. */}
+        {(celebration || showBigWin) && (
+          <div className="relative overflow-hidden w-full max-w-[900px] mt-2 rounded-xl border border-[#D4AF37]/60 bg-gradient-to-b from-[#1A1626] to-[#12121A] px-3 py-2.5 text-center animate-bounce-in">
+            {celebration ? (
+              <div onClick={closeCelebration} className="cursor-pointer">
+                <div className="text-3xl sm:text-4xl font-black tracking-wide text-[#F4D03F]" style={{ fontFamily: "Cinzel, serif", textShadow: "0 0 24px rgba(212,175,55,0.55)" }}>
+                  {celebration.title}
+                </div>
+                <div className="text-2xl sm:text-3xl font-mono font-bold text-[#00E676]">
+                  {celebration.amountText(displayedWin)}
+                </div>
+                <div className="text-sm text-[#9E9EAC]">{celebration.bdtText(displayedWin)}</div>
+                {Array.from({ length: 14 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="absolute w-2.5 h-2.5 rounded-full animate-confetti pointer-events-none"
+                    style={{
+                      left: `${(i * 7.3) % 100}%`,
+                      top: "-10px",
+                      backgroundColor: ["#D4AF37", "#F4D03F", "#00E676"][i % 3],
+                      animationDelay: `${(i % 5) * 0.3}s`,
+                      animationDuration: `${2 + (i % 3) * 0.5}s`,
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div onClick={closeBigWin} className="cursor-pointer">
+                <div className="text-2xl sm:text-3xl font-bold text-[#D4AF37]" style={{ fontFamily: "Cinzel, serif", textShadow: "0 0 30px rgba(212,175,55,0.5)" }}>
+                  {bigWinText}
+                </div>
+                <div className="text-xl sm:text-2xl font-mono text-[#00E676]">
+                  {CURRENCY_SYMBOLS[store.activeCurrency]}{displayedWin.toFixed(4)}
+                </div>
+                <div className="text-sm text-[#5E5E6E]">
+                  ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Round result — U4: EVERY spin gets visible feedback. Before,
             only a win showed anything here; a losing spin changed nothing
             on screen but a small history pill, so the game felt dead. */}
@@ -1884,51 +1963,6 @@ export default function Game() {
           <ReferralCard />
         </div>
       </div>
-
-      {/* Tiered Win Celebration (GSAP) */}
-      {celebration && (
-        <Celebration data={celebration} onDone={closeCelebration} />
-      )}
-
-      {/* Feature Announcement Overlay (thunder strike / free spins) */}
-      {showBigWin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={closeBigWin}>
-          <div className="text-center animate-bounce-in">
-            <div className="text-6xl font-bold text-[#D4AF37] mb-4" style={{
-              fontFamily: "Cinzel, serif",
-              textShadow: "0 0 40px rgba(212,175,55,0.6), 0 0 80px rgba(212,175,55,0.3)"
-            }}>
-              {bigWinText}
-            </div>
-            <div className="text-4xl font-mono text-[#00E676] mb-2">
-              {CURRENCY_SYMBOLS[store.activeCurrency]}{displayedWin.toFixed(4)}
-            </div>
-            <div className="text-lg text-[#5E5E6E]">
-              ৳{(displayedWin * (BDT_RATES[store.activeCurrency] || 1)).toLocaleString(lang === "bn" ? "bn-BD" : "en-US")}
-            </div>
-            <Button
-              onClick={closeBigWin}
-              className="mt-6 bg-[#D4AF37] text-black hover:bg-[#F4D03F] font-semibold px-8"
-            >
-              Awesome!
-            </Button>
-          </div>
-          {/* Confetti-like particles */}
-          {Array.from({ length: 20 }).map((_, i) => (
-            <div
-              key={i}
-              className="absolute w-3 h-3 rounded-full animate-confetti"
-              style={{
-                left: `${Math.random() * 100}%`,
-                top: `-10px`,
-                backgroundColor: ["#D4AF37", "#00E676", "#4FC3F7", "#F4D03F"][i % 4],
-                animationDelay: `${Math.random() * 2}s`,
-                animationDuration: `${2 + Math.random() * 2}s`,
-              }}
-            />
-          ))}
-        </div>
-      )}
 
       {/* Paytable Dialog */}
       <Dialog open={store.showPaytable} onOpenChange={store.setShowPaytable}>
