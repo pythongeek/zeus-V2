@@ -1211,19 +1211,30 @@ export default function Game() {
 
     // Free-spin auto-consume (A5): while the server says free spins
     // remain, keep spinning (they are free) until the count reaches zero.
+    // FS-FIX 2026-11-18: a backgrounded tab must not strand the round.
+    // The old callback killed the chain when it fired while the tab
+    // was hidden (the player switched apps to message someone, came
+    // back, and the round sat frozen at n/12 forever). Now the timer
+    // re-arms while hidden and the chain resumes by itself on return;
+    // a visibilitychange listener below covers timers the browser
+    // throttled outright.
     if (!store.isAutoSpinning && (result.freeSpinsRemaining ?? 0) > 0) {
       autoSpinPendingRef.current = true;
-      autoSpinTimer.current = setTimeout(() => {
+      const fireFs = () => {
         autoSpinTimer.current = null;
-        autoSpinPendingRef.current = false;
-        if (!gameMountedRef.current || document.hidden) {
-          store.setIsAutoSpinning(false);
-          store.setAutoSpinCount(0);
+        if (!gameMountedRef.current) {
+          autoSpinPendingRef.current = false;
           return;
         }
+        if (document.hidden) {
+          autoSpinTimer.current = setTimeout(fireFs, 1000);
+          return;
+        }
+        autoSpinPendingRef.current = false;
         store.setGameState("idle");
         handleSpin();
-      }, 1600);
+      };
+      autoSpinTimer.current = setTimeout(fireFs, 1600);
     }
 
     // Auto spin handling — Step 17: pause every 25 spins; the
@@ -1310,6 +1321,39 @@ export default function Game() {
     }, 3200);
     return () => clearTimeout(id);
   }, [showBigWin, celebration]);
+
+  // FS-FIX 2026-11-18: resume a stalled free-spins round when the
+  // player returns to the tab. Covers every stall the re-arming
+  // chain timer cannot: browser timer throttling in background
+  // pages, a chain killed before this fix, a playback hiccup. The
+  // pending-ref guard means it never double-fires with the chain's
+  // own timer.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (
+        store.freeSpinsRemaining > 0 &&
+        store.session &&
+        store.gameState !== "spinning" &&
+        !autoSpinPendingRef.current
+      ) {
+        autoSpinPendingRef.current = true;
+        autoSpinTimer.current = setTimeout(() => {
+          autoSpinTimer.current = null;
+          autoSpinPendingRef.current = false;
+          if (!gameMountedRef.current || document.hidden) return;
+          store.setGameState("idle");
+          handleSpin();
+        }, 400);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [store.freeSpinsRemaining, store.gameState, store.session, handleSpin]);
 
   // Keyboard shortcut
   useEffect(() => {

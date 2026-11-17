@@ -157,6 +157,8 @@ export function CascadeBoard({
   const { num, t } = useLang();
   const [stepIdx, setStepIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");
+  // Static win highlight for the reduced-motion path (screen space).
+  const [idleWinCells, setIdleWinCells] = useState<Set<number>>(new Set());
   const [shownWin, setShownWin] = useState(0);
   const doneRef = useRef(false);
   // onDone arrives as a fresh closure on every parent render;
@@ -207,16 +209,27 @@ export function CascadeBoard({
       return;
     }
     if (reduced) {
+      // Reduced motion: no rolling, no tumble (that is the point of
+      // the setting), but a winning spin must still SHOW which cells
+      // paid. Hold the final grid with a static gold ring on the
+      // winning cells briefly before handing control back, instead
+      // of swapping instantly with no feedback at all (owner
+      // report, 2026-11-18: the board read as frozen/static).
       setPhase("idle");
-      setShownWin(steps.reduce((a, s) => a + parseFloat(s.stepWinMicro) / 1e8, 0));
+      const totalWin = steps.reduce((a, s) => a + parseFloat(s.stepWinMicro) / 1e8, 0);
+      setShownWin(totalWin);
+      const cells = new Set<number>();
+      for (const s of steps) for (const c of s.clusters) for (const p of c.positions) cells.add(toScreenIdx(p));
+      setIdleWinCells(cells);
       const id = setTimeout(() => {
         if (!doneRef.current) {
           doneRef.current = true;
           onDoneRef.current();
         }
-      }, 60);
+      }, totalWin > 0 ? 1100 : 60);
       return () => clearTimeout(id);
     }
+    setIdleWinCells(new Set());
     // Every spin's first grid DROPS IN — including losing spins
     // (steps is empty for a loss). The fast path above is ONLY for
     // reduced motion: an earlier version also fast-pathed empty
@@ -454,7 +467,7 @@ export function CascadeBoard({
         }`}
       >
         {gridCells.map((sym, idx) => {
-          const isWin = phase !== "idle" && winPositions.has(idx);
+          const isWin = phase !== "idle" ? winPositions.has(idx) : idleWinCells.has(idx);
           // Symbol 0 is the ZEUS scatter: it never pays as a cluster —
           // it is the free-spins trigger, so it wears the SCATTER
           // treatment (gold pulse ring + ribbon) on every grid.
@@ -471,7 +484,11 @@ export function CascadeBoard({
               className={`relative aspect-square flex items-center justify-center rounded-md bg-[#1A1A25]/80 ${
                 isScatter ? "bg-[#2A2110]/90" : ""
               } ${
-                isWin && phase === "highlight" ? "ring-2 ring-[#FFD54F] animate-pulse" : ""
+                isWin && phase === "highlight"
+                  ? "ring-2 ring-[#FFD54F] animate-pulse"
+                  : isWin && phase === "idle"
+                    ? "ring-2 ring-[#FFD54F]"
+                    : ""
               } ${
                 isBlast ? "blast-cell" : ""
               } ${
