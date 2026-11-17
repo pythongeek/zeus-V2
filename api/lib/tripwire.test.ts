@@ -171,6 +171,56 @@ describe("tripwire", () => {
     settingsLib.setSetting("maintenance_mode", false, null);
   });
 
+  it("U4 unified stream: a classic paid spin and its cascade free spins form ONE process", async () => {
+    // The cert.run test above already registered a cascade bundle
+    // with sha 'cascadesha'; reuse it for the cascade-mode rows.
+    const cascadeShaRow = { sha256: "cascadesha" };
+    getSqliteClient()
+      .prepare("INSERT INTO math_bundles (bundle_id, mode_id, engine, bundle, sha256, math_hash, status, cert) VALUES ('zeus-unified-v1', 'unified', 'unified', '{}', ?, 'u4test', 'active', ?)")
+      .run("u".repeat(64), JSON.stringify({ result: "PASS", run: { rtp: 0.9628, sigma: 5.0 } }));
+    const insertCascadeFs = (x: number) => {
+      nonce += 1;
+      getSqliteClient()
+        .prepare(
+          `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, hash, is_free_spin, mode_id, bundle_sha256)
+           VALUES (?, 1, ?, '1', 'USDT', '[]', '[]', ?, ?, 1, 'cascade', ?)`,
+        )
+        .run(sessionId, nonce, String(x), crypto.createHash("sha256").update(`u${nonce}`).digest("hex"), cascadeShaRow.sha256);
+    };
+    const countUnified = () =>
+      (getSqliteClient().prepare("SELECT COUNT(*) AS c FROM tripwire_processes WHERE mode_id = 'unified'").get() as any).c as number;
+    const before = countUnified();
+    insertSpin(0.5); // classic paid spin (the trigger)
+    insertCascadeFs(0.3);
+    insertCascadeFs(0.3);
+    insertCascadeFs(0.3); // the converted cascade round
+    insertSpin(0.2); // next paid spin flushes the merged process
+    const report = tripwire.evaluateMode(getSqliteClient(), "unified", PARAMS(), false);
+    // Both modes' bundles are legitimate in this stream: no
+    // bundle_mode_mismatch events. (An unregistered-hash event from
+    // the earlier probe spin is expected and counted separately.)
+    const mismatches = (getSqliteClient()
+      .prepare("SELECT COUNT(*) AS c FROM tripwire_events WHERE mode_id = 'unified' AND kind = 'bundle_mode_mismatch'")
+      .get() as any).c as number;
+    expect(mismatches).toBe(0);
+    expect(report.processed).toBeGreaterThan(0);
+    expect(countUnified()).toBeGreaterThan(before);
+    const last = getSqliteClient()
+      .prepare("SELECT x FROM tripwire_processes WHERE mode_id = 'unified' ORDER BY id DESC LIMIT 1")
+      .get() as any;
+    expect(last.x).toBeCloseTo(1.4, 8); // 0.5 trigger win + 0.9 round wins, over the 1.0 bet
+  });
+
+  it("U4 gating: with unified_game on, evaluateAllModes runs only the unified stream and fast-forwards the per-mode cursors", () => {
+    settingsLib.setSetting("unified_game", true, null);
+    const reports = tripwire.evaluateAllModes(getSqliteClient(), PARAMS(), false);
+    expect(reports.map((r: any) => r.modeId)).toEqual(["unified"]);
+    const maxSpin = (getSqliteClient().prepare("SELECT MAX(id) AS m FROM spins").get() as any).m as number;
+    const classicState = getSqliteClient().prepare("SELECT last_spin_id FROM tripwire_state WHERE mode_id = 'classic'").get() as any;
+    expect(classicState.last_spin_id).toBe(maxSpin);
+    settingsLib.setSetting("unified_game", false, null);
+  });
+
   it("the master switch disables evaluation", () => {
     settingsLib.setSetting("tripwire_enabled", false, null);
     expect(tripwire.evaluateAllModes(getSqliteClient(), PARAMS(), true)).toEqual([]);

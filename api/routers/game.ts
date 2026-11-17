@@ -4,7 +4,7 @@ import { getDb, getSqliteClient } from "../queries/connection";
 import { parseMoney, fmtMoney, mulDivRound, fxRatio, toUsdtMicro, fromUsdtMicro } from "../lib/money";
 import { ladderFor, isOnLadder } from "../lib/betting";
 import { planSpinBonus, type SpinBonusPlan } from "../lib/boosts";
-import { ensureActiveCertifiedClassicBundle, getActiveCertifiedClassic, getActiveBundle, listModes } from "../lib/bundles";
+import { ensureActiveCertifiedClassicBundle, getActiveCertifiedClassic, getActiveBundle, getBundleById, listModes } from "../lib/bundles";
 import { resolveCascade, makeCascadeDraw, type CascadeMath } from "../lib/cascade";
 import { getSetting, getPublicConfig } from "../lib/settings";
 import { toUsdt, tsSec } from "../lib/limits";
@@ -246,7 +246,7 @@ function bankSessionFreeSpins(client: any, session: any): number {
   if (!remaining || remaining <= 0) return 0;
   client
     .prepare(
-      "INSERT INTO banked_free_spins (user_id, spins, bet_amount, currency, mode, ladder_rung, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO banked_free_spins (user_id, spins, bet_amount, currency, mode, ladder_rung, created_at, bundle) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .run(
       session.user_id,
@@ -256,11 +256,43 @@ function bankSessionFreeSpins(client: any, session: any): number {
       (session.free_spins_mode as string) ?? "classic",
       (session.free_spins_rung as number) ?? 0,
       Math.floor(Date.now() / 1000),
+      (session.free_spins_bundle as string) ?? null,
     );
   client
     .prepare("UPDATE game_sessions SET free_spins_remaining = 0 WHERE id = ?")
     .run(session.id);
   return remaining;
+}
+
+/**
+ * U4: the award table a converted (unified) trigger pays, keyed by
+ * scatter count. The certified unified_fs_awards setting wins when
+ * it defines the count; otherwise the active cascade bundle's own
+ * fsTable applies, resolved with the same threshold lookup
+ * resolveCascade performs. Returns null when no cascade bundle is
+ * active (the conversion then does not happen).
+ */
+function unifiedAwardsTable(client: any): Record<string, number> | null {
+  // The unified game's own cascade bundle wins when registered
+  // (Option B); the standalone cascade bundle is the fallback.
+  const bundleRow = getActiveBundle(client, "cascade-unified") ?? getActiveBundle(client, "cascade");
+  if (!bundleRow) return null;
+  let cmath: CascadeMath | null = null;
+  try {
+    cmath = (JSON.parse(bundleRow.bundle) as any).math as CascadeMath;
+  } catch { return null; }
+  const ua = getSetting<Record<string, number>>("unified_fs_awards");
+  const threshold = cmath.scatterThreshold ?? 4;
+  const out: Record<string, number> = {};
+  for (const k of [3, 4, 5]) {
+    const fromSetting = ua?.[String(k)];
+    const fromBundle =
+      cmath.fsTable[String(Math.min(k, threshold + 2))] ??
+      cmath.fsTable[String(threshold)];
+    const v = typeof fromSetting === "number" ? fromSetting : fromBundle;
+    if (typeof v === "number") out[String(k)] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 export const gameRouter = createRouter({
@@ -332,6 +364,7 @@ export const gameRouter = createRouter({
               freeSpinsCurrency: banked.currency as any,
               freeSpinsMode: banked.mode,
               freeSpinsRung: banked.ladder_rung,
+              freeSpinsBundle: banked.bundle ?? null,
             })
             .where(eq(gameSessions.id, session.id));
           freeSpinsGranted = banked.spins;
@@ -577,28 +610,30 @@ export const gameRouter = createRouter({
         // U3 unified game: a PAID classic spin that triggers free
         // spins awards an Olympus Cascade round instead, when the
         // unified_game setting is on. The award count comes from
-        // the active cascade bundle's own fsTable, using the same
-        // lookup resolveCascade performs, so the two never drift
-        // apart. Retriggers inside a free-spin round are not
+        // unifiedAwardsTable: the certified unified_fs_awards
+        // setting when set (the zeus-unified-v1 table, U4),
+        // otherwise the active cascade bundle's own fsTable
+        // resolved with the same threshold lookup resolveCascade
+        // performs. Retriggers inside a free-spin round are not
         // converted: they keep the round's own mode and table.
         // With no certified cascade bundle active, or cascade
         // dark, the classic award stands unchanged.
         let fsModeStored: string | null = null;
+        let fsBundleStored: string | null = null;
         if (!isFreeSpin && freeSpinsAwarded > 0 && getSetting<boolean>("unified_game") === true) {
-          const bundleRowU = getActiveBundle(client, "cascade");
-          if (bundleRowU && getSetting<boolean>("cascade_enabled") === true) {
-            try {
-              const cmathU = (JSON.parse(bundleRowU.bundle) as any).math as CascadeMath;
-              const thresholdU = cmathU.scatterThreshold ?? 4;
-              const converted =
-                cmathU.fsTable[String(Math.min(scatterCount, thresholdU + 2))] ??
-                cmathU.fsTable[String(thresholdU)] ??
-                0;
-              if (typeof converted === "number" && converted > 0) {
-                freeSpinsAwarded = converted;
-                fsModeStored = "cascade";
-              }
-            } catch { /* bundle unreadable: keep the classic award */ }
+          const unifiedBundleRow = getActiveBundle(client, "cascade-unified");
+          const bundleRowU = unifiedBundleRow ?? getActiveBundle(client, "cascade");
+          if (bundleRowU && (unifiedBundleRow || getSetting<boolean>("cascade_enabled") === true)) {
+            const tableU = unifiedAwardsTable(client);
+            const converted = tableU?.[String(Math.min(scatterCount, 5))] ?? 0;
+            if (typeof converted === "number" && converted > 0) {
+              freeSpinsAwarded = converted;
+              fsModeStored = "cascade";
+              // Pin the round to the unified bundle (Option B):
+              // its free spins resolve through the gentler math,
+              // never the standalone mode's certified bundle.
+              fsBundleStored = unifiedBundleRow ? unifiedBundleRow.bundle_id : null;
+            }
           }
         }
 
@@ -731,7 +766,7 @@ export const gameRouter = createRouter({
           newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
           isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
-          fsModeStored,
+          fsModeStored, fsBundleStored,
           poolRows, poolMicroByTier, math, features, cascade: null, cascadeBundleRow: null,
           baseSymbols, thunderTransforms,
           fsRungStored: 0, ladderRungStart: null,
@@ -739,8 +774,17 @@ export const gameRouter = createRouter({
         };
         })();
         } else {
-          const bundleRowC = getActiveBundle(client, "cascade");
-          if (!bundleRowC || getSetting<boolean>("cascade_enabled") !== true) {
+          // A converted (unified) round pins its bundle on the
+          // session: those free spins resolve through the pinned
+          // bundle regardless of the standalone mode's switch or
+          // active bundle. Native cascade rounds use the active
+          // bundle as always.
+          let bundleRowC = getActiveBundle(client, "cascade");
+          const pinnedBundleId = isFreeSpin ? (((session as any).free_spins_bundle as string | null) ?? null) : null;
+          if (pinnedBundleId) {
+            bundleRowC = getBundleById(client, pinnedBundleId) ?? bundleRowC;
+          }
+          if (!bundleRowC || (!pinnedBundleId && getSetting<boolean>("cascade_enabled") !== true)) {
             throw new Error("Cascade mode is not available yet");
           }
           const cmath = (JSON.parse(bundleRowC.bundle) as any).math as CascadeMath;
@@ -843,6 +887,14 @@ export const gameRouter = createRouter({
           baseSymbols: classicBaseSymbols, thunderTransforms: classicThunderTransforms,
         } = outcome;
         const fsModeForStore = (outcome as any).fsModeStored ?? null;
+        // The bundle pin: set at conversion, preserved across the
+        // round's own free spins, cleared when the round ends.
+        const fsBundleForStore =
+          (outcome as any).fsBundleStored !== undefined
+            ? ((outcome as any).fsBundleStored as string | null)
+            : isFreeSpin
+              ? (((session as any).free_spins_bundle as string | null) ?? null)
+              : null;
         const fsRungStored = (outcome as any).fsRungStored ?? 0;
         const ladderRungStart = (outcome as any).ladderRungStart ?? null;
         const nearMissFlag = (outcome as any).nearMiss ?? 0;
@@ -877,7 +929,7 @@ export const gameRouter = createRouter({
 
         client
           .prepare(
-            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ?, free_spins_rung = ? WHERE id = ?",
+            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ?, free_spins_rung = ?, free_spins_bundle = ? WHERE id = ?",
           )
           .run(
             newNonce,
@@ -892,6 +944,7 @@ export const gameRouter = createRouter({
             fsCurrencyStored,
             fsRemainingAfter > 0 ? (fsModeForStore ?? effectiveMode) : "classic",
             fsRungStored,
+            fsRemainingAfter > 0 ? fsBundleForStore : null,
             session.id,
           );
 
@@ -1339,7 +1392,7 @@ export const gameRouter = createRouter({
           .run(ctx.user.id, input.currency, fmtMoney(-priceMicro), fmtMoney(newAvailable));
         client
           .prepare(
-            "UPDATE game_sessions SET free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = 'cascade', free_spins_rung = 0 WHERE id = ?",
+            "UPDATE game_sessions SET free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = 'cascade', free_spins_rung = 0, free_spins_bundle = NULL WHERE id = ?",
           )
           .run(fsAward, fmtMoney(betMicro), input.currency, session.id);
         return { txId: Number(txInfo.lastInsertRowid) };
@@ -1412,6 +1465,13 @@ export const gameRouter = createRouter({
       rtp: getSetting<number>("rtp_declared"), // A4-certified 96.0 for the default math (see rtp.test.ts); admin updates only after re-certification
       volatility: "HIGH",
       freeSpins: getMathConfig().freeSpins,
+      // U4: under the unified game, the paytable shows the bonus
+      // round the scatters actually award (the certified unified
+      // table), never the classic free-spin counts.
+      unified:
+        getSetting<boolean>("unified_game") === true
+          ? { awards: unifiedAwardsTable(getSqliteClient()) }
+          : null,
     };
   }),
 

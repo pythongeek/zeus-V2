@@ -44,8 +44,8 @@ function modeParams(modeId) {
     try {
       const cert = JSON.parse(row.cert);
       return {
-        mu0: cert.rtp_hat ?? (cert.rtp_percent != null ? cert.rtp_percent / 100 : 0.965),
-        sigma0: cert.sigma_hat ?? cert.sigma_x ?? 18,
+        mu0: cert.run?.rtp ?? cert.rtp_hat ?? cert.rtp ?? (cert.rtp_percent != null ? cert.rtp_percent / 100 : 0.965),
+        sigma0: cert.run?.sigma ?? cert.sigma_hat ?? cert.sigma_x ?? cert.sigma ?? 18,
       };
     } catch { /* defaults below */ }
   }
@@ -112,17 +112,23 @@ function evaluateMode(modeId) {
   };
 
   for (;;) {
-    const batch = db.prepare(
-      `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
-       WHERE mode_id = ? AND id > ?
-       ORDER BY id ASC LIMIT ?`,
-    ).all(modeId, state.last_spin_id, PARAMS.batchSize);
+    const batch = modeId === "unified"
+      ? db.prepare(
+        `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
+         WHERE mode_id IN ('classic', 'cascade') AND id > ?
+         ORDER BY id ASC LIMIT ?`,
+      ).all(state.last_spin_id, PARAMS.batchSize)
+      : db.prepare(
+        `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
+         WHERE mode_id = ? AND id > ?
+         ORDER BY id ASC LIMIT ?`,
+      ).all(modeId, state.last_spin_id, PARAMS.batchSize);
     if (batch.length === 0) break;
     for (const s of batch) {
       if (s.bundle_sha256) {
         const owner = bundleModeBySha.get(s.bundle_sha256);
         if (owner === undefined && firstBadHashSpin === null) firstBadHashSpin = s.id;
-        else if (owner !== undefined && owner !== modeId && firstMismatchSpin === null) firstMismatchSpin = s.id;
+        else if (owner !== undefined && owner !== modeId && modeId !== "unified" && firstMismatchSpin === null) firstMismatchSpin = s.id;
       }
       const win = parseFloat(s.win_amount);
       if (!s.is_free_spin) {
@@ -176,7 +182,7 @@ function evaluateMode(modeId) {
   if (breach) {
     recordEvent(modeId, 1, "layer1_breach", { mean, mu0, band, windowSpins }, state.last_spin_id);
     raiseAlert(modeId, 1, "critical", `Tripwire LAYER 1 BREACH on ${modeId}: RTP ${(mean * 100).toFixed(2)}% vs ${(mu0 * 100).toFixed(2)}%`, { mean, mu0, band, windowSpins });
-    if (modeId === "classic") {
+    if (modeId === "classic" || modeId === "unified") {
       db.prepare("INSERT INTO settings (key, value) VALUES ('maintenance_mode', 'true') ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = unixepoch()").run();
     } else {
       db.prepare("UPDATE math_bundles SET status = 'parked' WHERE mode_id = ? AND status = 'active'").run(modeId);
@@ -199,9 +205,21 @@ if (setting("tripwire_enabled", true) === false) {
   process.exit(0);
 }
 
-const modes = new Set(["classic"]);
-for (const r of db.prepare("SELECT DISTINCT mode_id FROM spins").all()) modes.add(r.mode_id);
-for (const r of db.prepare("SELECT DISTINCT mode_id FROM math_bundles").all()) modes.add(r.mode_id);
+let modes;
+if (setting("unified_game", false) === true) {
+  // U4: while the unified game is live, only the merged process
+  // stream is honest. Freeze the per-mode cursors at the newest
+  // spin so a later flip-back resumes cleanly.
+  const maxId = db.prepare("SELECT MAX(id) AS m FROM spins").get().m ?? 0;
+  for (const m of ["classic", "cascade"]) {
+    db.prepare("UPDATE tripwire_state SET last_spin_id = MAX(last_spin_id, ?) WHERE mode_id = ?").run(maxId, m);
+  }
+  modes = ["unified"];
+} else {
+  modes = new Set(["classic"]);
+  for (const r of db.prepare("SELECT DISTINCT mode_id FROM spins").all()) modes.add(r.mode_id);
+  for (const r of db.prepare("SELECT DISTINCT mode_id FROM math_bundles").all()) modes.add(r.mode_id);
+}
 for (const modeId of modes) {
   const r = evaluateMode(modeId);
   console.log(

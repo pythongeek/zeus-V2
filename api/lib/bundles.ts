@@ -331,6 +331,42 @@ export function registerCascadeBundle(
   return getBundleById(sqlite, bundleId)!;
 }
 
+/**
+ * U4 Option B: register the unified game's cascade bundle. The
+ * math is cascade-shaped (same engine), but it lives under its
+ * own mode_id ('cascade-unified') and bundle id, so the spin
+ * path can pin converted free-spin rounds to it without ever
+ * touching the standalone cascade mode's certified bundle.
+ */
+export function registerUnifiedCascadeBundle(
+  sqlite: SqliteClient,
+  math: CascadeBundleMath,
+  opts: { status?: string; cert?: unknown } = {},
+): BundleRow {
+  const bundleId = "zeus-unified-cascade-v1";
+  const bundle = {
+    bundleId,
+    modeId: "cascade-unified",
+    engine: "cascade",
+    math,
+  };
+  const sha256 = sha256Hex(canonicalStringify(bundle));
+  const existing = getBundleById(sqlite, bundleId);
+  if (existing) {
+    if (existing.sha256 !== sha256) {
+      throw new Error(`Bundle ${bundleId} already exists with different math — bump the version`);
+    }
+    return existing;
+  }
+  sqlite
+    .prepare(
+      `INSERT INTO math_bundles (bundle_id, mode_id, engine, bundle, sha256, math_hash, status, cert)
+       VALUES (?, 'cascade-unified', 'cascade', ?, ?, ?, ?, ?)`,
+    )
+    .run(bundleId, JSON.stringify(bundle), sha256, sha256, opts.status ?? "draft", opts.cert ? JSON.stringify(opts.cert) : null);
+  return getBundleById(sqlite, bundleId)!;
+}
+
 export function getActiveBundle(sqlite: SqliteClient, modeId: string): BundleRow | null {
   return getActiveRow(sqlite, modeId);
 }

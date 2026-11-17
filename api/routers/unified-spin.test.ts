@@ -65,6 +65,13 @@ function scatterCount(res: any): number {
     .filter((s) => s === "thunderbolt").length;
 }
 
+function sessionFsBundle(sessionId: number): string | null {
+  const row = getSqliteClient()
+    .prepare("SELECT free_spins_bundle FROM game_sessions WHERE id = ?")
+    .get(sessionId) as any;
+  return (row.free_spins_bundle as string | null) ?? null;
+}
+
 function sessionFsMode(sessionId: number): string {
   const row = getSqliteClient()
     .prepare("SELECT free_spins_mode FROM game_sessions WHERE id = ?")
@@ -130,6 +137,17 @@ beforeAll(async () => {
     fsRetrigger: 0, // deterministic round length for the assertions below
   };
   bundles.registerCascadeBundle(getSqliteClient(), unifiedMath, 1, { status: "active" });
+  // Option B: the unified game's own cascade bundle (gentler math,
+  // same 12/15/20 award table). Converted rounds must pin to it.
+  const unifiedBundleMath = {
+    ...cascadeLib.CASCADE_DEFAULT_MATH,
+    scatterThreshold: 3,
+    fsTable: { "3": 12, "4": 15, "5": 20 },
+    fsRetrigger: 0,
+    ladder: [1, 2, 3, 4, 6],
+    attach: [0.35, 0.35, 0.35, 0.35, 0.35],
+  };
+  bundles.registerUnifiedCascadeBundle(getSqliteClient(), unifiedBundleMath, { status: "active" });
   settingsLib.setSetting("cascade_enabled", true, null);
 });
 
@@ -160,11 +178,35 @@ describe("U3 unified game conversion", () => {
     expect(trig.freeSpinsAwarded).toBe(expected);
     expect(trig.freeSpinsMode).toBe("cascade");
     expect(sessionFsMode(sessionId)).toBe("cascade");
+    // Option B: the round is pinned to the unified bundle, and the
+    // free spins stamp that bundle on their spin records.
+    expect(sessionFsBundle(sessionId)).toBe("zeus-unified-cascade-v1");
     const modes = await drainFreeSpins(caller, sessionId, trig);
     expect(modes.length).toBe(expected);
     expect(modes.every((m) => m === "cascade")).toBe(true);
+    const fsSpin = getSqliteClient()
+      .prepare("SELECT bundle_id FROM spins WHERE session_id = ? AND is_free_spin = 1 ORDER BY id LIMIT 1")
+      .get(sessionId) as any;
+    expect(fsSpin.bundle_id).toBe("zeus-unified-cascade-v1");
     // Round over: the stored mode resets for the next base session.
     expect(sessionFsMode(sessionId)).toBe("classic");
+    expect(sessionFsBundle(sessionId)).toBeNull();
+    settingsLib.setSetting("unified_game", false, null);
+  }, 180000);
+
+  it("unified_fs_awards override: the certified table replaces the bundle table", async () => {
+    settingsLib.setSetting("unified_game", true, null);
+    settingsLib.setSetting("unified_fs_awards", { "3": 7, "4": 9, "5": 11 }, null);
+    const { caller, sessionId } = await makePlayer("100000");
+    const trig = await huntClassicTrigger(caller, sessionId);
+    const sc = scatterCount(trig);
+    const expected = ({ 3: 7, 4: 9, 5: 11 } as Record<number, number>)[Math.min(sc, 5)];
+    expect(trig.freeSpinsAwarded).toBe(expected);
+    expect(trig.freeSpinsMode).toBe("cascade");
+    expect(sessionFsMode(sessionId)).toBe("cascade");
+    const modes = await drainFreeSpins(caller, sessionId, trig);
+    expect(modes.length).toBe(expected);
+    settingsLib.setSetting("unified_fs_awards", {}, null);
     settingsLib.setSetting("unified_game", false, null);
   }, 180000);
 });

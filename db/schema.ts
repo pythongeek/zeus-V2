@@ -94,6 +94,9 @@ export const gameSessions = sqliteTable("game_sessions", {
   // award time); awards during free spins add to the remaining count.
   freeSpinsRemaining: integer("free_spins_remaining", { mode: "number" }).default(0).notNull(),
   freeSpinsMode: text("free_spins_mode").default("classic"),
+  // U4 Option B: the cascade bundle a converted (unified) round
+  // resolves through; null means the mode's active bundle.
+  freeSpinsBundle: text("free_spins_bundle"),
   freeSpinsRung: integer("free_spins_rung").default(0),
   freeSpinsBet: text("free_spins_bet"),
   freeSpinsCurrency: text("free_spins_currency"),
@@ -247,6 +250,8 @@ export const bankedFreeSpins = sqliteTable("banked_free_spins", {
   currency: text("currency").notNull(),
   mode: text("mode").notNull().default("classic"),
   ladderRung: integer("ladder_rung").notNull().default(0),
+  // U4 Option B: the pinned cascade bundle, carried with the bank.
+  bundle: text("bundle"),
   createdAt: integer("created_at").default(sql`(unixepoch())`),
 });
 

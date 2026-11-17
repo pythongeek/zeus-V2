@@ -2010,11 +2010,15 @@ export default function Game() {
                     <div className="text-sm font-semibold text-white">{t(`sym_${item.name}` as any)}</div>
                     {item.isWild && <div className="text-xs text-[#4FC3F7]">{t("specialWild")}</div>}
                     {item.isScatter && <div className="text-xs text-[#4FC3F7]">{t("specialScatter")}</div>}
-                    {item.isScatter && paytableQuery.data?.freeSpins && (
+                    {item.isScatter && paytableQuery.data?.unified?.awards ? (
+                      <div className="text-xs text-[#00E676]">
+                        {t("scatterAwardsUnified", { a: (paytableQuery.data.unified.awards as any)["3"], b: (paytableQuery.data.unified.awards as any)["4"], c: (paytableQuery.data.unified.awards as any)["5"] })}
+                      </div>
+                    ) : item.isScatter && paytableQuery.data?.freeSpins ? (
                       <div className="text-xs text-[#00E676]">
                         {t("scatterAwards", { a: (paytableQuery.data.freeSpins as any)["3"], b: (paytableQuery.data.freeSpins as any)["4"], c: (paytableQuery.data.freeSpins as any)["5"] })}
                       </div>
-                    )}
+                    ) : null}
                     {item.payouts && (
                       <div className="flex gap-3 mt-1">
                         <span className="text-xs text-[#5E5E6E]">3x: <span className="text-[#D4AF37]">{item.payouts["3"]}x</span></span>

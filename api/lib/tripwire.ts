@@ -221,13 +221,24 @@ export function evaluateMode(
   };
 
   for (;;) {
-    const batch = sqlite
-      .prepare(
-        `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
-         WHERE mode_id = ? AND id > ?
-         ORDER BY id ASC LIMIT ?`,
-      )
-      .all(modeId, state.last_spin_id, params.batchSize) as Array<{
+    // U4: the unified stream reads BOTH modes' rows as one river:
+    // a classic paid spin opens a process and the cascade free
+    // spins it converted into close it, by session.
+    const batch = (modeId === "unified"
+      ? sqlite
+          .prepare(
+            `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
+             WHERE mode_id IN ('classic', 'cascade') AND id > ?
+             ORDER BY id ASC LIMIT ?`,
+          )
+          .all(state.last_spin_id, params.batchSize)
+      : sqlite
+          .prepare(
+            `SELECT id, session_id, bet_amount, win_amount, bundle_sha256, is_free_spin FROM spins
+             WHERE mode_id = ? AND id > ?
+             ORDER BY id ASC LIMIT ?`,
+          )
+          .all(modeId, state.last_spin_id, params.batchSize)) as Array<{
       id: number;
       session_id: number;
       bet_amount: string;
@@ -242,7 +253,7 @@ export function evaluateMode(
         if (owner === undefined) {
           hashEvents++;
           if (firstBadHashSpin === null) firstBadHashSpin = s.id;
-        } else if (owner !== modeId) {
+        } else if (owner !== modeId && modeId !== "unified") {
           hashEvents++;
           if (firstMismatchSpin === null) firstMismatchSpin = s.id;
         }
@@ -311,7 +322,7 @@ export function evaluateMode(
     recordEvent(sqlite, modeId, 1, "layer1_breach", { mean, mu0, band, windowSpins }, state.last_spin_id);
     if (actions) {
       raiseAlert(sqlite, modeId, 1, "critical", `Tripwire LAYER 1 BREACH on ${modeId}: RTP ${(mean! * 100).toFixed(2)}% vs ${(mu0 * 100).toFixed(2)}%`, { mean, mu0, band, windowSpins });
-      if (modeId === "classic") {
+      if (modeId === "classic" || modeId === "unified") {
         if (!getSetting<boolean>("maintenance_mode")) setSetting("maintenance_mode", true, null);
       } else {
         sqlite.prepare("UPDATE math_bundles SET status = 'parked' WHERE mode_id = ? AND status = 'active'").run(modeId);
@@ -344,6 +355,22 @@ export function evaluateAllModes(
   actions = true,
 ): ModeReport[] {
   if (getSetting<boolean>("tripwire_enabled") === false) return [];
+  // U4: while the unified game is live, the merged process is
+  // the only honest observation unit. The per-mode streams
+  // freeze: their cursors jump to the newest spin so a later
+  // flip-back resumes cleanly instead of reassembling
+  // unified-era rows into nonsense processes.
+  if (getSetting<boolean>("unified_game") === true) {
+    const maxId = (sqlite.prepare("SELECT MAX(id) AS m FROM spins").get() as { m: number | null }).m ?? 0;
+    for (const m of ["classic", "cascade"]) {
+      const st = loadState(sqlite, m);
+      if (st.last_spin_id < maxId) {
+        st.last_spin_id = maxId;
+        saveState(sqlite, st);
+      }
+    }
+    return [evaluateMode(sqlite, "unified", params, actions)];
+  }
   const modes = new Set<string>(["classic"]);
   for (const r of sqlite.prepare("SELECT DISTINCT mode_id FROM spins").all() as Array<{ mode_id: string }>) modes.add(r.mode_id);
   for (const r of sqlite.prepare("SELECT DISTINCT mode_id FROM math_bundles").all() as Array<{ mode_id: string }>) modes.add(r.mode_id);
