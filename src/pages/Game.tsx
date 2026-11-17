@@ -426,6 +426,10 @@ export default function Game() {
   // U4: Lite-board stop progress — reels below this count show finals
   const [liteStopped, setLiteStopped] = useState(5);
   const fsWinTotalRef = useRef(0);
+  // U1: reactive mirror of the free-spin round total for the HUD chip,
+  // and the auto-spin total the countdown progress is measured against.
+  const [fsRoundWon, setFsRoundWon] = useState(0);
+  const autoSpinTotalRef = useRef(0);
   // In-flight startSession promise — see handleStartSession.
   const sessionStartRef = useRef<Promise<any> | null>(null);
   // Step 6: cascade playback state.
@@ -1152,8 +1156,8 @@ export default function Game() {
               : result.freeSpinsAwarded,
           );
         }
-        if (result.isFreeSpin) fsWinTotalRef.current += winAmount;
-        if (result.freeSpinsAwarded > 0 && !result.isFreeSpin) fsWinTotalRef.current = 0;
+        if (result.isFreeSpin) { fsWinTotalRef.current += winAmount; setFsRoundWon(fsWinTotalRef.current); }
+        if (result.freeSpinsAwarded > 0 && !result.isFreeSpin) { fsWinTotalRef.current = 0; setFsRoundWon(0); }
         if (result.freeSpinsRemaining === 0) {
           store.setFreeSpinsTotal(0);
           // D2: free-spin outro theatre — celebrate the session total.
@@ -1166,6 +1170,7 @@ export default function Game() {
             setDisplayedWin(fsWinTotalRef.current);
             setShowBigWin(true);
             fsWinTotalRef.current = 0;
+            setFsRoundWon(0);
           }
         }
       }
@@ -1520,6 +1525,38 @@ export default function Game() {
           </div>
         ) : null}
 
+        {/* U1 HUD counters: auto-spin countdown + free-spin countdown.
+            Pure display of store state the game already owns; the
+            row renders nothing when neither is active. */}
+        {(store.isAutoSpinning || store.freeSpinsRemaining > 0) && (
+          <div className="flex items-center justify-center gap-2 flex-wrap mb-2">
+            {store.isAutoSpinning && (
+              <div className="flex items-center gap-2 rounded-full border border-[#4FC3F7]/60 bg-[#4FC3F7]/10 px-3 py-1">
+                <span className="text-[11px] sm:text-xs font-bold tracking-wider text-[#4FC3F7]">
+                  {t("autoSpinsLeft", { n: store.autoSpinCount })}
+                </span>
+                <span className="w-14 sm:w-20 h-1.5 rounded-full bg-white/10 overflow-hidden inline-block">
+                  <span
+                    className="block h-full bg-[#4FC3F7] transition-all duration-500"
+                    style={{ width: `${autoSpinTotalRef.current > 0 ? Math.max(0, Math.min(100, (store.autoSpinCount / autoSpinTotalRef.current) * 100)) : 0}%` }}
+                  />
+                </span>
+              </div>
+            )}
+            {store.freeSpinsRemaining > 0 && (
+              <div className="flex items-center gap-2 rounded-full border border-[#D4AF37]/70 bg-[#D4AF37]/10 px-3 py-1">
+                <span className="text-[11px] sm:text-xs font-extrabold tracking-wider text-[#F4D03F]">
+                  {t("freeSpinsLeft", { n: store.freeSpinsRemaining })}
+                  {store.freeSpinsTotal > store.freeSpinsRemaining ? ` / ${store.freeSpinsTotal}` : ""}
+                </span>
+                <span className="text-[11px] sm:text-xs font-bold text-white">
+                  {t("bonusWon", { amount: `${CURRENCY_SYMBOLS[store.activeCurrency] ?? ""}${fsRoundWon.toFixed(2)}` })}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Slot Machine Frame. Mobile one-view budget (owner,
             2026-10-31 evening): on phones the frame's width is
             capped by the viewport HEIGHT so the full figure, the
@@ -1762,8 +1799,13 @@ export default function Game() {
                   }`}
                   draggable={false}
                 />
+                {store.isAutoSpinning && (
+                  <span className="absolute -top-1 -right-1 min-w-7 h-7 px-1.5 rounded-full bg-[#4FC3F7] text-black text-sm font-extrabold flex items-center justify-center border-2 border-[#0A0A0F] shadow-[0_0_10px_rgba(79,195,247,0.7)]">
+                    {store.autoSpinCount}
+                  </span>
+                )}
               </button>
-              <span className="text-[10px] font-bold tracking-[0.3em] text-[#D4AF37]">{t("spinAlt")}</span>
+              <span className="text-[10px] font-bold tracking-[0.3em] text-[#D4AF37]">{store.isAutoSpinning ? t("autoSpinsLeft", { n: store.autoSpinCount }) : t("spinAlt")}</span>
             </div>
 
             {/* Auto Spin */}
@@ -1774,6 +1816,7 @@ export default function Game() {
                 onChange={(e) => {
                   const count = parseInt(e.target.value);
                   store.setAutoSpinCount(count);
+                  autoSpinTotalRef.current = count;
                   store.setIsAutoSpinning(count > 0);
                   if (count === 0) {
                     // FW: turning autoplay off must also cancel the queued
