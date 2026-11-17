@@ -52,6 +52,16 @@ const SYMBOL_NAMES: Record<number, string> = {
   8: "ace", 9: "king", 10: "queen",
 };
 
+// U5-B: the cascade wild's id and display name. It is NOT part of
+// SYMBOL_NAMES: that map is the classic symbol set, and bundle
+// validation (classicCfgFromBundle) requires a paytable entry for
+// every name in it. Cascade grids name their cells through
+// symbolName() below instead.
+export const CASCADE_WILD_ID = 11;
+export function symbolName(id: number): string {
+  return SYMBOL_NAMES[id] ?? (id === CASCADE_WILD_ID ? "wild" : String(id));
+}
+
 // A4/A5 (audit 2026-11-04): the legacy hardcoded PAYOUTS / REEL_STRIPS /
 // DEFAULT_FREE_SPINS constants are GONE. The engine's only math sources
 // are (a) the active certified bundle and (b) the settings mirror that
@@ -246,7 +256,7 @@ function bankSessionFreeSpins(client: any, session: any): number {
   if (!remaining || remaining <= 0) return 0;
   client
     .prepare(
-      "INSERT INTO banked_free_spins (user_id, spins, bet_amount, currency, mode, ladder_rung, created_at, bundle) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO banked_free_spins (user_id, spins, bet_amount, currency, mode, ladder_rung, created_at, bundle, wild_live) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .run(
       session.user_id,
@@ -257,6 +267,7 @@ function bankSessionFreeSpins(client: any, session: any): number {
       (session.free_spins_rung as number) ?? 0,
       Math.floor(Date.now() / 1000),
       (session.free_spins_bundle as string) ?? null,
+      (session.free_spins_wild as number) ?? null,
     );
   client
     .prepare("UPDATE game_sessions SET free_spins_remaining = 0 WHERE id = ?")
@@ -365,6 +376,7 @@ export const gameRouter = createRouter({
               freeSpinsMode: banked.mode,
               freeSpinsRung: banked.ladder_rung,
               freeSpinsBundle: banked.bundle ?? null,
+              freeSpinsWild: banked.wild_live ?? null,
             })
             .where(eq(gameSessions.id, session.id));
           freeSpinsGranted = banked.spins;
@@ -620,6 +632,9 @@ export const gameRouter = createRouter({
         // dark, the classic award stands unchanged.
         let fsModeStored: string | null = null;
         let fsBundleStored: string | null = null;
+        // U5-B: the converted round's wild gate (undefined = this
+        // spin does not roll one; null = rolled and not applicable).
+        let fsWildStored: number | null | undefined = undefined;
         if (!isFreeSpin && freeSpinsAwarded > 0 && getSetting<boolean>("unified_game") === true) {
           const unifiedBundleRow = getActiveBundle(client, "cascade-unified");
           const bundleRowU = unifiedBundleRow ?? getActiveBundle(client, "cascade");
@@ -633,6 +648,20 @@ export const gameRouter = createRouter({
               // its free spins resolve through the gentler math,
               // never the standalone mode's certified bundle.
               fsBundleStored = unifiedBundleRow ? unifiedBundleRow.bundle_id : null;
+              // U5-B: when the pinned bundle carries a gated wild,
+              // roll the round's gate ONCE from this trigger spin's
+              // own hash (hex chars 44..51, a range no other feature
+              // reads: stops 0..19, thunder 20..23, jackpot 24..29,
+              // transforms 30..43). Exact integer comparison, and
+              // the roll is stamped on this spin's row, so anyone
+              // with the revealed seeds can recompute it (the same
+              // provably-fair pattern as Thunder Strike).
+              const mathU = (JSON.parse(bundleRowU.bundle) as any).math;
+              if (mathU && typeof mathU.wildId === "number" && Array.isArray(mathU.wildGate)) {
+                const [gNum, gDen] = mathU.wildGate as [number, number];
+                const gateVal = parseInt(hash.substring(44, 52), 16);
+                fsWildStored = gateVal * gDen < gNum * 4294967296 ? 1 : 0;
+              }
             }
           }
         }
@@ -766,7 +795,7 @@ export const gameRouter = createRouter({
           newNonce, reelStops, symbols, hash, lines, winMicro, isBigWin,
           isJackpot, featureTriggered, jackpotTier, jackpotAwardMicro,
           freeSpinsAwarded, fsRemainingAfter, fsBetStored, fsCurrencyStored,
-          fsModeStored, fsBundleStored,
+          fsModeStored, fsBundleStored, fsWildStored,
           poolRows, poolMicroByTier, math, features, cascade: null, cascadeBundleRow: null,
           baseSymbols, thunderTransforms,
           fsRungStored: 0, ladderRungStart: null,
@@ -788,6 +817,13 @@ export const gameRouter = createRouter({
             throw new Error("Cascade mode is not available yet");
           }
           const cmath = (JSON.parse(bundleRowC.bundle) as any).math as CascadeMath;
+          // U5-B: the round's wild gate, stored on the session at
+          // the trigger (or restored from the bank). Only a pinned
+          // bundle whose math carries a wild reacts to it.
+          const wildLiveC =
+            isFreeSpin &&
+            typeof cmath.wildId === "number" &&
+            Number((session as any).free_spins_wild ?? 0) === 1;
           const newNonce = session.nonce + 1;
           const hash = crypto
             .createHash("sha256")
@@ -800,6 +836,7 @@ export const gameRouter = createRouter({
             betMicro: spinBetMicro,
             isFreeSpin,
             rungIn,
+            wildLive: wildLiveC,
           });
           const winMicro = res.cappedWinMicro;
           const freeSpinsAwarded = res.freeSpinsAwarded;
@@ -866,6 +903,10 @@ export const gameRouter = createRouter({
               }
               return Math.max(0, ...counts.values()) === 7 ? 1 : 0;
             })(),
+            wildLiveStamp:
+              isFreeSpin && typeof cmath.wildId === "number"
+                ? Number((session as any).free_spins_wild ?? 0)
+                : null,
             cascade: {
               steps: res.steps,
               finalGrid: res.finalGrid,
@@ -895,6 +936,16 @@ export const gameRouter = createRouter({
             : isFreeSpin
               ? (((session as any).free_spins_bundle as string | null) ?? null)
               : null;
+        const fsWildForStore =
+          (outcome as any).fsWildStored !== undefined
+            ? ((outcome as any).fsWildStored as number | null)
+            : isFreeSpin
+              ? (((session as any).free_spins_wild as number | null) ?? null)
+              : null;
+        const wildLiveStamp =
+          (outcome as any).wildLiveStamp !== undefined
+            ? ((outcome as any).wildLiveStamp as number | null)
+            : ((outcome as any).fsWildStored as number | null | undefined) ?? null;
         const fsRungStored = (outcome as any).fsRungStored ?? 0;
         const ladderRungStart = (outcome as any).ladderRungStart ?? null;
         const nearMissFlag = (outcome as any).nearMiss ?? 0;
@@ -929,7 +980,7 @@ export const gameRouter = createRouter({
 
         client
           .prepare(
-            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ?, free_spins_rung = ?, free_spins_bundle = ? WHERE id = ?",
+            "UPDATE game_sessions SET nonce = ?, total_spins = ?, total_wagered = ?, total_won = ?, free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = ?, free_spins_rung = ?, free_spins_bundle = ?, free_spins_wild = ? WHERE id = ?",
           )
           .run(
             newNonce,
@@ -945,6 +996,7 @@ export const gameRouter = createRouter({
             fsRemainingAfter > 0 ? (fsModeForStore ?? effectiveMode) : "classic",
             fsRungStored,
             fsRemainingAfter > 0 ? fsBundleForStore : null,
+            fsRemainingAfter > 0 ? fsWildForStore : null,
             session.id,
           );
 
@@ -959,8 +1011,8 @@ export const gameRouter = createRouter({
 
         const spinRow = client
           .prepare(
-            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, client_seed, hash_version, base_symbols, thunder, is_free_spin, mode_id, bundle_id, bundle_sha256, ladder_rung, near_miss)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+            `INSERT INTO spins (session_id, user_id, nonce, bet_amount, currency, reel_positions, symbols_shown, win_amount, win_lines, is_big_win, is_jackpot, feature_triggered, free_spins_awarded, hash, client_seed, hash_version, base_symbols, thunder, is_free_spin, mode_id, bundle_id, bundle_sha256, ladder_rung, near_miss, wild_live)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
           )
           .get(
             session.id,
@@ -969,7 +1021,7 @@ export const gameRouter = createRouter({
             fmtMoney(spinBetMicro),
             spinCurrency,
             JSON.stringify(reelStops),
-            JSON.stringify(symbols.map((col: number[]) => col.map((s: number) => SYMBOL_NAMES[s]))),
+            JSON.stringify(symbols.map((col: number[]) => col.map((s: number) => symbolName(s)))),
             fmtMoney(winMicro),
             JSON.stringify(lines),
             isBigWin ? 1 : 0,
@@ -989,6 +1041,7 @@ export const gameRouter = createRouter({
             bundleRow.sha256,
             ladderRungStart,
             nearMissFlag,
+            wildLiveStamp,
           ) as any;
         const spinId = spinRow.id as number;
         if (input.requestId) {
@@ -1175,6 +1228,7 @@ export const gameRouter = createRouter({
           isFreeSpin,
           fsRemainingAfter,
           fsModeStored: fsModeForStore,
+          wildLive: wildLiveStamp,
           spinBetMicro,
           spinCurrency,
           mode: effectiveMode,
@@ -1222,7 +1276,7 @@ export const gameRouter = createRouter({
         spinId: out.spinId,
         nonce: out.newNonce,
         reelPositions: out.reelStops,
-        symbols: out.symbols.map((col: number[]) => col.map((s: number) => SYMBOL_NAMES[s])),
+        symbols: out.symbols.map((col: number[]) => col.map((s: number) => symbolName(s))),
         winAmount: fmtMoney(out.winMicro),
         winLines: out.lines,
         isBigWin: out.isBigWin,
@@ -1240,6 +1294,8 @@ export const gameRouter = createRouter({
         nearMiss: (out as any).nearMiss ?? false,
         freeSpinsRemaining: out.fsRemainingAfter,
         freeSpinsMode: out.fsRemainingAfter > 0 ? ((out as any).fsModeStored ?? (out as any).mode ?? "classic") : null,
+        // U5-B: the round's wild gate (1 = wild live this round).
+        wildLive: (out as any).wildLive ?? null,
         betUsed: fmtMoney(out.spinBetMicro),
         currencyUsed: out.spinCurrency,
       };
@@ -1392,7 +1448,7 @@ export const gameRouter = createRouter({
           .run(ctx.user.id, input.currency, fmtMoney(-priceMicro), fmtMoney(newAvailable));
         client
           .prepare(
-            "UPDATE game_sessions SET free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = 'cascade', free_spins_rung = 0, free_spins_bundle = NULL WHERE id = ?",
+            "UPDATE game_sessions SET free_spins_remaining = ?, free_spins_bet = ?, free_spins_currency = ?, free_spins_mode = 'cascade', free_spins_rung = 0, free_spins_bundle = NULL, free_spins_wild = NULL WHERE id = ?",
           )
           .run(fsAward, fmtMoney(betMicro), input.currency, session.id);
         return { txId: Number(txInfo.lastInsertRowid) };

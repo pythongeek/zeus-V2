@@ -46,7 +46,7 @@ export const fairnessRouter = createRouter({
         const { getBundleByHash, canonicalStringify } = await import("../lib/bundles");
         const { resolveCascade, makeCascadeDraw } = await import("../lib/cascade");
         const { parseMoney, fmtMoney } = await import("../lib/money");
-        const { SYMBOL_NAMES } = await import("./game");
+        const { symbolName } = await import("./game");
         const revealedC = session.status === "completed";
         const bundle = (spin as any).bundleSha256
           ? getBundleByHash(getSqliteClient(), (spin as any).bundleSha256)
@@ -67,6 +67,8 @@ export const fairnessRouter = createRouter({
           betMicro: parseMoney(spin.betAmount as string),
           isFreeSpin: !!(spin as any).isFreeSpin,
           rungIn: (spin as any).isFreeSpin ? Number((spin as any).ladderRung ?? 0) : 0,
+          // U5-B: replay under the round's stamped wild gate.
+          wildLive: Number((spin as any).wildLive ?? 0) === 1,
         });
         const storedSteps = typeof (spin as any).winLines === "string"
           ? JSON.parse((spin as any).winLines)
@@ -79,7 +81,7 @@ export const fairnessRouter = createRouter({
         const winMatch = fmtMoney(res.cappedWinMicro) === spin.winAmount;
         const stepsMatch = canonicalStringify(storedSteps) === canonicalStringify(res.steps);
         const symbolsMatch =
-          JSON.stringify(columns.map((col) => col.map((s: number) => SYMBOL_NAMES[s]))) ===
+          JSON.stringify(columns.map((col) => col.map((s: number) => symbolName(s)))) ===
           JSON.stringify(storedSymbolsC);
         const hashC = crypto
           .createHash("sha256")

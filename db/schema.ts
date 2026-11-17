@@ -97,6 +97,9 @@ export const gameSessions = sqliteTable("game_sessions", {
   // U4 Option B: the cascade bundle a converted (unified) round
   // resolves through; null means the mode's active bundle.
   freeSpinsBundle: text("free_spins_bundle"),
+  // U5-B: the gated cascade wild state of the current round
+  // (null = no gated round, 0 = gate missed, 1 = wild live).
+  freeSpinsWild: integer("free_spins_wild"),
   freeSpinsRung: integer("free_spins_rung").default(0),
   freeSpinsBet: text("free_spins_bet"),
   freeSpinsCurrency: text("free_spins_currency"),
@@ -136,6 +139,9 @@ export const spins = sqliteTable("spins", {
   modeId: text("mode_id").default("classic").notNull(),
   bundleId: text("bundle_id"),
   bundleSha256: text("bundle_sha256"),
+  // U5-B: the round's wild gate as rolled/stamped for this spin
+  // (trigger spin: the roll; free spins: the round's state).
+  wildLive: integer("wild_live"),
   ladderRung: integer("ladder_rung"),
   nearMiss: integer("near_miss").default(0),
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(CURRENT_TIMESTAMP)`).notNull(),
@@ -252,6 +258,8 @@ export const bankedFreeSpins = sqliteTable("banked_free_spins", {
   ladderRung: integer("ladder_rung").notNull().default(0),
   // U4 Option B: the pinned cascade bundle, carried with the bank.
   bundle: text("bundle"),
+  // U5-B: the round's wild gate, carried with the bank.
+  wildLive: integer("wild_live"),
   createdAt: integer("created_at").default(sql`(unixepoch())`),
 });
 

@@ -61,6 +61,12 @@ export interface CascadeMath {
   scatterThreshold?: number;
   fsRetrigger: number;
   capX: number;
+  /** U5-B gated wild (unified cascade bundles only): symbol id of
+   * the wild, its per-column draw weight, and the round gate as an
+   * exact [numerator, denominator] fraction. Absent = no wild. */
+  wildId?: number;
+  wildWeight?: number;
+  wildGate?: [number, number];
 }
 
 export interface CascadeCluster {
@@ -98,14 +104,17 @@ export function bracketIndex(count: number): number {
   return 0;
 }
 
-export function pickSymbol(r: number, math: CascadeMath, col: number): number {
+export function pickSymbol(r: number, math: CascadeMath, col: number, wildLive = false): number {
   const ids = [...math.symbols, math.scatterId];
+  const wildActive = wildLive && typeof math.wildId === "number" && (math.wildWeight ?? 0) > 0;
+  if (wildActive) ids.push(math.wildId as number);
   const strip = math.weights[col] ?? math.weights[0];
+  const weightOf = (id: number) => (id === math.wildId ? (math.wildWeight ?? 0) : (strip[String(id)] ?? 0));
   let total = 0;
-  for (const id of ids) total += strip[String(id)] ?? 0;
+  for (const id of ids) total += weightOf(id);
   let x = r * total;
   for (const id of ids) {
-    x -= strip[String(id)] ?? 0;
+    x -= weightOf(id);
     if (x < 0) return id;
   }
   return ids[ids.length - 1];
@@ -118,10 +127,15 @@ export function resolveCascade(args: {
   isFreeSpin: boolean;
   /** Ladder rung the resolution starts at (free-spin rounds only). */
   rungIn?: number;
+  /** U5-B: the round's wild gate. Only bundles whose math carries
+   * a wildId react to it; with it off, resolution is byte-identical
+   * to the pre-wild engine (same draws, same grids). */
+  wildLive?: boolean;
 }): CascadeResult {
   const { draw, math, betMicro } = args;
+  const wildLive = args.wildLive === true && typeof math.wildId === "number";
   let slot = 0;
-  const nextSymbol = (col: number) => pickSymbol(draw(slot++), math, col);
+  const nextSymbol = (col: number) => pickSymbol(draw(slot++), math, col, wildLive);
 
   // Initial grid, column-major.
   let grid: number[] = [];
@@ -138,16 +152,45 @@ export function resolveCascade(args: {
   for (;;) {
     // Count clusters.
     const counts = new Map<number, number[]>();
+    const wildPositions: number[] = [];
     grid.forEach((sym, idx) => {
       if (sym === math.scatterId) return;
+      if (wildLive && sym === math.wildId) {
+        wildPositions.push(idx);
+        return;
+      }
       const arr = counts.get(sym) ?? [];
       arr.push(idx);
       counts.set(sym, arr);
     });
+    // U5-B: the wilds join the ONE symbol whose pay grows most from
+    // them (ties resolve to the lowest symbol id, so the choice is
+    // a deterministic function of the grid alone). That symbol's
+    // cluster is its own cells plus every wild cell, paid at the
+    // bracket of the combined count; the wild cells explode with
+    // it. Every other symbol must reach the cluster minimum
+    // unaided. With no wilds on the grid this reduces exactly to
+    // the pre-wild counting below.
+    let wildHome = -1;
+    if (wildPositions.length > 0) {
+      let bestGain = 0;
+      for (const sym of [...counts.keys()].sort((a, b) => a - b)) {
+        const own = counts.get(sym)?.length ?? 0;
+        const eff = own + wildPositions.length;
+        if (eff < CLUSTER_MIN) continue;
+        const payEff = math.paytable[String(sym)]?.[bracketIndex(eff)] ?? 0;
+        const payOwn = own >= CLUSTER_MIN ? (math.paytable[String(sym)]?.[bracketIndex(own)] ?? 0) : 0;
+        if (payEff - payOwn > bestGain) {
+          bestGain = payEff - payOwn;
+          wildHome = sym;
+        }
+      }
+    }
     const clusters: CascadeCluster[] = [];
     let stepWin = 0n;
     const multiplier = math.ladder[Math.min(rung, math.ladder.length - 1)];
-    for (const [sym, positions] of counts) {
+    for (const [sym, positions0] of counts) {
+      const positions = sym === wildHome ? [...positions0, ...wildPositions] : positions0;
       if (positions.length < CLUSTER_MIN) continue;
       const pay = math.paytable[String(sym)]?.[bracketIndex(positions.length)] ?? 0;
       if (pay <= 0) continue;
