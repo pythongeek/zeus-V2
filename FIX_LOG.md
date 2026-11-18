@@ -16,6 +16,22 @@ Worked this batch (#1 + #2 of the RTP action plan):
   - Tests: `rtplab.test.ts` — 4 tests (bundle separation, FS round accounting, exact band math incl. zero-variance clamp, days/jackpots).
 - Production smoke (post-deploy): health ok; paytable serves the certified bundle (zeus 45/175/730, RTP 96.04, FS 5/8/12); real spin id 724 settled and stamped `zeus-classic-v2` + sha256; `admin.getRtpReport` → 401 unauthenticated; journal clean; zero JS errors in the browser session.
 
+## Batch 2026-11-19 — mobile one-screen UX + Bangla↔BDT coupling [E-mobile]
+**FIXED+VERIFIED (deployed to production, no API change, frontend-only)**
+- Measured before: Spin below the fold at 360×740 (293px scroll), 731×900 (377px scroll).
+- <1024px: Zeus stage + mode-banner hidden, board frame capped
+  min(100%, 560px, (100dvh − 24/24.5rem)·ratio), lounge extras collapse
+  behind one summary row (details, breakpoint-keyed, desktop keeps all expanded).
+- LanguageToggle onSwitch: বাংলা → Bangla UI + BDT; EN → English UI + USDT.
+- Verified live on production (real user session, 390×844): Spin always
+  in-view, scroll need 75–82px (only the collapsed extras row), toggle
+  coupling both directions, board renders, no console errors.
+- Suite at deploy: 50 files / 220 tests passed.
+- Note: the repo had advanced ~3 weeks (U1–U5 unified-game work by another
+  session). An exploratory merge of the stale audit branch was reverted
+  (git reset to U5-B4); these UX changes were re-applied cleanly on top of
+  U5-B4. Commit this one.
+
 ## Pending (everything else from the assessment — not started this batch)
 | ID | Status |
 |---|---|

@@ -15,6 +15,7 @@ interface WinStageData {
   bdtText: (n: number) => string;
 }
 import { LiveTicker } from "@/components/LiveTicker";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { RedEnvelope } from "@/components/RedEnvelope";
 import { ReloadOffers } from "@/components/ReloadOffers";
 import { VipWheel } from "@/components/VipWheel";
@@ -482,6 +483,9 @@ export default function Game() {
   const [strikeKey, setStrikeKey] = useState(0);
   const [boardShake, setBoardShake] = useState(false);
   const [recentSpins, setRecentSpins] = useState<Array<{ id: number; winAmount: string; betAmount: string; currency: string; isWin: boolean; createdAt: Date }>>([]);
+  // A-UX (2026-11-19): compact screens collapse the lounge extras so
+  // board + controls fit the viewport with no scrolling to reach SPIN.
+  const compactChrome = useIsMobile();
   const autoSpinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // FW/autoplay lifecycle: once a spin has been queued, a manual SPIN or a
   // second timer must not start another request; and an unmount/hidden tab
@@ -1485,7 +1489,10 @@ export default function Game() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <LanguageToggle className="border-[#2A2A35] bg-[#1A1A25] text-[#D4AF37] hover:bg-[#D4AF37]/10" />
+          <LanguageToggle
+          className="border-[#2A2A35] bg-[#1A1A25] text-[#D4AF37] hover:bg-[#D4AF37]/10"
+          onSwitch={(l) => store.setActiveCurrency(l === "bn" ? "BDT" : "USDT")}
+        />
           {/* Currency selector */}
           <select
             value={store.activeCurrency}
@@ -1593,7 +1600,7 @@ export default function Game() {
             with a permanent aura so he reads as the stage's host.
             On very short viewports (landscape phones) the strip
             hides so the board and SPIN keep the screen. */}
-        <div className="relative z-30 w-full max-w-[900px] h-[60px] sm:h-[128px] [@media(max-height:560px)]:hidden">
+        <div className="relative z-30 w-full max-w-[900px] h-[60px] sm:h-[128px] max-lg:hidden [@media(max-height:560px)]:hidden">
           <ZeusFigure
             mood={zeusMood}
             strikeKey={strikeKey}
@@ -1606,7 +1613,7 @@ export default function Game() {
         {(store.config as any)?.cascade_enabled ? (
           <div className="w-full max-w-[520px] mx-auto mb-1.5 sm:mb-3 space-y-1.5 sm:space-y-2">
             {unifiedOn ? (
-              <p className="text-[11px] sm:text-xs leading-snug text-center text-[#F4D03F] px-1">{t("unifiedBonusNote")}</p>
+              <p className="text-[11px] sm:text-xs leading-snug text-center text-[#F4D03F] px-1 max-lg:hidden">{t("unifiedBonusNote")}</p>
             ) : (
             <>
             <div className="flex rounded-full overflow-hidden border border-[#D4AF37]/40">
@@ -1692,7 +1699,7 @@ export default function Game() {
             header, jackpots, stage strip, mode selector, result
             line and control panel as tightened in this pass.
             Desktop widths are untouched. */}
-        <div key={store.mode} className={`relative animate-bounce-in bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-sm:max-w-[min(100%,calc((100dvh-36rem)*1.2))]" : "max-sm:max-w-[min(100%,calc((100dvh-32.5rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
+        <div key={store.mode} className={`relative animate-bounce-in bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-lg:max-w-[min(100%,560px,calc((100dvh-24.5rem)*1.2))]" : "max-lg:max-w-[min(100%,560px,calc((100dvh-24rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
           {/* Greek key pattern border */}
           <div className="absolute inset-0 rounded-2xl border border-[#996E20]/40 pointer-events-none" />
           {/* Corner bolts */}
@@ -2022,7 +2029,20 @@ export default function Game() {
         </div>
       )}
 
-      {/* Recent Spins */}
+      {/* A-UX (2026-11-19): compact screens collapse the lounge extras
+          behind one summary row — the playable screen (board + controls)
+          fits the viewport with zero scrolling to reach SPIN. Desktop
+          (lg+) keeps everything expanded as before. */}
+      <details
+        key={compactChrome ? "compact" : "full"}
+        open={!compactChrome}
+        className="group max-w-[900px] w-full mt-4 more-extras"
+      >
+        <summary className="max-lg:cursor-pointer max-lg:list-none max-lg:flex max-lg:items-center max-lg:justify-center max-lg:gap-2 max-lg:py-2 max-lg:rounded-xl max-lg:bg-[#12121A]/80 max-lg:border max-lg:border-[#2A2A35] max-lg:text-xs max-lg:text-[#9E9EAC] select-none">
+          <span>🎁 {t("moreExtras")}</span>
+          <span className="hidden max-lg:inline-block transition-transform group-open:rotate-180">▾</span>
+        </summary>
+        <div className="max-lg:mt-2 space-y-3">
         {recentSpins.length > 0 && (
           <div className="mt-4 bg-[#12121A]/80 border border-[#2A2A35] rounded-xl p-3 max-w-[900px] w-full">
             <div className="flex items-center gap-2 mb-2">
@@ -2048,11 +2068,13 @@ export default function Game() {
 
         {/* Lounge cards below the stage — the play area stays clean
             (ticker / VIP / referral live here now, 2026-10-30). */}
-        <div className="w-full max-w-[900px] mt-4 space-y-3">
+        <div className="w-full max-w-[900px] space-y-3">
           <LiveTicker />
           <VipWheel />
           <ReferralCard />
         </div>
+        </div>
+      </details>
       </div>
 
       {/* Paytable Dialog */}

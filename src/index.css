@@ -568,3 +568,6 @@
   }
   .bolt-strike-path { animation: none; opacity: 0; }
 }
+
+details.more-extras > summary { list-style: none; }
+details.more-extras > summary::-webkit-details-marker { display: none; }

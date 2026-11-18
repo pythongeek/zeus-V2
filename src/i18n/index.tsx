@@ -93,11 +93,15 @@ export function useLang(): LanguageCtx {
 }
 
 /** Small language toggle used in headers. */
-export function LanguageToggle({ className = "" }: { className?: string }) {
+export function LanguageToggle({ className = "", onSwitch }: { className?: string; onSwitch?: (lang: "en" | "bn") => void }) {
   const { lang, setLang } = useLang();
   return (
     <button
-      onClick={() => setLang(lang === "bn" ? "en" : "bn")}
+      onClick={() => {
+        const next = lang === "bn" ? "en" : "bn";
+        setLang(next);
+        onSwitch?.(next);
+      }}
       className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${className}`}
       title="Language / ভাষা"
     >
