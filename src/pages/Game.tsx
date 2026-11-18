@@ -430,6 +430,9 @@ export default function Game() {
   // U4: last completed round, for the always-on result strip
   const [lastResult, setLastResult] = useState<{ win: number; bet: number; currency: string } | null>(null);
   const [showBigWin, setShowBigWin] = useState(false);
+  // U5-B: the current bonus round's wild gate, tracked from the
+  // spin responses' wildLive stamp.
+  const [roundWildLive, setRoundWildLive] = useState(false);
   // D2: winning cells for the CSS/lite reels + free-spin session win total
   const [winCells, setWinCells] = useState<Set<string>>(new Set());
   // U4: Lite-board stop progress — reels below this count show finals
@@ -1081,6 +1084,15 @@ export default function Game() {
       createdAt: new Date(),
     }, ...prev].slice(0, 20));
 
+    // U5-B: sync the round's wild gate from the response stamp.
+    // The trigger spin carries the roll, free spins carry the
+    // round's state, and the stamp clears with the round.
+    if ((result as any).wildLive != null) {
+      setRoundWildLive(
+        (result as any).wildLive === 1 && (result.freeSpinsRemaining ?? 0) > 0,
+      );
+    }
+
     // Special Feature & Win Animation Triggers
     if (result.featureTriggered === "thunder_strike") {
       // D2: strobe sequence — strike, afterglow, second strike.
@@ -1094,7 +1106,11 @@ export default function Game() {
     } else if (result.featureTriggered === "free_spins") {
       setLightningFlash(true);
       audio.play("win-small", 1.2);
-      setBigWinText(t("freeSpinsUnlocked", { n: result.freeSpinsAwarded }));
+      setBigWinText(
+        (result as any).wildLive === 1
+          ? t("wildLiveUnlocked", { n: result.freeSpinsAwarded })
+          : t("freeSpinsUnlocked", { n: result.freeSpinsAwarded }),
+      );
       setShowBigWin(true);
       setTimeout(() => setLightningFlash(false), 800);
     }
@@ -1656,6 +1672,13 @@ export default function Game() {
                 </span>
               </div>
             )}
+            {roundWildLive && store.freeSpinsRemaining > 0 && (
+              <div className="flex items-center gap-2 rounded-full border border-[#BA68C8]/70 bg-[#4A148C]/30 px-3 py-1">
+                <span className="text-[11px] sm:text-xs font-extrabold tracking-wider text-[#E1BEE7]">
+                  {t("wildLiveChip")}
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -2061,6 +2084,11 @@ export default function Game() {
                     ) : item.isScatter && paytableQuery.data?.freeSpins ? (
                       <div className="text-xs text-[#00E676]">
                         {t("scatterAwards", { a: (paytableQuery.data.freeSpins as any)["3"], b: (paytableQuery.data.freeSpins as any)["4"], c: (paytableQuery.data.freeSpins as any)["5"] })}
+                      </div>
+                    ) : null}
+                    {item.isScatter && paytableQuery.data?.unified?.wild ? (
+                      <div className="text-xs text-[#E1BEE7]">
+                        {t("wildPaytableNote")}
                       </div>
                     ) : null}
                     {item.payouts && (

@@ -276,6 +276,23 @@ function bankSessionFreeSpins(client: any, session: any): number {
 }
 
 /**
+ * U5-B: the gated wild carried by the ACTIVE unified cascade
+ * bundle, for the paytable note. Null when the active bundle has
+ * no wild, so the note never advertises an absent feature.
+ */
+function unifiedWildInfo(client: any): { gate: string } | null {
+  const bundleRow = getActiveBundle(client, "cascade-unified");
+  if (!bundleRow) return null;
+  try {
+    const m = (JSON.parse(bundleRow.bundle) as any).math;
+    if (m && typeof m.wildId === "number" && Array.isArray(m.wildGate)) {
+      return { gate: `${m.wildGate[0]} in ${m.wildGate[1]}` };
+    }
+  } catch { /* malformed bundle: no wild note */ }
+  return null;
+}
+
+/**
  * U4: the award table a converted (unified) trigger pays, keyed by
  * scatter count. The certified unified_fs_awards setting wins when
  * it defines the count; otherwise the active cascade bundle's own
@@ -1526,7 +1543,13 @@ export const gameRouter = createRouter({
       // table), never the classic free-spin counts.
       unified:
         getSetting<boolean>("unified_game") === true
-          ? { awards: unifiedAwardsTable(getSqliteClient()) }
+          ? {
+              awards: unifiedAwardsTable(getSqliteClient()),
+              // U5-B: present only when the active unified bundle
+              // carries the gated wild, so the paytable note never
+              // advertises a feature the math does not have.
+              wild: unifiedWildInfo(getSqliteClient()),
+            }
           : null,
     };
   }),

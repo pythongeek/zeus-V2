@@ -36,6 +36,8 @@ export interface CascadeStepData {
 const SYMBOL_NAMES: Record<number, string> = {
   0: "zeus", 1: "thunderbolt", 2: "pegasus", 3: "temple", 4: "harp",
   5: "amphora", 6: "helmet", 7: "shield", 8: "ace", 9: "king", 10: "queen",
+  // U5-B: the Lightning Wild (only in gated unified bonus rounds).
+  11: "wild",
 };
 const LADDER = [1, 2, 3, 5, 10];
 const COLS = 6;
@@ -477,12 +479,13 @@ export function CascadeBoard({
           // animations — scatter tiles hung still while the rest of
           // the board fell around them (found 2026-10-31).
           const isScatter = sym === 0;
+          const isWild = sym === 11;
           const isBlast = phase === "explode" && isWin;
           return (
             <div
               key={idx}
               className={`relative aspect-square flex items-center justify-center rounded-md bg-[#1A1A25]/80 ${
-                isScatter ? "bg-[#2A2110]/90" : ""
+                isScatter ? "bg-[#2A2110]/90" : isWild ? "bg-[#2A1030]/90" : ""
               } ${
                 isWin && phase === "highlight"
                   ? "ring-2 ring-[#FFD54F] animate-pulse"
@@ -530,7 +533,7 @@ export function CascadeBoard({
                   <img
                     src={`/assets/symbol-${SYMBOL_NAMES[sym] ?? "zeus"}.webp`}
                     alt={SYMBOL_NAMES[sym] ?? "zeus"}
-                    className={`${isScatter ? "w-[96%] h-[96%] scatter-glow" : "w-[86%] h-[86%]"} ${
+                    className={`${isScatter ? "w-[96%] h-[96%] scatter-glow" : isWild ? "w-[96%] h-[96%]" : "w-[86%] h-[86%]"} ${
                       isWin && phase === "highlight" ? "animate-win-flash" : ""
                     } object-contain`}
                     draggable={false}
@@ -538,6 +541,11 @@ export function CascadeBoard({
                   {isScatter && (
                     <span className="absolute bottom-0 inset-x-0 text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#FFD54F] bg-black/75 py-px rounded-b-md">
                       {t("scatterBadge")}
+                    </span>
+                  )}
+                  {isWild && (
+                    <span className="absolute bottom-0 inset-x-0 text-center text-[7px] sm:text-[9px] font-black tracking-[0.14em] text-[#E1BEE7] bg-[#4A148C]/85 py-px rounded-b-md">
+                      {t("wildBadge")}
                     </span>
                   )}
                   {/* Scatter landing flash: a one-shot electric pop as
