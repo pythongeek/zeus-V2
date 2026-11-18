@@ -65,6 +65,9 @@ interface LoopEntry {
   files: string[];
   /** consecutive watchdog-restart failures → triggers a full recreate */
   fails: number;
+  /** true while a seam-free rotation (fade → restart → swell) is running */
+  rotating?: boolean;
+  rotations?: number;
 }
 
 class SoundManager {
@@ -346,11 +349,19 @@ class SoundManager {
     });
   }
 
-  /** 3 s watchdog — the "rotating infinitely" guarantee: any music
-   * loop that should be audible right now but isn't playing gets
-   * restarted; two consecutive failures recreate the Howl from
-   * scratch (fresh decode), which recovers from every failure mode
-   * we've seen (suspended context, dropped buffer, loop-seam stall). */
+  /** 3 s watchdog — the "rotating infinitely" guarantee, two jobs:
+   *
+   *  1. SEAM-FREE ROTATION (owner report 2026-11-19: "after a few
+   *     minutes the bg sound starts making a noisy tone consistently").
+   *     PCM analysis proved the 158 s file itself is clean (seam jump
+   *     0.01, no garbage tail) — so the artifact comes from the
+   *     player's loop wrap. The watchdog now fades the bed out in the
+   *     last seconds before the wrap, restarts it at 0, and swells it
+   *     back: the audible stream NEVER crosses the raw loop seam.
+   *  2. LIVENESS: any music loop that should be audible but isn't
+   *     gets restarted; two consecutive failures recreate the Howl
+   *     from scratch (fresh decode) — recovers suspended contexts,
+   *     dropped buffers, and stall states. */
   private ensureWatchdog() {
     if (this.watchdog || typeof window === "undefined") return;
     this.watchdog = setInterval(() => {
@@ -380,6 +391,26 @@ class SoundManager {
         }
         if (howl.playing()) {
           entry.fails = 0;
+          // Seam-free rotation: as the track approaches its wrap point,
+          // fade it out, restart at 0, and swell back. The raw loop seam
+          // is never crossed while audible (see watchdog doc above).
+          try {
+            const dur = Number(howl.duration()) || 0;
+            const pos = Number(howl.seek()) || 0;
+            if (dur > 10 && pos >= dur - 7 && !entry.rotating) {
+              entry.rotating = true;
+              entry.rotations = (entry.rotations ?? 0) + 1;
+              howl.fade(howl.volume(), 0, 700);
+              setTimeout(() => {
+                try {
+                  if (!howl.playing()) howl.play();
+                  howl.seek(0);
+                  howl.fade(0, target, 800);
+                } catch { /* watchdog will recover */ }
+                setTimeout(() => { entry.rotating = false; }, 1200);
+              }, 750);
+            }
+          } catch { /* ignore */ }
           return;
         }
         entry.fails++;
@@ -507,11 +538,58 @@ class SoundManager {
     this.sfxActivity.clear();
   }
 
+
+  /** Debug tap (support/QA): lazy AnalyserNode on Howler master output.
+   * masterRms() = time-domain RMS (0..~1); masterPeakBin() = dominant
+   * FFT bin index. Created only when called — zero cost in normal play. */
+  private tapAnalyser: AnalyserNode | null = null;
+  private tapTime: Float32Array | null = null;
+  private tapFreq: Uint8Array | null = null;
+  private ensureTap(): boolean {
+    const master = (Howler as unknown as { masterGain?: GainNode }).masterGain;
+    const ctx = (Howler as unknown as { ctx?: AudioContext }).ctx;
+    if (!master || !ctx) return false;
+    if (!this.tapAnalyser) {
+      this.tapAnalyser = ctx.createAnalyser();
+      this.tapAnalyser.fftSize = 2048;
+      this.tapFreq = new Uint8Array(this.tapAnalyser.frequencyBinCount);
+      master.connect(this.tapAnalyser);
+      this.tapTime = new Float32Array(this.tapAnalyser.fftSize);
+    }
+    return true;
+  }
+  masterRms(): number {
+    if (!this.ensureTap() || !this.tapAnalyser || !this.tapTime) return -1;
+    this.tapAnalyser.getFloatTimeDomainData(this.tapTime);
+    let s = 0;
+    for (let i = 0; i < this.tapTime.length; i++) s += this.tapTime[i] * this.tapTime[i];
+    return Math.round(Math.sqrt(s / this.tapTime.length) * 1000) / 1000;
+  }
+  masterPeakBin(): { bin: number; mag: number } {
+    if (!this.ensureTap() || !this.tapAnalyser || !this.tapFreq) return { bin: -1, mag: 0 };
+    this.tapAnalyser.getByteFrequencyData(this.tapFreq);
+    let bin = -1, mag = 0;
+    for (let i = 2; i < this.tapFreq.length; i++) {
+      if (this.tapFreq[i] > mag) { mag = this.tapFreq[i]; bin = i; }
+    }
+    return { bin, mag };
+  }
+
   /** Support/ diagnostics snapshot (exposed as window.__zeusAudio). */
   debugState() {
-    const loops: Record<string, { ch: Channel; playing: boolean; vol: number; fails: number }> = {};
+    const loops: Record<string, { ch: Channel; playing: boolean; vol: number; fails: number; pos: number; dur: number; rotating: boolean; rotations: number }> = {};
     this.loops.forEach((e, k) => {
-      loops[k] = { ch: e.ch, playing: (() => { try { return e.howl.playing(); } catch { return false; } })(), vol: (() => { try { return e.howl.volume(); } catch { return -1; } })(), fails: e.fails };
+      const num = (fn: () => number) => { try { return Math.round((fn() as number) * 10) / 10; } catch { return -1; } };
+      loops[k] = {
+        ch: e.ch,
+        playing: (() => { try { return e.howl.playing(); } catch { return false; } })(),
+        vol: (() => { try { return e.howl.volume(); } catch { return -1; } })(),
+        fails: e.fails,
+        pos: num(() => e.howl.seek() as number),
+        dur: num(() => e.howl.duration()),
+        rotating: !!e.rotating,
+        rotations: e.rotations ?? 0,
+      };
     });
     const ctx = (Howler as unknown as { ctx?: AudioContext }).ctx;
     return {
