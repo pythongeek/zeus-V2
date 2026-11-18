@@ -32,6 +32,22 @@ Worked this batch (#1 + #2 of the RTP action plan):
   (git reset to U5-B4); these UX changes were re-applied cleanly on top of
   U5-B4. Commit this one.
 
+## Batch 2026-11-19 (2) — seam-free BGM rotation [audio regression, owner re-report]
+**FIXED+VERIFIED (deployed to production, commit 55f7c59, frontend-only)**
+- PCM analysis (in-browser decodeAudioData): bgm-main opus/m4a decode
+  identically (158.3s @48kHz, seam jump 0.011/0.025, tail≈head RMS, no
+  clipping, no anomalous windows) — the FILE is clean.
+- Root cause: the audible stream crossing the raw loop seam (Howler
+  buffer wrap) — matches the "after a few minutes" timing exactly.
+- Fix: the 3s watchdog now fades the bed out in the last ~7s of the
+  track, restarts at 0 and swells back — the seam is never crossed
+  audibly. Adds masterRms()/masterPeakBin() analyser tap to
+  window.__zeusAudio for support diagnostics.
+- Verified on production with per-second telemetry over 196s: rotation
+  fired at pos 153.8, clean restart, RMS dip 0.005 → recovery 0.023,
+  99% playing ratio, 92 distinct dominant FFT bins (no locked tone).
+  Suite: 50 files / 220 tests passed.
+
 ## Pending (everything else from the assessment — not started this batch)
 | ID | Status |
 |---|---|
