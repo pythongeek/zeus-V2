@@ -543,8 +543,8 @@ class SoundManager {
    * masterRms() = time-domain RMS (0..~1); masterPeakBin() = dominant
    * FFT bin index. Created only when called — zero cost in normal play. */
   private tapAnalyser: AnalyserNode | null = null;
-  private tapTime: Float32Array | null = null;
-  private tapFreq: Uint8Array | null = null;
+  private tapTime: Float32Array<ArrayBuffer> | null = null;
+  private tapFreq: Uint8Array<ArrayBuffer> | null = null;
   private ensureTap(): boolean {
     const master = (Howler as unknown as { masterGain?: GainNode }).masterGain;
     const ctx = (Howler as unknown as { ctx?: AudioContext }).ctx;
