@@ -24,7 +24,7 @@ import { useMemo } from "react";
  *   one-screen mobile layout keeps its space.
  * Lite mode and prefers-reduced-motion render him still.
  */
-export type ZeusMood = "idle" | "spin" | "freespins" | "strike" | "scatter";
+export type ZeusMood = "idle" | "spin" | "freespins" | "strike" | "scatter" | "flare";
 
 function BoltShape({ className, style }: { className?: string; style?: React.CSSProperties }) {
   return (
@@ -42,12 +42,14 @@ function BoltShape({ className, style }: { className?: string; style?: React.CSS
 export function ZeusFigure({
   mood,
   strikeKey,
+  flareKey,
   lite,
   compact,
   className,
 }: {
   mood: ZeusMood;
   strikeKey: number;
+  flareKey?: number;
   lite: boolean;
   compact?: boolean;
   className?: string;
@@ -64,9 +66,11 @@ export function ZeusFigure({
       ? "zeus-strike"
       : mood === "scatter"
         ? "zeus-scatter"
-        : mood === "spin"
-          ? "zeus-spin"
-          : "zeus-idle";
+        : mood === "flare"
+          ? "zeus-flare"
+          : mood === "spin"
+            ? "zeus-spin"
+            : "zeus-idle";
 
   return (
     <div
@@ -81,7 +85,15 @@ export function ZeusFigure({
           waist-up bust has no feet to light. */}
       <div className="absolute inset-0 -m-4 rounded-full bg-[radial-gradient(circle,rgba(140,200,255,0.22)_0%,rgba(212,175,55,0.10)_48%,transparent_70%)]" />
       {!compact && (
-        <div className="absolute bottom-0 inset-x-1 h-3 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(255,213,79,0.35)_0%,transparent_70%)] blur-[2px]" />
+        <>
+          {/* Cloud pedestal (2026-11-19, competitor pattern: in
+              7x7 Zeus and Zeus Royale he stands ON the clouds of
+              Olympus, never on bare ground) — two soft vapour
+              ellipses under his feet, the gold pool on top. */}
+          <div className="absolute bottom-0 inset-x-0 h-10 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(190,210,240,0.28)_0%,rgba(140,170,220,0.10)_55%,transparent_75%)] blur-[5px]" />
+          <div className="absolute bottom-3 left-[16%] w-[55%] h-7 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(225,236,252,0.30)_0%,transparent_70%)] blur-[4px]" />
+          <div className="absolute bottom-0 inset-x-1 h-3 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(255,213,79,0.35)_0%,transparent_70%)] blur-[2px]" />
+        </>
       )}
       {/* Free-spin aura */}
       {mood === "freespins" && !still && (
@@ -104,10 +116,10 @@ export function ZeusFigure({
             only the spear bolt rides along. */}
         {!still && mood !== "strike" && (
           <>
-            <BoltShape className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[13%] right-[13%] top-[6%] opacity-80`} />
+            <BoltShape className={`${mood === "scatter" || mood === "flare" ? "bolt-flare" : "bolt-flicker"} absolute w-[13%] right-[13%] top-[6%] opacity-80`} />
             {!compact && (
               <BoltShape
-                className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[9%] left-[16%] bottom-[36%] opacity-60`}
+                className={`${mood === "scatter" || mood === "flare" ? "bolt-flare" : "bolt-flicker"} absolute w-[9%] left-[16%] bottom-[36%] opacity-60`}
                 style={{ animationDelay: "1.3s" }}
               />
             )}
@@ -145,6 +157,15 @@ export function ZeusFigure({
           </svg>
           <div className="strike-glow-pop absolute right-[6%] bottom-[2%] w-24 h-24 rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.95)_0%,rgba(255,213,79,0.35)_45%,transparent_70%)]" />
         </div>
+      )}
+      {/* Win flare glow: ordinary wins (below the celebration
+          tiers) pop a soft burst at the spear, so he visibly
+          answers every paying spin, not only the big ones. */}
+      {mood === "flare" && !still && (
+        <div
+          key={flareKey}
+          className={`strike-glow-pop absolute rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.9)_0%,rgba(140,200,255,0.35)_45%,transparent_70%)] ${compact ? "right-[4%] top-[1%] w-11 h-11" : "right-[5%] top-[0%] w-20 h-20"}`}
+        />
       )}
       {/* Compact strike: no room for the cross-stage streak, so
           the spear itself flares and a glow pops at his hand. */}

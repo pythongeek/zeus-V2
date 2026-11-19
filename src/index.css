@@ -552,6 +552,16 @@
 }
 
 .zeus-scatter { animation: zeus-scatter-charge 1.6s ease-out; }
+/* Win flare: a short spear-side pulse for ordinary wins, so Zeus
+   answers every paying spin, not only the celebration tiers. One
+   keyframe set animates transform AND filter together (the
+   zeus-aura pairing lesson from the scatter charge above). */
+@keyframes zeus-flare-pulse {
+  0% { transform: scale(1) rotate(0deg); filter: brightness(1) drop-shadow(0 0 8px rgba(120, 180, 255, 0.3)); }
+  25% { transform: scale(1.05) rotate(-1.2deg) translateY(-3px); filter: brightness(1.24) drop-shadow(0 0 22px rgba(140, 200, 255, 0.7)); }
+  100% { transform: scale(1) rotate(0deg); filter: brightness(1) drop-shadow(0 0 8px rgba(120, 180, 255, 0.3)); }
+}
+.zeus-flare { animation: zeus-flare-pulse 0.95s ease-out; }
 .bolt-flare { animation: bolt-flare 0.4s ease-in-out infinite; transform-origin: center; }
 .bolt-flicker { animation: bolt-flicker 2.6s linear infinite; transform-origin: center; }
 .bolt-strike-path { stroke-dasharray: 100; stroke-dashoffset: 100; animation: bolt-strike-draw 0.8s ease-out forwards; }

@@ -73,3 +73,10 @@ Staging environment retained at `/opt/zeus-slot-staging` (port 3101, branch `aud
 - Mobile (<lg): the E-mobile batch had hidden Zeus entirely for the one-screen fit; he now returns as a compact waist-up bust over the board's top-right corner in a zero-height mount (one-screen fit untouched), strike shown as a spear flare instead of the cross-stage throw; hidden on short landscape viewports like the strip.
 - Drive-by: src/lib/audio.ts tap-buffer field types fixed (Float32Array/Uint8Array<ArrayBuffer>) — the BGM batch had left `npm run check` red; tsc clean again.
 - Suite at deploy: 50 files / 220 tests passed; journal clean; old asset 404.
+
+## Batch 2026-11-19 — Zeus interacts with game effects [owner request]
+**FIXED+VERIFIED (deployed to production, frontend-only)**
+- References studied: 7x7 Zeus + Zeus Royale (owner screenshots) + Gates of Olympus pattern — Zeus full-body beside the reels on a cloud pedestal, hand lightning answering game events.
+- XL stage (>=1280px): figure leaves the header strip, stands 320x432 on a cloud pedestal at the board's left, board column narrows to 780px. lg keeps the strip; mobile keeps the compact bust. Cloud pedestal added under his feet in both stage presentations.
+- New "flare" mood: every ordinary win (the win-small settle path, both modes — cascade settles ride the same hook after playback) pops a 0.95s spear pulse + glow. Anticipation: 2 scatters landed with reels still turning holds the scatter charge. Idle: ambient spear flare ~every 30s while the tab is visible. Precedence strike > scatter/anticipation > flare > spin > freespins > idle.
+- Suite at deploy: 50 files / 220 tests passed; tsc clean; journal clean.

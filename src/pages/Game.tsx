@@ -467,6 +467,18 @@ export default function Game() {
     if (scatterReactTimer.current) clearTimeout(scatterReactTimer.current);
     scatterReactTimer.current = setTimeout(() => setScatterReact(false), 1600);
   };
+  // Zeus win flare: ordinary wins (below the celebration tiers)
+  // get a short spear flare, so he answers every paying spin the
+  // way the competitor figures do, not only the big ones.
+  const [zeusFlare, setZeusFlare] = useState(false);
+  const [flareKey, setFlareKey] = useState(0);
+  const flareTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerZeusFlare = () => {
+    setZeusFlare(true);
+    setFlareKey((k) => k + 1);
+    if (flareTimer.current) clearTimeout(flareTimer.current);
+    flareTimer.current = setTimeout(() => setZeusFlare(false), 950);
+  };
   const autoSpinDoneRef = useRef(0);
   const playStartedAtRef = useRef<number>(Date.now());
   const realityShownRef = useRef(0);
@@ -1173,7 +1185,7 @@ export default function Game() {
           store.setGameState("winning");
         }
       } else {
-        if (winAmount > 0) audio.play("win-small");
+        if (winAmount > 0) { audio.play("win-small"); triggerZeusFlare(); }
         else audio.play("symbol-land");
         store.setGameState("winning");
       }
@@ -1387,18 +1399,41 @@ export default function Game() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleSpin, store.gameState]);
 
+  // Anticipation (the competitor pattern): with two scatters
+  // already down and reels still turning, Zeus charges while the
+  // last reels decide. reelSymbols holds the incoming finals from
+  // result arrival; liteStopped counts the reels already stopped.
+  const landedScatters =
+    store.mode === "classic" && store.gameState === "spinning"
+      ? reelSymbols
+          .slice(0, Math.max(0, Math.min(liteStopped, 5)))
+          .flat()
+          .filter((sym) => sym === "thunderbolt").length
+      : 0;
   // Stage Zeus mood: he throws thunder whenever a celebration or the
   // feature overlay fires; the board shakes with the strike.
   const zeusMood: ZeusMood =
     celebration || showBigWin
       ? "strike"
-      : scatterReact
+      : scatterReact || landedScatters >= 2
         ? "scatter"
-        : store.gameState === "spinning"
-          ? "spin"
-          : store.freeSpinsRemaining > 0
-            ? "freespins"
-            : "idle";
+        : zeusFlare
+          ? "flare"
+          : store.gameState === "spinning"
+            ? "spin"
+            : store.freeSpinsRemaining > 0
+              ? "freespins"
+              : "idle";
+  // Ambient life: while the stage sits idle he stirs now and then
+  // (a spear flare roughly every 30s), the way the competitor
+  // figures idle-animate. Visible tab only, never during play.
+  useEffect(() => {
+    if (zeusMood !== "idle") return;
+    const id = setInterval(() => {
+      if (!document.hidden && Math.random() < 0.3) triggerZeusFlare();
+    }, 9000);
+    return () => clearInterval(id);
+  }, [zeusMood]);
   useEffect(() => {
     if (celebration || showBigWin) {
       setStrikeKey((k) => k + 1);
@@ -1603,10 +1638,11 @@ export default function Game() {
             before the board below). On very short viewports
             (landscape phones) the strip hides so the board and
             SPIN keep the screen. */}
-        <div className="relative z-30 w-full max-w-[900px] h-[128px] hidden lg:block [@media(max-height:560px)]:hidden">
+        <div className="relative z-30 w-full max-w-[900px] h-[128px] hidden lg:block xl:hidden [@media(max-height:560px)]:hidden">
           <ZeusFigure
             mood={zeusMood}
             strikeKey={strikeKey}
+            flareKey={flareKey}
             lite={store.liteMode}
             className="absolute left-3 -bottom-5 w-[160px] h-[192px]"
           />
@@ -1692,6 +1728,25 @@ export default function Game() {
           </div>
         )}
 
+        {/* XL stage (2026-11-19, owner, from the competitor
+            references 7x7 Zeus and Zeus Royale): on wide screens
+            Zeus leaves the header strip and stands full-body on
+            a cloud pedestal beside the board while the board
+            column narrows to make room for him. Below xl this
+            wrapper is a plain centred column, nothing changes. */}
+        <div className="flex flex-col items-center w-full xl:flex-row xl:items-stretch xl:justify-center xl:gap-5">
+          <div className="relative hidden xl:block w-[320px] shrink-0" aria-hidden="true">
+            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-[330px] h-[70px] rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(190,210,240,0.32)_0%,rgba(140,170,220,0.12)_55%,transparent_75%)] blur-[6px]" />
+            <div className="absolute bottom-7 left-[54%] -translate-x-1/2 w-[200px] h-[46px] rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(225,236,252,0.30)_0%,transparent_70%)] blur-[5px]" />
+            <ZeusFigure
+              mood={zeusMood}
+              strikeKey={strikeKey}
+              flareKey={flareKey}
+              lite={store.liteMode}
+              className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[320px] h-[432px]"
+            />
+          </div>
+          <div className="flex flex-col items-center w-full max-w-[900px] xl:max-w-[780px] min-w-0">
         {/* Slot Machine Frame. Mobile one-view budget (owner,
             2026-10-31 evening): on phones the frame's width is
             capped by the viewport HEIGHT so the full figure, the
@@ -1712,6 +1767,7 @@ export default function Game() {
           <ZeusFigure
             mood={zeusMood}
             strikeKey={strikeKey}
+            flareKey={flareKey}
             lite={store.liteMode}
             compact
             className="absolute right-0 -top-[92px] sm:-top-[120px] w-[92px] h-[104px] sm:w-[120px] sm:h-[136px]"
@@ -1856,6 +1912,8 @@ export default function Game() {
               )}
             </div>
           )}
+        </div>
+          </div>
         </div>
 
         {/* Control Panel — clean two-row layout (reference style):
