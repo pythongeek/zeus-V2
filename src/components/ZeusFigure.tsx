@@ -1,16 +1,28 @@
 import { useMemo } from "react";
 
 /**
- * The stage Zeus (owner request 2026-10-30): the figure is alive on
- * the stage — idle breathing/float with a storm aura and flickering
- * hand-lightning, a tense rock while reels spin, a golden aura during
- * free spins, and on big wins he lunges and hurls a lightning bolt
- * across the stage toward the board. Pure CSS/SVG over the character
- * art — since 2026-10-30 the figure uses a transparent-background
- * cutout (zeus-character-cutout.webp, background removed from the
- * original painting) so he stands ON the stage instead of blocking
- * it with a rectangular picture. Lite mode and
- * prefers-reduced-motion render him still.
+ * The stage Zeus. Since 2026-11-19 he is the Storm Zeus (owner-
+ * supplied art, the hi-res render extracted from his Zeus_Storm
+ * page): a transparent cutout built locally (isnet figure mask +
+ * colour-keyed recovery of the energy spear the mask dropped),
+ * standing ON the stage instead of blocking it with a rectangular
+ * picture. He is alive in the same moods as before: idle float
+ * with a storm aura and flickering hand lightning, a tense rock
+ * while reels spin, a golden aura during free spins, and on big
+ * wins he lunges and hurls a lightning bolt from his spear across
+ * the stage toward the board.
+ *
+ * Two presentations (owner, 2026-11-19, following the industry
+ * pattern of Gates of Olympus and its sequels, where Zeus stands
+ * full-body beside the reels on desktop and shrinks to a compact
+ * presence over the grid on mobile):
+ * - stage (desktop): the full-body figure at the board's left
+ *   edge, spear raised on the board side, throw streak included.
+ * - compact (mobile): a waist-up bust cropped from the same art,
+ *   looming over the board's top-right corner; the cross-stage
+ *   throw becomes a spear flare + glow pop at his hand, so the
+ *   one-screen mobile layout keeps its space.
+ * Lite mode and prefers-reduced-motion render him still.
  */
 export type ZeusMood = "idle" | "spin" | "freespins" | "strike" | "scatter";
 
@@ -31,11 +43,13 @@ export function ZeusFigure({
   mood,
   strikeKey,
   lite,
+  compact,
   className,
 }: {
   mood: ZeusMood;
   strikeKey: number;
   lite: boolean;
+  compact?: boolean;
   className?: string;
 }) {
   const reduced = useMemo(
@@ -55,53 +69,57 @@ export function ZeusFigure({
           : "zeus-idle";
 
   return (
-    <div className={`relative pointer-events-none select-none ${className ?? ""}`} aria-hidden="true">
-      {/* Permanent stage aura + pedestal glow (owner polish,
-          2026-10-31): he should read as a presence on the stage,
-          not a sticker — a soft storm-gold halo behind him at all
-          times (the stronger pulsing aura still layers on top in
-          free spins) and a warm pool of light at his feet. */}
+    <div
+      className={`relative pointer-events-none select-none ${compact ? "overflow-hidden" : ""} ${className ?? ""}`}
+      aria-hidden="true"
+    >
+      {/* Permanent stage aura (owner polish, 2026-10-31): he reads
+          as a presence on the stage, not a sticker — a soft
+          storm-gold halo behind him at all times (the stronger
+          pulsing aura still layers on top in free spins). The
+          pedestal pool of light at his feet is stage-only: a
+          waist-up bust has no feet to light. */}
       <div className="absolute inset-0 -m-4 rounded-full bg-[radial-gradient(circle,rgba(140,200,255,0.22)_0%,rgba(212,175,55,0.10)_48%,transparent_70%)]" />
-      <div className="absolute bottom-0 inset-x-1 h-3 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(255,213,79,0.35)_0%,transparent_70%)] blur-[2px]" />
+      {!compact && (
+        <div className="absolute bottom-0 inset-x-1 h-3 rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(255,213,79,0.35)_0%,transparent_70%)] blur-[2px]" />
+      )}
       {/* Free-spin aura */}
       {mood === "freespins" && !still && (
         <div className="absolute inset-0 -m-3 rounded-full bg-[radial-gradient(circle,rgba(255,213,79,0.35)_0%,transparent_65%)] animate-pulse" />
       )}
-      {/* Facing (owner, 2026-10-31): the cutout's gaze and staff
-          read LEFT; the stage figure is mirrored so Zeus faces
-          RIGHT, toward the board he overlooks. The flip wraps the
-          art and the hand lightning together (their anchor points
-          are painted for the cutout, so they mirror along and stay
-          on his hands); his CSS pose animations use translate /
-          rotate / scale only, so they compose cleanly inside the
-          mirror. The thunder-throw overlay further down is stage
-          geometry (it streaks across the board) and stays
-          unflipped. */}
-      <div className="absolute inset-0 [transform:scaleX(-1)]">
+      {/* The Storm art needs no mirror: his spear is already raised
+          on the board side (image right) and his gaze is near
+          frontal. Compact crops the same art to a waist-up bust
+          (scaled from the top inside the clipped frame). */}
+      <div className="absolute inset-0">
         <img
-          src="/assets/zeus-character-cutout.webp"
+          src="/assets/zeus-storm-cutout.webp"
           alt=""
-          className={`relative w-full h-full object-contain ${imgClass} ${mood === "freespins" ? "brightness-110" : ""} ${still ? "drop-shadow-[0_2px_16px_rgba(120,180,255,0.45)]" : ""}`}
+          className={`relative w-full h-full object-contain ${compact ? "scale-[1.55] origin-[50%_0%]" : ""} ${imgClass} ${mood === "freespins" ? "brightness-110" : ""} ${still ? "drop-shadow-[0_2px_16px_rgba(120,180,255,0.45)]" : ""}`}
           draggable={false}
         />
-        {/* Ambient hand lightning — positions track the cutout's
-            hands: staff grip upper-left, free fist mid-right (in
-            the art's own, pre-mirror coordinates). */}
+        {/* Ambient hand lightning — positions track the Storm
+            art's hands: the spear grip upper-right, the free fist
+            mid-left. In compact the fist sits below the crop, so
+            only the spear bolt rides along. */}
         {!still && mood !== "strike" && (
           <>
-            <BoltShape className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[15%] left-[3%] bottom-[57%] opacity-80`} />
-            <BoltShape
-              className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[10%] right-[22%] bottom-[44%] opacity-60`}
-              style={{ animationDelay: "1.3s" }}
-            />
+            <BoltShape className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[13%] right-[13%] top-[6%] opacity-80`} />
+            {!compact && (
+              <BoltShape
+                className={`${mood === "scatter" ? "bolt-flare" : "bolt-flicker"} absolute w-[9%] left-[16%] bottom-[36%] opacity-60`}
+                style={{ animationDelay: "1.3s" }}
+              />
+            )}
           </>
         )}
       </div>
-      {/* Thunder throw: bolt streaks from Zeus toward the board —
-          big wins (strike) and 2+ scatter settles (scatter) alike,
-          so the god visibly answers the board's big moments. */}
-      {(mood === "strike" || mood === "scatter") && !still && (
-        <div key={strikeKey} className="absolute left-[52%] top-[38%] w-[290%] aspect-[3/2] z-30">
+      {/* Thunder throw (stage only): the bolt streaks from his
+          spear toward the board — big wins (strike) and 2+ scatter
+          settles (scatter) alike, so the god visibly answers the
+          board's big moments. */}
+      {!compact && (mood === "strike" || mood === "scatter") && !still && (
+        <div key={strikeKey} className="absolute left-[68%] top-[4%] w-[290%] aspect-[3/2] z-30">
           <svg viewBox="0 0 300 200" className="w-full h-full overflow-visible">
             <path
               d="M6 14 L96 62 L78 70 L168 116 L148 124 L238 178"
@@ -126,6 +144,14 @@ export function ZeusFigure({
             />
           </svg>
           <div className="strike-glow-pop absolute right-[6%] bottom-[2%] w-24 h-24 rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.95)_0%,rgba(255,213,79,0.35)_45%,transparent_70%)]" />
+        </div>
+      )}
+      {/* Compact strike: no room for the cross-stage streak, so
+          the spear itself flares and a glow pops at his hand. */}
+      {compact && (mood === "strike" || mood === "scatter") && !still && (
+        <div key={strikeKey} className="absolute right-[2%] top-[0%] w-[46%] aspect-square z-30">
+          <BoltShape className="bolt-flare absolute inset-0 w-full h-full opacity-95" />
+          <div className="strike-glow-pop absolute inset-0 rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.9)_0%,rgba(255,213,79,0.35)_45%,transparent_70%)]" />
         </div>
       )}
     </div>

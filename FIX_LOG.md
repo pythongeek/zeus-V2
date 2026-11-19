@@ -65,3 +65,11 @@ Worked this batch (#1 + #2 of the RTP action plan):
 | F1–F4 | PENDING — sanctioned-country list, KYC/age gating (owner decision), restore drill, cron dedupe, `.env.bak` removal (after C1), off-box replication, two-sided tripwire alarms |
 
 Staging environment retained at `/opt/zeus-slot-staging` (port 3101, branch `audit-fixes-2026-11`, DB = pre-deploy copy; QA user elevated to super_admin and staging `admin_2fa_required` disabled for testing — staging only).
+
+## Batch 2026-11-19 — Storm Zeus figure [owner request]
+**FIXED+VERIFIED (deployed to production, frontend-only)**
+- Old figure removed (zeus-character.webp + zeus-character-cutout.webp; git history keeps them). New figure: the owner-supplied Storm Zeus art — the "GIF" upload is a single static 360x640 frame; the hi-res 768x1024 render embedded in his Zeus_Storm.html demo is the source used. Cutout built with the 2026-10-30 pipeline (isnet mask + cleanup) plus a colour-keyed recovery of the translucent energy spear (isnet drops it; blade pixels region-locked, body-connected, soft alpha from luminance) → public/assets/zeus-storm-cutout.webp (714x964, 147 KB), served byte-identical.
+- Desktop (lg+): full-body stage figure at the board's left, 160x192, no mirror (spear already on the board side), hand-lightning anchors + thunder-throw origin re-tracked to the new art.
+- Mobile (<lg): the E-mobile batch had hidden Zeus entirely for the one-screen fit; he now returns as a compact waist-up bust over the board's top-right corner in a zero-height mount (one-screen fit untouched), strike shown as a spear flare instead of the cross-stage throw; hidden on short landscape viewports like the strip.
+- Drive-by: src/lib/audio.ts tap-buffer field types fixed (Float32Array/Uint8Array<ArrayBuffer>) — the BGM batch had left `npm run check` red; tsc clean again.
+- Suite at deploy: 50 files / 220 tests passed; journal clean; old asset 404.

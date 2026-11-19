@@ -1591,21 +1591,24 @@ export default function Game() {
           ))}
         </div>
 
-        {/* Stage header: Zeus alive above the board's left edge,
-            overlooking play; he reacts to spins and throws thunder
-            on big wins. The ZEUS THUNDER title plaque that sat
-            beside him was removed 2026-10-31 (owner request).
-            Polish (owner, 2026-10-31 evening): he is BIGGER and
-            mirrored to face right, into the board (see ZeusFigure),
-            with a permanent aura so he reads as the stage's host.
-            On very short viewports (landscape phones) the strip
-            hides so the board and SPIN keep the screen. */}
-        <div className="relative z-30 w-full max-w-[900px] h-[60px] sm:h-[128px] max-lg:hidden [@media(max-height:560px)]:hidden">
+        {/* Stage header (desktop, lg+): the Storm Zeus alive above
+            the board's left edge, overlooking play; he reacts to
+            spins and throws thunder on big wins. The ZEUS THUNDER
+            title plaque that sat beside him was removed 2026-10-31
+            (owner request). 2026-11-19 (owner): the old painted
+            figure was replaced by the Storm Zeus cutout, bigger,
+            spear raised on the board side, permanent aura so he
+            reads as the stage's host. Below lg he presents
+            differently (compact bust over the board, mounted just
+            before the board below). On very short viewports
+            (landscape phones) the strip hides so the board and
+            SPIN keep the screen. */}
+        <div className="relative z-30 w-full max-w-[900px] h-[128px] hidden lg:block [@media(max-height:560px)]:hidden">
           <ZeusFigure
             mood={zeusMood}
             strikeKey={strikeKey}
             lite={store.liteMode}
-            className="absolute left-0 sm:left-3 -bottom-4 sm:-bottom-5 w-[104px] h-[124px] sm:w-[148px] sm:h-[176px]"
+            className="absolute left-3 -bottom-5 w-[160px] h-[192px]"
           />
         </div>
 
@@ -1699,6 +1702,22 @@ export default function Game() {
             header, jackpots, stage strip, mode selector, result
             line and control panel as tightened in this pass.
             Desktop widths are untouched. */}
+        {/* Mobile Zeus (2026-11-19, owner): below lg the stage
+            strip is gone, so the Storm Zeus rides as a compact
+            waist-up bust over the board's top-right corner,
+            present but never pushing the board or SPIN down the
+            screen. On very short viewports (landscape phones) he
+            hides, the same rule as the desktop strip. */}
+        <div className="relative z-30 w-full max-w-[900px] h-0 lg:hidden [@media(max-height:560px)]:hidden">
+          <ZeusFigure
+            mood={zeusMood}
+            strikeKey={strikeKey}
+            lite={store.liteMode}
+            compact
+            className="absolute right-0 -top-[92px] sm:-top-[120px] w-[92px] h-[104px] sm:w-[120px] sm:h-[136px]"
+          />
+        </div>
+
         <div key={store.mode} className={`relative animate-bounce-in bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-lg:max-w-[min(100%,560px,calc((100dvh-24.5rem)*1.2))]" : "max-lg:max-w-[min(100%,560px,calc((100dvh-24rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
           {/* Greek key pattern border */}
           <div className="absolute inset-0 rounded-2xl border border-[#996E20]/40 pointer-events-none" />
