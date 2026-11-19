@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +9,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useMagicLogin } from "@/hooks/useMagicLogin";
 import { useLang, LanguageToggle } from "@/i18n";
-import { Zap, Mail, Phone, User, Lock } from "lucide-react";
+import { MightyZeusLogo } from "@/components/MightyZeusLogo";
+import { Mail, Phone, User, Lock } from "lucide-react";
 
 function AuthForm() {
   useMagicLogin();
@@ -285,12 +286,7 @@ export default function Login() {
       </div>
       <Card className="w-full max-w-md border-[#D4AF37]/30 bg-[#12121A]">
         <CardHeader className="text-center space-y-2">
-          <div className="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full bg-[#D4AF37]/10">
-            <Zap className="h-7 w-7 text-[#D4AF37]" />
-          </div>
-          <CardTitle className="text-2xl font-bold text-[#D4AF37] tracking-wide">
-            ZEUS THUNDER SLOTS
-          </CardTitle>
+          <MightyZeusLogo className="w-full max-w-[320px] mx-auto" />
           <p className="text-sm text-[#9E9EAE]">{t("brandTagline")}</p>
         </CardHeader>
         <CardContent>

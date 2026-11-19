@@ -581,3 +581,28 @@
 
 details.more-extras > summary { list-style: none; }
 details.more-extras > summary::-webkit-details-marker { display: none; }
+
+/* Mighty Zeus logo (owner-supplied emblem, 2026-11-20): float,
+   counter-rotating meander rings, sheen sweeps across both
+   wordmarks, a plasma tracer on the MIGHTY banner, rim arcs and
+   spark nodes. Transform origins are the emblem's centre in
+   viewBox units. */
+@keyframes mzFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes mzRotateCW { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes mzRotateCCW { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+@keyframes mzSheen { 0% { transform: translateX(-420px) skewX(-24deg); } 38%, 100% { transform: translateX(680px) skewX(-24deg); } }
+@keyframes mzMightySheen { 0% { transform: translateX(-280px) skewX(-24deg); } 42%, 100% { transform: translateX(580px) skewX(-24deg); } }
+@keyframes mzEdgeTrace { 0% { stroke-dashoffset: 680; } 100% { stroke-dashoffset: 0; } }
+@keyframes mzLetterRim { 0%, 100% { stroke-dashoffset: 240; opacity: 0.78; } 50% { stroke-dashoffset: 120; opacity: 1; } }
+@keyframes mzSpark { 0%, 100% { opacity: 0.25; transform: scale(0.75); } 45% { opacity: 1; transform: scale(1.35); } }
+.mighty-zeus-logo { animation: mzFloat 5.5s ease-in-out infinite; overflow: visible; }
+.mighty-zeus-logo .meander-ring-outer { transform-origin: 400px 235px; animation: mzRotateCW 48s linear infinite; }
+.mighty-zeus-logo .meander-ring-inner { transform-origin: 400px 235px; animation: mzRotateCCW 34s linear infinite; }
+.mighty-zeus-logo .gold-sheen-bar { animation: mzSheen 4.6s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+.mighty-zeus-logo .mighty-sheen-bar { animation: mzMightySheen 3.8s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+.mighty-zeus-logo .mighty-banner-tracer { stroke-dasharray: 95 245; animation: mzEdgeTrace 3.2s linear infinite; }
+.mighty-zeus-logo .mighty-letter-edge-arc { stroke-dasharray: 42 78; animation: mzLetterRim 2.6s linear infinite; }
+.mighty-zeus-logo .mighty-spark-node { transform-box: fill-box; transform-origin: center; animation: mzSpark 2.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .mighty-zeus-logo, .mighty-zeus-logo * { animation: none !important; }
+}

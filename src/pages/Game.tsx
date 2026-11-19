@@ -21,6 +21,7 @@ import { ReloadOffers } from "@/components/ReloadOffers";
 import { VipWheel } from "@/components/VipWheel";
 import { CascadeBoard, type CascadeStepData } from "@/components/CascadeBoard";
 import { ZeusFigure, type ZeusMood } from "@/components/ZeusFigure";
+import { MightyZeusLogo } from "@/components/MightyZeusLogo";
 import { ReferralCard } from "@/components/ReferralCard";
 import { audio } from "@/lib/audio";
 import { ladderFor, stepBet, snapToLadder } from "@/lib/betting";
@@ -1511,12 +1512,12 @@ export default function Game() {
       <header className="sticky top-0 z-40 bg-[#0A0A0F]/95 backdrop-blur-xl border-b border-[#2A2A35]">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 sm:gap-y-2 px-3 sm:px-4 py-2 sm:py-2.5">
         <div className="flex items-center gap-2.5 mr-auto">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#F4D03F] via-[#D4AF37] to-[#996E20] flex items-center justify-center shadow-[0_0_18px_rgba(212,175,55,0.35)] shrink-0">
-            <Zap className="w-5 h-5 text-black" fill="currentColor" />
-          </div>
-          <span className="text-lg sm:text-xl font-bold tracking-wider text-white whitespace-nowrap" style={{ fontFamily: "Cinzel, serif" }}>
-            ZEUS <span className="text-[#D4AF37]">THUNDER</span>
-          </span>
+          {/* Brand: the Mighty Zeus animated emblem (owner,
+              2026-11-20) replaces the bolt tile + ZEUS THUNDER
+              wordmark. Sized to keep the sticky header slim:
+              near the old brand height on phones, fuller on
+              larger screens. */}
+          <MightyZeusLogo className="w-[96px] sm:w-[148px] shrink-0" />
           <Badge variant="outline" className="hidden md:inline-flex bg-green-500/10 border-green-500/30 text-green-400 text-xs">
             <Shield className="w-3 h-3 mr-1" />
             {t("fairBadge")}

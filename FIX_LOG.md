@@ -87,3 +87,10 @@ Staging environment retained at `/opt/zeus-slot-staging` (port 3101, branch `aud
 - New art: full-body 3D-render Zeus (gold armour, blue cape, lightning spear), isnet + colour-key cutout (spearhead lightning halo recovered, 45,734 px), contrast/sharpness baked in, 615x1152 WebP 249 KB. All three presentations use it; anchors re-tracked to the new pose. Storm cutout removed (git + backup recoverable).
 - Frame: at xl the stage wrapper is now a golden cabinet (the board frame's border/gradient/glow + Greek-key inner border + corner bolts) enclosing Zeus AND the board; the board's own border softens inside it. Rail figure 300x500. Below xl unchanged.
 - Suite at deploy: 50 files / 220 tests passed; tsc clean; journal clean; new asset 200 at exact size, old asset 404.
+
+## Batch 2026-11-20 — Mighty Zeus animated logo [owner request]
+**FIXED+VERIFIED (deployed to production, frontend-only)**
+- Owner supplied an animated Mighty Zeus emblem (studio HTML + React snippet). Built src/components/MightyZeusLogo.tsx from the studio file's master SVG by scripted HTML->JSX conversion; animation CSS moved to index.css (+ reduced-motion still rule).
+- Replaced: game header brand (bolt tile + ZEUS THUNDER text -> emblem, 96px phones / 148px larger) and login card brand (bolt medallion + title -> emblem at 320px hero width). Unused CardTitle/Zap imports removed from Login.
+- Cinzel Decorative (the ZEUS wordmark face) was missing from the self-hosted font kit; 700+900 latin woff2 added to public/fonts + fonts.css, matching the kit pattern.
+- Suite at deploy: 50 files / 220 tests passed; tsc clean; journal clean.
