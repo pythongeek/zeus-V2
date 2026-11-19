@@ -1734,7 +1734,14 @@ export default function Game() {
             a cloud pedestal beside the board while the board
             column narrows to make room for him. Below xl this
             wrapper is a plain centred column, nothing changes. */}
-        <div className="flex flex-col items-center w-full xl:flex-row xl:items-stretch xl:justify-center xl:gap-5">
+        <div className="flex flex-col items-center w-full xl:relative xl:flex-row xl:items-stretch xl:justify-center xl:gap-3 xl:bg-gradient-to-b xl:from-[#1A1626] xl:to-[#12121A]/98 xl:border-2 xl:border-[#D4AF37]/60 xl:rounded-2xl xl:p-3 xl:shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)]">
+          {/* Cabinet ornaments (xl only): the board frame's
+              Greek-key inner border and corner bolts echoed on
+              the cabinet, so figure and board read as one game. */}
+          <div className="absolute inset-0 rounded-2xl border border-[#996E20]/40 pointer-events-none hidden xl:block" />
+          {["top-1.5 left-1.5", "top-1.5 right-1.5", "bottom-1.5 left-1.5", "bottom-1.5 right-1.5"].map((pos) => (
+            <div key={pos} className={`absolute ${pos} w-2.5 h-2.5 rounded-full bg-gradient-to-br from-[#F4D03F] to-[#996E20] shadow-[0_0_6px_rgba(212,175,55,0.6)] pointer-events-none hidden xl:block`} />
+          ))}
           <div className="relative hidden xl:block w-[320px] shrink-0" aria-hidden="true">
             <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-[330px] h-[70px] rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(190,210,240,0.32)_0%,rgba(140,170,220,0.12)_55%,transparent_75%)] blur-[6px]" />
             <div className="absolute bottom-7 left-[54%] -translate-x-1/2 w-[200px] h-[46px] rounded-[50%] bg-[radial-gradient(ellipse_at_center,rgba(225,236,252,0.30)_0%,transparent_70%)] blur-[5px]" />
@@ -1743,7 +1750,7 @@ export default function Game() {
               strikeKey={strikeKey}
               flareKey={flareKey}
               lite={store.liteMode}
-              className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[320px] h-[432px]"
+              className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[300px] h-[500px]"
             />
           </div>
           <div className="flex flex-col items-center w-full max-w-[900px] xl:max-w-[780px] min-w-0">
@@ -1774,7 +1781,7 @@ export default function Game() {
           />
         </div>
 
-        <div key={store.mode} className={`relative animate-bounce-in bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-lg:max-w-[min(100%,560px,calc((100dvh-24.5rem)*1.2))]" : "max-lg:max-w-[min(100%,560px,calc((100dvh-24rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
+        <div key={store.mode} className={`relative animate-bounce-in bg-gradient-to-b from-[#1A1626] to-[#12121A]/98 border-2 border-[#D4AF37]/60 rounded-2xl p-1.5 shadow-[0_0_60px_rgba(212,175,55,0.2),inset_0_1px_0_rgba(255,255,255,0.06)] xl:border-[#D4AF37]/25 xl:shadow-[0_0_24px_rgba(212,175,55,0.10)] max-w-[900px] w-full ${store.mode === "cascade" ? "max-lg:max-w-[min(100%,560px,calc((100dvh-24.5rem)*1.2))]" : "max-lg:max-w-[min(100%,560px,calc((100dvh-24rem)*1.6667))]"} ${boardShake ? "animate-board-shake" : ""}`}>
           {/* Greek key pattern border */}
           <div className="absolute inset-0 rounded-2xl border border-[#996E20]/40 pointer-events-none" />
           {/* Corner bolts */}

@@ -1,10 +1,12 @@
 import { useMemo } from "react";
 
 /**
- * The stage Zeus. Since 2026-11-19 he is the Storm Zeus (owner-
- * supplied art, the hi-res render extracted from his Zeus_Storm
- * page): a transparent cutout built locally (isnet figure mask +
- * colour-keyed recovery of the energy spear the mask dropped),
+ * The stage Zeus. Since 2026-11-19 (second pass) he is a sharp
+ * 3D-render Zeus (owner asked for a sharper, realistic 3D look
+ * and for the figure to sit inside the game's golden frame): a
+ * transparent cutout built locally (isnet figure mask +
+ * colour-keyed recovery of the spearhead lightning halo the
+ * mask dropped, contrast/sharpness baked into the asset),
  * standing ON the stage instead of blocking it with a rectangular
  * picture. He is alive in the same moods as before: idle float
  * with a storm aura and flickering hand lightning, a tense rock
@@ -105,7 +107,7 @@ export function ZeusFigure({
           (scaled from the top inside the clipped frame). */}
       <div className="absolute inset-0">
         <img
-          src="/assets/zeus-storm-cutout.webp"
+          src="/assets/zeus-3d-cutout.webp"
           alt=""
           className={`relative w-full h-full object-contain ${compact ? "scale-[1.55] origin-[50%_0%]" : ""} ${imgClass} ${mood === "freespins" ? "brightness-110" : ""} ${still ? "drop-shadow-[0_2px_16px_rgba(120,180,255,0.45)]" : ""}`}
           draggable={false}
@@ -116,10 +118,10 @@ export function ZeusFigure({
             only the spear bolt rides along. */}
         {!still && mood !== "strike" && (
           <>
-            <BoltShape className={`${mood === "scatter" || mood === "flare" ? "bolt-flare" : "bolt-flicker"} absolute w-[13%] right-[13%] top-[6%] opacity-80`} />
+            <BoltShape className={`${mood === "scatter" || mood === "flare" ? "bolt-flare" : "bolt-flicker"} absolute w-[13%] right-[10%] top-[2%] opacity-80`} />
             {!compact && (
               <BoltShape
-                className={`${mood === "scatter" || mood === "flare" ? "bolt-flare" : "bolt-flicker"} absolute w-[9%] left-[16%] bottom-[36%] opacity-60`}
+                className={`${mood === "scatter" || mood === "flare" ? "bolt-flare" : "bolt-flicker"} absolute w-[9%] left-[15%] bottom-[33%] opacity-60`}
                 style={{ animationDelay: "1.3s" }}
               />
             )}
@@ -131,7 +133,7 @@ export function ZeusFigure({
           settles (scatter) alike, so the god visibly answers the
           board's big moments. */}
       {!compact && (mood === "strike" || mood === "scatter") && !still && (
-        <div key={strikeKey} className="absolute left-[68%] top-[4%] w-[290%] aspect-[3/2] z-30">
+        <div key={strikeKey} className="absolute left-[76%] top-[0%] w-[290%] aspect-[3/2] z-30">
           <svg viewBox="0 0 300 200" className="w-full h-full overflow-visible">
             <path
               d="M6 14 L96 62 L78 70 L168 116 L148 124 L238 178"
@@ -164,13 +166,13 @@ export function ZeusFigure({
       {mood === "flare" && !still && (
         <div
           key={flareKey}
-          className={`strike-glow-pop absolute rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.9)_0%,rgba(140,200,255,0.35)_45%,transparent_70%)] ${compact ? "right-[4%] top-[1%] w-11 h-11" : "right-[5%] top-[0%] w-20 h-20"}`}
+          className={`strike-glow-pop absolute rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.9)_0%,rgba(140,200,255,0.35)_45%,transparent_70%)] ${compact ? "right-[9%] top-[1%] w-11 h-11" : "right-[8%] top-[0%] w-20 h-20"}`}
         />
       )}
       {/* Compact strike: no room for the cross-stage streak, so
           the spear itself flares and a glow pops at his hand. */}
       {compact && (mood === "strike" || mood === "scatter") && !still && (
-        <div key={strikeKey} className="absolute right-[2%] top-[0%] w-[46%] aspect-square z-30">
+        <div key={strikeKey} className="absolute right-[8%] top-[0%] w-[46%] aspect-square z-30">
           <BoltShape className="bolt-flare absolute inset-0 w-full h-full opacity-95" />
           <div className="strike-glow-pop absolute inset-0 rounded-full bg-[radial-gradient(circle,rgba(255,240,180,0.9)_0%,rgba(255,213,79,0.35)_45%,transparent_70%)]" />
         </div>

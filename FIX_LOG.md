@@ -80,3 +80,10 @@ Staging environment retained at `/opt/zeus-slot-staging` (port 3101, branch `aud
 - XL stage (>=1280px): figure leaves the header strip, stands 320x432 on a cloud pedestal at the board's left, board column narrows to 780px. lg keeps the strip; mobile keeps the compact bust. Cloud pedestal added under his feet in both stage presentations.
 - New "flare" mood: every ordinary win (the win-small settle path, both modes — cascade settles ride the same hook after playback) pops a 0.95s spear pulse + glow. Anticipation: 2 scatters landed with reels still turning holds the scatter charge. Idle: ambient spear flare ~every 30s while the tab is visible. Precedence strike > scatter/anticipation > flare > spin > freespins > idle.
 - Suite at deploy: 50 files / 220 tests passed; tsc clean; journal clean.
+
+## Batch 2026-11-19 — 3D Zeus inside the golden cabinet [owner request]
+**FIXED+VERIFIED (deployed to production, frontend-only)**
+- Owner: the xl side figure "looks separate"; asked for him inside the main golden border and a sharper, realistic 3D look.
+- New art: full-body 3D-render Zeus (gold armour, blue cape, lightning spear), isnet + colour-key cutout (spearhead lightning halo recovered, 45,734 px), contrast/sharpness baked in, 615x1152 WebP 249 KB. All three presentations use it; anchors re-tracked to the new pose. Storm cutout removed (git + backup recoverable).
+- Frame: at xl the stage wrapper is now a golden cabinet (the board frame's border/gradient/glow + Greek-key inner border + corner bolts) enclosing Zeus AND the board; the board's own border softens inside it. Rail figure 300x500. Below xl unchanged.
+- Suite at deploy: 50 files / 220 tests passed; tsc clean; journal clean; new asset 200 at exact size, old asset 404.
